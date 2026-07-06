@@ -73,6 +73,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const [recordingAudio, setRecordingAudio] = useState(false);
   const [audioRecorderProgress, setAudioRecorderProgress] = useState(0);
   const [suggestingLoading, setSuggestingLoading] = useState(false);
+  const [isPaywallOpen, setIsPaywallOpen] = useState(false);
   const audioRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const audioIntervalRef = useRef<any>(null);
@@ -1049,7 +1050,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     Generating Instant Reply...
                   </h4>
                   <p className="text-xs text-slate-400 max-w-[270px] mx-auto leading-relaxed">
-                    Gemini is matching a loop template, creative voice track, and kinetic visual effect...
+                    Matching a loop template, creative voice track, and kinetic visual effect...
                   </p>
                 </div>
               </motion.div>
@@ -1159,21 +1160,12 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     {/* Brainstorm with AI button */}
                     <button
                       type="button"
-                      disabled={suggestingLoading}
-                      onClick={suggestAICaptionOnly}
-                      className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-black rounded-lg text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500 hover:text-white border border-indigo-500/20 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
-                      title="Need ideas? Let Gemini suggest a caption!"
+                      onClick={() => setIsPaywallOpen(true)}
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-black rounded-lg text-amber-300 bg-amber-500/10 hover:bg-amber-500 hover:text-black border border-amber-500/35 hover:border-amber-400 active:scale-95 transition-all cursor-pointer shadow-sm shadow-amber-500/5 group"
+                      title="Unlock premium AI smart captions!"
                     >
-                      {suggestingLoading ? (
-                        <>
-                          <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />
-                          <span>Suggesting...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-3.5 h-3.5" /> <span>✨ Suggest Caption</span>
-                        </>
-                      )}
+                      <Sparkles className="w-3 h-3 text-amber-400 group-hover:animate-spin" />
+                      <span>✨ AI Smart Suggestion</span>
                     </button>
                   </div>
 
@@ -1882,6 +1874,77 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
           </AnimatePresence>
         </div>
+
+        {/* GEMINI PRO AI CO-PILOT PAYWALL MODAL */}
+        {isPaywallOpen && (
+          <div className="fixed inset-0 z-55 bg-black/95 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="w-full max-w-sm bg-slate-950 border border-amber-500/25 rounded-3xl p-6 shadow-2xl relative overflow-hidden text-center space-y-6">
+              {/* Amber/Gold radial highlight */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-[1px] bg-gradient-to-r from-transparent via-amber-400/40 to-transparent" />
+              <div className="absolute -top-12 left-1/2 -translate-x-1/2 w-32 h-32 bg-amber-500/5 blur-3xl rounded-full" />
+              
+              <div className="space-y-4">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400 mx-auto">
+                  <Star className="w-5.5 h-5.5 animate-pulse" />
+                </div>
+                
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/25 text-[8px] font-mono font-bold text-amber-400 uppercase tracking-widest">
+                    👑 Premium AI Co-Pilot
+                  </div>
+                  <h3 className="font-sans font-black text-sm uppercase tracking-tight text-slate-100">
+                    Pro Smart Assist
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-mono uppercase tracking-wider max-w-[240px] mx-auto leading-relaxed">
+                    Live visual context analysis and smart captioning
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature Highlights */}
+              <div className="space-y-2.5 text-left bg-slate-900/40 p-4 border border-slate-900 rounded-2xl">
+                <div className="flex gap-2 items-start text-xs text-slate-300">
+                  <span className="text-amber-400 text-xs mt-0.5">✨</span>
+                  <div>
+                    <strong className="text-white block font-sans text-[11px] uppercase tracking-wide">Visual Scene Parsing</strong>
+                    <span className="text-[10px] text-slate-400">Our smart engine analyzes webcam feeds & background templates to suggest highly contextual captions.</span>
+                  </div>
+                </div>
+                
+                <div className="flex gap-2 items-start text-xs text-slate-300 border-t border-slate-950 pt-2.5">
+                  <span className="text-amber-400 text-xs mt-0.5">🎤</span>
+                  <div>
+                    <strong className="text-white block font-sans text-[11px] uppercase tracking-wide">Tone Modulation</strong>
+                    <span className="text-[10px] text-slate-400">Matches natural humor, drama, sarcasm, and cozy waves precisely to your vocal clips.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-amber-950/15 border border-amber-500/10 rounded-xl p-3.5 text-left">
+                <p className="text-[9px] font-mono text-amber-400 leading-normal uppercase">
+                  ⚡ <strong>FREE BETA NOTICE:</strong> To keep Reax 100% free and blazing fast during our Vercel & Supabase Beta, direct live AI analysis is restricted. Enjoy our local template generators for free!
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPaywallOpen(false)}
+                  className="py-2.5 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-400 hover:text-slate-300 rounded-xl text-[10px] font-mono font-bold transition-all active:scale-95 uppercase tracking-wider cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPaywallOpen(false)}
+                  className="py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-sans font-black rounded-xl text-[10px] transition-all active:scale-95 uppercase tracking-wider cursor-pointer shadow-lg shadow-amber-500/10"
+                >
+                  Unlock Pro ($0.00)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

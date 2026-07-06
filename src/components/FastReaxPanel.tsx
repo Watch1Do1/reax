@@ -208,7 +208,7 @@ export default function FastReaxPanel({
                 Generating Quick {tone} Reax
               </h4>
               <p className="text-[11px] text-slate-400 font-mono">
-                AI is designing custom captions & voice response...
+                Designing custom captions & voice response...
               </p>
             </div>
 

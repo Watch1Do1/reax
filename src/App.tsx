@@ -109,6 +109,10 @@ export default function App() {
   const [isRespondModalOpen, setIsRespondModalOpen] = useState(false);
   const [isVaultOpen, setIsVaultOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [isAdminAuthOpen, setIsAdminAuthOpen] = useState(false);
+  const [enteredPasscode, setEnteredPasscode] = useState("");
+  const [adminAuthError, setAdminAuthError] = useState("");
+  const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(false);
   const [remixData, setRemixData] = useState<SavedReaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [feedType, setFeedType] = useState<"trending" | "latest" | "most_reacted" | "audio_hot">("trending");
@@ -153,6 +157,48 @@ export default function App() {
     window.addEventListener("reax_upgrade_trigger", handleUpgradeTrigger);
     return () => window.removeEventListener("reax_upgrade_trigger", handleUpgradeTrigger);
   }, []);
+
+  // Monitor path and hash for administrative routes
+  useEffect(() => {
+    const handleUrlCheck = async () => {
+      const isPathAdmin = window.location.pathname === "/admin";
+      const isHashAdmin = window.location.hash === "#admin";
+      
+      if (isPathAdmin || isHashAdmin) {
+        const storedPasscode = localStorage.getItem("reax_admin_passcode");
+        if (storedPasscode) {
+          // Attempt silent background verification
+          try {
+            const res = await fetch("/api/admin/verify", {
+              headers: { "X-Admin-Passcode": storedPasscode }
+            });
+            if (res.ok) {
+              setIsAdminOpen(true);
+              setIsAdminAuthOpen(false);
+              return;
+            }
+          } catch (e) {
+            console.error("Silent verification error:", e);
+          }
+        }
+        // If passcode is missing or invalid, open auth dialog
+        setIsAdminAuthOpen(true);
+      } else {
+        setIsAdminAuthOpen(false);
+      }
+    };
+
+    handleUrlCheck();
+
+    // Listen to route and hash changes
+    window.addEventListener("popstate", handleUrlCheck);
+    window.addEventListener("hashchange", handleUrlCheck);
+
+    return () => {
+      window.removeEventListener("popstate", handleUrlCheck);
+      window.removeEventListener("hashchange", handleUrlCheck);
+    };
+  }, [isAdminOpen]);
 
   // Settings
   const [autoSpeakNew, setAutoSpeakNew] = useState(false);
@@ -480,15 +526,6 @@ export default function App() {
               title="Refresh Loops Feed"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-indigo-400" : ""}`} />
-            </button>
-
-            {/* Admin Panel Trigger */}
-            <button 
-              onClick={() => setIsAdminOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 border border-red-500/20 hover:border-red-400 text-red-400 hover:text-red-300 font-bold text-xs rounded-xl transition-all shadow-sm active:scale-95 cursor-pointer uppercase tracking-wider font-mono"
-              title="Open Admin Control Panel"
-            >
-              <ShieldAlert className="w-3.5 h-3.5" /> Admin
             </button>
 
             {/* Reaction Vault Trigger */}
@@ -1073,14 +1110,113 @@ export default function App() {
         {isAdminOpen && (
           <AdminPanel
             key="admin-control-panel-modal"
-            onClose={() => setIsAdminOpen(false)}
+            onClose={() => {
+              setIsAdminOpen(false);
+              window.history.pushState({}, "", "/");
+            }}
             allClips={clips}
             onRefreshClips={() => setRefreshTrigger(prev => prev + 1)}
             onSelectThread={(id) => {
               setIsAdminOpen(false);
+              window.history.pushState({}, "", "/");
               setSelectedThreadRootId(id);
             }}
           />
+        )}
+
+        {/* ADMIN PASSCODE AUTHENTICATION DIALOG */}
+        {isAdminAuthOpen && (
+          <div className="fixed inset-0 z-50 bg-[#050608]/98 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="w-full max-w-sm bg-slate-950 border border-slate-900 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+              {/* Slate accent light glow */}
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-[1px] bg-gradient-to-r from-transparent via-red-500/30 to-transparent" />
+              
+              <div className="text-center space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-500 mx-auto">
+                  <ShieldAlert className="w-6 h-6 animate-pulse" />
+                </div>
+                
+                <div className="space-y-1">
+                  <h3 className="font-sans font-black text-sm uppercase tracking-widest text-slate-100">
+                    Admin Terminal
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">
+                    Enter passcode to unlock control panel
+                  </p>
+                </div>
+                
+                <form 
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!enteredPasscode.trim()) return;
+                    setIsVerifyingAdmin(true);
+                    setAdminAuthError("");
+                    
+                    try {
+                      const res = await fetch("/api/admin/verify", {
+                        headers: { "X-Admin-Passcode": enteredPasscode }
+                      });
+                      if (res.ok) {
+                        localStorage.setItem("reax_admin_passcode", enteredPasscode);
+                        setIsAdminOpen(true);
+                        setIsAdminAuthOpen(false);
+                        setEnteredPasscode("");
+                      } else {
+                        setAdminAuthError("Access denied. Invalid passcode.");
+                      }
+                    } catch (err) {
+                      setAdminAuthError("Network error. Try again.");
+                    } finally {
+                      setIsVerifyingAdmin(false);
+                    }
+                  }}
+                  className="space-y-4 pt-2"
+                >
+                  <div className="space-y-1 text-left">
+                    <label className="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider block">
+                      Secure Passcode
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="••••••••"
+                      value={enteredPasscode}
+                      onChange={(e) => setEnteredPasscode(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-slate-900/60 border border-slate-800 rounded-xl font-mono text-xs text-center text-red-400 focus:outline-none focus:border-red-500/50 transition-colors placeholder-slate-700"
+                      disabled={isVerifyingAdmin}
+                      autoFocus
+                    />
+                  </div>
+                  
+                  {adminAuthError && (
+                    <p className="text-[10px] font-mono text-red-400 text-center uppercase tracking-wider">
+                      ⚠️ {adminAuthError}
+                    </p>
+                  )}
+                  
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAdminAuthOpen(false);
+                        window.history.pushState({}, "", "/");
+                      }}
+                      className="py-2 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-400 hover:text-slate-300 rounded-xl text-[10px] font-mono font-bold transition-all active:scale-95 uppercase tracking-wider cursor-pointer"
+                      disabled={isVerifyingAdmin}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-[10px] font-mono font-bold transition-all active:scale-95 uppercase tracking-wider cursor-pointer disabled:opacity-50"
+                      disabled={isVerifyingAdmin || !enteredPasscode.trim()}
+                    >
+                      {isVerifyingAdmin ? "Verifying..." : "Unlock"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
         )}
 
       </AnimatePresence>

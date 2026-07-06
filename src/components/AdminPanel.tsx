@@ -92,15 +92,27 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"newest" | "likes" | "reactions">("newest");
 
+  // Secure wrapper for admin fetch requests
+  const adminFetch = (url: string, options: any = {}) => {
+    const passcode = localStorage.getItem("reax_admin_passcode") || "";
+    return fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        "X-Admin-Passcode": passcode
+      }
+    });
+  };
+
   // Load Admin Data
   const loadAdminData = async () => {
     setLoading(true);
     try {
       const [statsRes, clipsRes, reportsRes, usersRes] = await Promise.all([
-        fetch("/api/admin/stats"),
-        fetch("/api/admin/clips"),
-        fetch("/api/admin/reports"),
-        fetch("/api/admin/users")
+        adminFetch("/api/admin/stats"),
+        adminFetch("/api/admin/clips"),
+        adminFetch("/api/admin/reports"),
+        adminFetch("/api/admin/users")
       ]);
 
       if (statsRes.ok) setStats(await statsRes.json());
@@ -127,7 +139,7 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   // Soft Delete Clip
   const handleDeleteClip = async (clipId: string) => {
     try {
-      const res = await fetch(`/api/admin/clips/${clipId}/delete`, { method: "POST" });
+      const res = await adminFetch(`/api/admin/clips/${clipId}/delete`, { method: "POST" });
       if (res.ok) {
         showToast("Post soft-deleted successfully.");
         // Sync local clips list state
@@ -135,7 +147,7 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
         // Refresh global feed
         onRefreshClips();
         // Reload stats
-        const statsRes = await fetch("/api/admin/stats");
+        const statsRes = await adminFetch("/api/admin/stats");
         if (statsRes.ok) setStats(await statsRes.json());
       } else {
         throw new Error("Delete API failed");
@@ -148,12 +160,12 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   // Restore Soft-Deleted Clip
   const handleRestoreClip = async (clipId: string) => {
     try {
-      const res = await fetch(`/api/admin/clips/${clipId}/restore`, { method: "POST" });
+      const res = await adminFetch(`/api/admin/clips/${clipId}/restore`, { method: "POST" });
       if (res.ok) {
         showToast("Post restored successfully.");
         setClipsList(prev => prev.map(c => c.id === clipId ? { ...c, deleted: false } : c));
         onRefreshClips();
-        const statsRes = await fetch("/api/admin/stats");
+        const statsRes = await adminFetch("/api/admin/stats");
         if (statsRes.ok) setStats(await statsRes.json());
       } else {
         throw new Error("Restore API failed");
@@ -166,12 +178,12 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   // Dismiss report
   const handleDismissReport = async (reportId: string) => {
     try {
-      const res = await fetch(`/api/admin/reports/${reportId}/dismiss`, { method: "POST" });
+      const res = await adminFetch(`/api/admin/reports/${reportId}/dismiss`, { method: "POST" });
       if (res.ok) {
         showToast("Report dismissed.");
         setReportsList(prev => prev.filter(r => r.id !== reportId));
         // Reload clips and reports
-        const clipsRes = await fetch("/api/admin/clips");
+        const clipsRes = await adminFetch("/api/admin/clips");
         if (clipsRes.ok) setClipsList(await clipsRes.json());
       } else {
         throw new Error("Dismiss API failed");
@@ -184,7 +196,7 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   // Suspend User
   const handleSuspendUser = async (username: string) => {
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}/suspend`, { method: "POST" });
+      const res = await adminFetch(`/api/admin/users/${encodeURIComponent(username)}/suspend`, { method: "POST" });
       if (res.ok) {
         showToast(`User @${username} suspended.`);
         setUsersList(prev => prev.map(u => u.username === username ? { ...u, suspended: true } : u));
@@ -199,7 +211,7 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   // Unsuspend User
   const handleUnsuspendUser = async (username: string) => {
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}/unsuspend`, { method: "POST" });
+      const res = await adminFetch(`/api/admin/users/${encodeURIComponent(username)}/unsuspend`, { method: "POST" });
       if (res.ok) {
         showToast(`Suspension lifted for @${username}.`);
         setUsersList(prev => prev.map(u => u.username === username ? { ...u, suspended: false } : u));
@@ -214,7 +226,7 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   // Issue Strike
   const handleIssueStrike = async (username: string) => {
     try {
-      const res = await fetch(`/api/admin/users/${encodeURIComponent(username)}/strike`, { method: "POST" });
+      const res = await adminFetch(`/api/admin/users/${encodeURIComponent(username)}/strike`, { method: "POST" });
       if (res.ok) {
         const data = await res.json();
         const strikesCount = data.user?.strikes || 0;
@@ -253,9 +265,9 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
       if (res.ok) {
         showToast(`Created custom test report for post by @${targetClip.authorName}!`);
         // Reload report data
-        const reportsRes = await fetch("/api/admin/reports");
+        const reportsRes = await adminFetch("/api/admin/reports");
         if (reportsRes.ok) setReportsList(await reportsRes.json());
-        const clipsRes = await fetch("/api/admin/clips");
+        const clipsRes = await adminFetch("/api/admin/clips");
         if (clipsRes.ok) setClipsList(await clipsRes.json());
       }
     } catch (e) {
@@ -366,12 +378,25 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping mr-1" />
             System Live: Port 3000
           </div>
-          <button 
-            onClick={onClose}
-            className="w-full py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-mono font-bold transition-all active:scale-95 uppercase tracking-wider cursor-pointer"
-          >
-            ← Exit Panel
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button 
+              onClick={onClose}
+              className="py-2 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white rounded-xl text-[10px] font-mono font-bold transition-all active:scale-95 uppercase tracking-wider cursor-pointer"
+            >
+              Exit
+            </button>
+            <button 
+              onClick={() => {
+                localStorage.removeItem("reax_admin_passcode");
+                onClose();
+                window.location.href = "/";
+              }}
+              className="py-2 bg-red-950/20 hover:bg-red-950/40 border border-red-500/20 text-red-400 hover:text-red-300 rounded-xl text-[10px] font-mono font-bold transition-all active:scale-95 uppercase tracking-wider cursor-pointer flex items-center justify-center gap-1"
+              title="Clear stored admin session and exit"
+            >
+              🔒 Lock
+            </button>
+          </div>
         </div>
       </div>
 

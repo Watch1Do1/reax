@@ -589,6 +589,23 @@ app.post("/api/upload", async (req, res) => {
 // ADMINISTRATIVE & MODERATION API ENDPOINTS
 // ==========================================
 
+// Middleware to protect administrative routes
+const adminAuthMiddleware = (req: any, res: any, next: any) => {
+  const passcode = req.headers["x-admin-passcode"];
+  const expectedPasscode = process.env.ADMIN_PASSCODE || "admin123";
+  if (!passcode || passcode !== expectedPasscode) {
+    return res.status(401).json({ error: "Unauthorized. Invalid admin passcode." });
+  }
+  next();
+};
+
+app.use("/api/admin", adminAuthMiddleware);
+
+// Endpoint to verify passcode
+app.get("/api/admin/verify", (req, res) => {
+  res.json({ success: true });
+});
+
 // 1. GET Admin Dashboard Stats & Funnels
 app.get("/api/admin/stats", (req, res) => {
   const totalUsers = userProfiles.length;
@@ -894,59 +911,10 @@ app.post("/api/ai/generate", async (req, res) => {
     return res.status(400).json({ error: "Tone is required" });
   }
 
-  if (!ai) {
-    // Fallback if no API key is set
-    console.warn("GEMINI_API_KEY is not configured. Using mock response.");
-    const fallbackResponse = getDynamicFallback(tone, imageContext);
-    return res.json(fallbackResponse);
-  }
-
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: `You are an AI that generates short, expressive reaction clips from user media.
-Input:
-Tone: ${tone}
-Description/context of uploaded image or details (if any): ${imageContext || 'No description provided'}
-
-Generate a short reaction clip recommendation. Ensure you return:
-1. voiceLine: A short, expressive reaction phrase (max 10 words) matching the tone.
-2. effect: A visual effect suggestion (must be one of: "zoom", "shake", "glitch", "pulse", "bounce", "pan").
-3. overlayText: An optional short text overlay (max 5 words).
-`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            voiceLine: {
-              type: Type.STRING,
-              description: "A short reaction phrase for a GIF-style response (max 10 words). Expressive and matching the tone.",
-            },
-            effect: {
-              type: Type.STRING,
-              description: "A visual effect suggestion. Must be 'zoom', 'shake', 'glitch', 'pulse', 'bounce', or 'pan'.",
-            },
-            overlayText: {
-              type: Type.STRING,
-              description: "An optional short text overlay (max 5 words).",
-            },
-          },
-          required: ["voiceLine", "effect", "overlayText"],
-        },
-      },
-    });
-
-    const textOutput = response.text || "{}";
-    const result = JSON.parse(textOutput.trim());
-    res.json(result);
-  } catch (error) {
-    console.error("Gemini Generation Error:", error);
-    // Gracefully fallback to high-quality dynamic simulated response instead of returning 500 error
-    const fallbackResponse = getDynamicFallback(tone, imageContext);
-    console.log("Serving high-quality dynamic fallback response due to transient Gemini issue:", fallbackResponse);
-    res.json(fallbackResponse);
-  }
+  // To maintain 100% free tiers on Vercel/Supabase and completely avoid any Gemini API costs,
+  // we always route generation requests through our fast, high-quality, local dynamic fallback generator.
+  const fallbackResponse = getDynamicFallback(tone, imageContext);
+  return res.json(fallbackResponse);
 });
 
 // Setup Vite development server or production static serving
