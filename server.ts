@@ -439,7 +439,27 @@ app.get("/api/clips", async (req, res) => {
         );
 
         if (!error && data) {
-          return res.json(data.map(mapDbToClip).filter(c => !c.deleted));
+          const dbClips = data.map(mapDbToClip);
+          
+          // Merge in-memory clips and DB clips to support "local fallback/backup mode" robustly.
+          // This prevents clips posted during schema mismatch or local-only save from vanishing!
+          const mergedMap = new Map<string, Clip>();
+          
+          // Seed with database clips first
+          dbClips.forEach(c => mergedMap.set(c.id, c));
+          
+          // Overlay in-memory clips (which may contain clips that failed to insert into DB but exist locally)
+          clips.forEach(c => {
+            if (!mergedMap.has(c.id)) {
+              mergedMap.set(c.id, c);
+            }
+          });
+          
+          const resultClips = Array.from(mergedMap.values())
+            .filter(c => !c.deleted)
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            
+          return res.json(resultClips);
         }
         if (error) {
           console.warn("Supabase query error on /api/clips:", error.message);
@@ -771,8 +791,44 @@ app.get("/api/admin/stats", (req, res) => {
 });
 
 // 2. GET All Clips for Content Browser (includes deleted, with reportCount)
-app.get("/api/admin/clips", (req, res) => {
-  // Sort by newest posts
+app.get("/api/admin/clips", async (req, res) => {
+  try {
+    if (supabase) {
+      try {
+        const { data, error } = await withTimeout(
+          supabase
+            .from("clips")
+            .select("*")
+            .order("created_at", { ascending: false }),
+          3500,
+          { data: null, error: { message: "Supabase admin clips query timed out" } }
+        );
+
+        if (!error && data) {
+          const dbClips = data.map(mapDbToClip);
+          const mergedMap = new Map<string, Clip>();
+          
+          dbClips.forEach(c => mergedMap.set(c.id, c));
+          clips.forEach(c => {
+            if (!mergedMap.has(c.id)) {
+              mergedMap.set(c.id, c);
+            }
+          });
+          
+          const resultClips = Array.from(mergedMap.values())
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            
+          return res.json(resultClips);
+        }
+      } catch (err: any) {
+        console.error("Supabase admin query failed:", err);
+      }
+    }
+  } catch (outerErr) {
+    console.error("Critical error in /api/admin/clips handler:", outerErr);
+  }
+  
+  // Sort by newest posts fallback
   const sortedClips = [...clips].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   res.json(sortedClips);
 });
@@ -1042,9 +1098,3 @@ async function startServer() {
     });
   }
 }
-
-if (!process.env.VERCEL) {
-  startServer();
-}
-
-export default app;
