@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
@@ -60,9 +59,28 @@ const PORT = 3000;
 // Increase limit to allow base64 image/video uploads
 app.use(express.json({ limit: "50mb" }));
 
-// Restore original req.url on Vercel if /api prefix got stripped (ignore static uploads)
+// Restore original req.url on Vercel if /api prefix got stripped or if rewritten (ignore static uploads)
 app.use((req: any, res: any, next: any) => {
-  if (process.env.VERCEL && !req.url.startsWith("/api") && !req.url.startsWith("/uploads")) {
+  const forwardedPath = req.headers["x-vercel-forwarded-path"] || 
+                        req.headers["x-matched-path"] || 
+                        req.headers["x-forwarded-uri"] || 
+                        req.headers["x-original-url"];
+  
+  if (forwardedPath) {
+    let cleanPath = forwardedPath;
+    if (cleanPath.startsWith("http://") || cleanPath.startsWith("https://")) {
+      try {
+        cleanPath = new URL(cleanPath).pathname;
+      } catch (e) {
+        // Fallback
+      }
+    }
+    
+    // Preserve query parameters if they exist
+    const queryIndex = req.url.indexOf("?");
+    const queryString = queryIndex !== -1 ? req.url.substring(queryIndex) : "";
+    req.url = cleanPath + queryString;
+  } else if (process.env.VERCEL && !req.url.startsWith("/api") && !req.url.startsWith("/uploads")) {
     req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
   }
   next();
@@ -266,6 +284,17 @@ function isValidUuid(id: string | null | undefined): boolean {
 }
 
 function mapDbToClip(dbRow: any): Clip {
+  let dateStr = new Date().toISOString();
+  if (dbRow && dbRow.created_at) {
+    try {
+      const d = new Date(dbRow.created_at);
+      if (!isNaN(d.getTime())) {
+        dateStr = d.toISOString();
+      }
+    } catch (e) {
+      // Keep fallback
+    }
+  }
   return {
     id: dbRow.id,
     parentId: dbRow.parent_id || null,
@@ -278,7 +307,7 @@ function mapDbToClip(dbRow: any): Clip {
     effect: dbRow.effect,
     authorName: dbRow.author_name,
     likesCount: dbRow.likes_count ?? 0,
-    createdAt: dbRow.created_at ? new Date(dbRow.created_at).toISOString() : new Date().toISOString(),
+    createdAt: dateStr,
     originalAuthor: dbRow.original_author || undefined,
     remixedFrom: dbRow.remixed_from || undefined,
     deleted: dbRow.deleted || false,
@@ -373,35 +402,42 @@ CREATE POLICY "Allow public update" ON public.clips FOR UPDATE USING (true);
 
 // API: Get all active, non-deleted clips
 app.get("/api/clips", async (req, res) => {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from("clips")
-        .select("*")
-        .eq("deleted", false)
-        .order("created_at", { ascending: false });
-
-      if (!error && data) {
-        return res.json(data.map(mapDbToClip));
-      }
-      if (error) {
-        // Fallback query in case the table doesn't have a 'deleted' column yet
-        const { data: dataAll, error: errorAll } = await supabase
+  try {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
           .from("clips")
           .select("*")
+          .eq("deleted", false)
           .order("created_at", { ascending: false });
-        if (!errorAll && dataAll) {
-          return res.json(dataAll.map(mapDbToClip).filter(c => !c.deleted));
+
+        if (!error && data) {
+          return res.json(data.map(mapDbToClip));
         }
-        if (error.message && (error.message.includes("fetch") || error.message.includes("network") || error.message.includes("Failed to fetch"))) {
-          supabase = null;
+        if (error) {
+          console.warn("Supabase query error on /api/clips:", error.message);
+          // Fallback query in case the table doesn't have a 'deleted' column yet
+          const { data: dataAll, error: errorAll } = await supabase
+            .from("clips")
+            .select("*")
+            .order("created_at", { ascending: false });
+          if (!errorAll && dataAll) {
+            return res.json(dataAll.map(mapDbToClip).filter(c => !c.deleted));
+          }
+          if (error.message && (error.message.includes("fetch") || error.message.includes("network") || error.message.includes("Failed to fetch"))) {
+            supabase = null;
+          }
         }
+      } catch (err: any) {
+        console.error("Supabase connection failed inside /api/clips query:", err);
+        supabase = null;
       }
-    } catch (err: any) {
-      supabase = null;
     }
+  } catch (outerErr: any) {
+    console.error("Critical error in /api/clips handler:", outerErr);
   }
-  res.json(clips.filter(c => !c.deleted));
+  // Always fall back to in-memory store
+  return res.json(clips.filter(c => !c.deleted));
 });
 
 // API: Create new clip
@@ -613,33 +649,44 @@ app.post("/api/upload", async (req, res) => {
 
 // Middleware to protect administrative routes
 const adminAuthMiddleware = (req: any, res: any, next: any) => {
-  let passcode = req.headers["x-admin-passcode"];
-  if (typeof passcode === "string") {
-    passcode = passcode.trim();
-    if ((passcode.startsWith('"') && passcode.endsWith('"')) || (passcode.startsWith("'") && passcode.endsWith("'"))) {
-      passcode = passcode.slice(1, -1).trim();
+  try {
+    let passcode = req.headers["x-admin-passcode"] || (req.query && req.query.passcode) || (req.body && req.body.passcode);
+    if (typeof passcode === "string") {
+      passcode = passcode.trim();
+      if ((passcode.startsWith('"') && passcode.endsWith('"')) || (passcode.startsWith("'") && passcode.endsWith("'"))) {
+        passcode = passcode.slice(1, -1).trim();
+      }
     }
-  }
 
-  let expectedPasscode = process.env.ADMIN_PASSCODE || "admin123";
-  if (typeof expectedPasscode === "string") {
-    expectedPasscode = expectedPasscode.trim();
-    if ((expectedPasscode.startsWith('"') && expectedPasscode.endsWith('"')) || (expectedPasscode.startsWith("'") && expectedPasscode.endsWith("'"))) {
-      expectedPasscode = expectedPasscode.slice(1, -1).trim();
+    let expectedPasscode = process.env.ADMIN_PASSCODE || "admin123";
+    if (typeof expectedPasscode === "string") {
+      expectedPasscode = expectedPasscode.trim();
+      if ((expectedPasscode.startsWith('"') && expectedPasscode.endsWith('"')) || (expectedPasscode.startsWith("'") && expectedPasscode.endsWith("'"))) {
+        expectedPasscode = expectedPasscode.slice(1, -1).trim();
+      }
     }
-  }
 
-  if (!passcode || passcode !== expectedPasscode) {
-    return res.status(401).json({ error: "Unauthorized. Invalid admin passcode." });
+    if (!passcode || passcode !== expectedPasscode) {
+      console.warn("Admin Auth: Invalid passcode attempt:", passcode);
+      return res.status(401).json({ error: "Unauthorized. Invalid admin passcode." });
+    }
+    next();
+  } catch (err: any) {
+    console.error("Critical error in adminAuthMiddleware:", err);
+    return res.status(500).json({ error: "Authentication internal error", details: err?.message });
   }
-  next();
 };
 
 app.use("/api/admin", adminAuthMiddleware);
 
 // Endpoint to verify passcode
 app.get("/api/admin/verify", (req, res) => {
-  res.json({ success: true });
+  try {
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error("Critical error in /api/admin/verify route:", err);
+    return res.status(500).json({ error: "Verification internal error", details: err?.message });
+  }
 });
 
 // 1. GET Admin Dashboard Stats & Funnels
@@ -956,6 +1003,7 @@ app.post("/api/ai/generate", async (req, res) => {
 // Setup Vite development server or production static serving
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
