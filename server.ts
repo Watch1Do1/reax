@@ -269,6 +269,8 @@ function mapDbToClip(dbRow: any): Clip {
     createdAt: dbRow.created_at ? new Date(dbRow.created_at).toISOString() : new Date().toISOString(),
     originalAuthor: dbRow.original_author || undefined,
     remixedFrom: dbRow.remixed_from || undefined,
+    deleted: dbRow.deleted || false,
+    reportCount: dbRow.report_count ?? 0,
   };
 }
 
@@ -287,6 +289,8 @@ function mapClipToDb(clip: any) {
     likes_count: clip.likesCount ?? 0,
     original_author: clip.originalAuthor || null,
     remixed_from: clip.remixedFrom || null,
+    deleted: clip.deleted || false,
+    report_count: clip.reportCount ?? 0,
   };
 }
 
@@ -319,6 +323,10 @@ app.get("/api/db-status", async (req, res) => {
     schemaSql: `-- WARNING: If you already have an old "clips" table and want to reset and start fresh with the new, robust schema, uncomment and run the line below first:
 -- DROP TABLE IF EXISTS public.clips CASCADE;
 
+-- If you have an existing clips table, you can add the missing 'deleted' and 'report_count' columns by running:
+-- ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT false;
+-- ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS report_count INTEGER DEFAULT 0;
+
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS public.clips (
@@ -335,7 +343,9 @@ CREATE TABLE IF NOT EXISTS public.clips (
   likes_count INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   original_author TEXT,
-  remixed_from TEXT
+  remixed_from TEXT,
+  deleted BOOLEAN DEFAULT false,
+  report_count INTEGER DEFAULT 0
 );
 
 -- Enable Row Level Security (RLS)

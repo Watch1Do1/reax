@@ -565,10 +565,10 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       return;
     }
 
-    // 10MB limit enforcement
-    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    // 4MB limit enforcement to comply with Vercel's 4.5MB serverless payload limit
+    const MAX_SIZE = 4 * 1024 * 1024; // 4MB
     if (file.size > MAX_SIZE) {
-      setError("File is too large. Maximum size allowed is 10MB.");
+      setError("File is too large. Maximum size allowed is 4MB (Vercel serverless request limit).");
       return;
     }
 
