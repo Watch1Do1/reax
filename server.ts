@@ -358,6 +358,16 @@ app.get("/api/db-status", async (req, res) => {
       );
       if (!error) {
         tableExists = true;
+        
+        // Detailed column validation
+        const { error: columnError } = await withTimeout(
+          supabase.from("clips").select("id, deleted, report_count").limit(1),
+          3000,
+          { error: { message: "Column validation timed out after 3.0s" } }
+        );
+        if (columnError) {
+          connectionError = "The 'clips' table exists, but is missing the 'deleted' or 'report_count' columns. Please run the ALTER TABLE SQL commands listed below in your Supabase SQL Editor to append these columns without losing any data!";
+        }
       } else {
         connectionError = error.message;
       }
@@ -423,29 +433,16 @@ app.get("/api/clips", async (req, res) => {
           supabase
             .from("clips")
             .select("*")
-            .eq("deleted", false)
             .order("created_at", { ascending: false }),
           3500,
           { data: null, error: { message: "Supabase query timed out" } }
         );
 
         if (!error && data) {
-          return res.json(data.map(mapDbToClip));
+          return res.json(data.map(mapDbToClip).filter(c => !c.deleted));
         }
         if (error) {
           console.warn("Supabase query error on /api/clips:", error.message);
-          // Fallback query in case the table doesn't have a 'deleted' column yet
-          const { data: dataAll, error: errorAll } = await withTimeout(
-            supabase
-              .from("clips")
-              .select("*")
-              .order("created_at", { ascending: false }),
-            3500,
-            { data: null, error: { message: "Supabase fallback query timed out" } }
-          );
-          if (!errorAll && dataAll) {
-            return res.json(dataAll.map(mapDbToClip).filter(c => !c.deleted));
-          }
           if (error.message && (error.message.includes("fetch") || error.message.includes("network") || error.message.includes("Failed to fetch") || error.message.includes("timed out"))) {
             supabase = null;
           }

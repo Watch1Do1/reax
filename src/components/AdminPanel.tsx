@@ -4,7 +4,7 @@ import {
   X, Shield, Users, Flag, FileText, Settings, Trash2, 
   RefreshCw, Play, Pause, Eye, UserX, UserCheck, Check, 
   AlertTriangle, TrendingUp, BarChart2, Tv, Activity, ArrowRight,
-  Sparkles, ShieldCheck, ShieldAlert
+  Sparkles, ShieldCheck, ShieldAlert, Database, Copy, CheckCircle, HelpCircle
 } from "lucide-react";
 import { Clip } from "../types";
 
@@ -92,6 +92,11 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"newest" | "likes" | "reactions">("newest");
 
+  // Supabase Database Connection & Schema diagnostics state
+  const [dbStatus, setDbStatus] = useState<any>(null);
+  const [loadingDbStatus, setLoadingDbStatus] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
+
   // Secure wrapper for admin fetch requests
   const adminFetch = (url: string, options: any = {}) => {
     const passcode = localStorage.getItem("reax_admin_passcode") || "";
@@ -102,6 +107,20 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
         "X-Admin-Passcode": passcode
       }
     });
+  };
+
+  const loadDbStatus = async () => {
+    setLoadingDbStatus(true);
+    try {
+      const res = await fetch("/api/db-status");
+      if (res.ok) {
+        setDbStatus(await res.json());
+      }
+    } catch (err) {
+      console.error("Failed to load db status:", err);
+    } finally {
+      setLoadingDbStatus(false);
+    }
   };
 
   // Load Admin Data
@@ -129,11 +148,18 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
 
   useEffect(() => {
     loadAdminData();
+    loadDbStatus();
   }, []);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const handleCopySql = (sql: string) => {
+    navigator.clipboard.writeText(sql);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2000);
   };
 
   // Soft Delete Clip
@@ -1088,66 +1114,181 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
 
               {/* TAB 5: SETTINGS */}
               {activeTab === "settings" && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
                   
-                  {/* Left settings col */}
-                  <div className="bg-slate-950 border border-slate-900 rounded-3xl p-5 space-y-4">
-                    <h3 className="text-xs font-sans font-black text-slate-200 uppercase tracking-widest flex items-center gap-2">
-                      <Settings className="w-4 h-4 text-red-500" />
-                      Sandbox Tools
-                    </h3>
-                    
-                    <div className="space-y-4 pt-2">
-                      
-                      {/* Seed a report action */}
-                      <div className="space-y-1">
-                        <span className="text-[10px] text-slate-300 font-bold block uppercase">Pre-seed Violation Report</span>
-                        <p className="text-[9px] text-slate-500 leading-tight">Generate a dummy abuse report dynamically targeting a random loop to test moderation flow queues.</p>
-                        <button 
-                          onClick={handleTriggerMockReport}
-                          className="mt-2 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/25 text-red-400 hover:text-red-300 rounded-xl text-[10px] font-mono font-bold uppercase transition-colors"
-                        >
-                          Trigger Test Report
-                        </button>
-                      </div>
+                  {/* Left Column: Database Config & Diagnostics */}
+                  <div className="bg-slate-950 border border-slate-900 rounded-3xl p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-sans font-black text-slate-200 uppercase tracking-widest flex items-center gap-2">
+                        <Database className="w-4 h-4 text-emerald-500" />
+                        Database Config & Diagnostics
+                      </h3>
+                      <button
+                        onClick={loadDbStatus}
+                        disabled={loadingDbStatus}
+                        className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-900 rounded-lg transition-colors"
+                        title="Re-test Database Connectivity"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${loadingDbStatus ? "animate-spin text-emerald-500" : ""}`} />
+                      </button>
+                    </div>
 
-                      <div className="w-full h-[1px] bg-slate-900" />
+                    <div className="space-y-4 pt-1">
+                      {loadingDbStatus && !dbStatus ? (
+                        <div className="flex flex-col items-center justify-center py-6 text-slate-500 font-mono text-xs">
+                          <RefreshCw className="w-5 h-5 animate-spin mb-2 text-emerald-500" />
+                          Testing Supabase connection...
+                        </div>
+                      ) : dbStatus ? (
+                        <div className="space-y-3">
+                          {/* Connection Status Banner */}
+                          <div className={`p-3 rounded-2xl border text-xs font-mono leading-normal ${
+                            dbStatus.configured && dbStatus.tableExists && !dbStatus.connectionError
+                              ? "bg-emerald-950/20 border-emerald-500/20 text-emerald-300"
+                              : dbStatus.configured && dbStatus.connectionError?.includes("deleted")
+                              ? "bg-amber-950/20 border-amber-500/20 text-amber-300"
+                              : "bg-red-950/20 border-red-500/20 text-red-300"
+                          }`}>
+                            <div className="flex items-start gap-2.5">
+                              {dbStatus.configured && dbStatus.tableExists && !dbStatus.connectionError ? (
+                                <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                              ) : (
+                                <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${dbStatus.connectionError?.includes("deleted") ? "text-amber-500" : "text-red-500"}`} />
+                              )}
+                              <div className="space-y-1">
+                                <span className="font-bold uppercase tracking-wide block">
+                                  {dbStatus.configured && dbStatus.tableExists && !dbStatus.connectionError
+                                    ? "Supabase Connected & Fully Operational"
+                                    : dbStatus.connectionError?.includes("deleted")
+                                    ? "Database Active (Missing Schema Columns)"
+                                    : "Database Offline / Setup Required"}
+                                </span>
+                                <span className="text-[10px] text-slate-400 block font-sans">
+                                  {dbStatus.connectionError || "Connected successfully to remote clips repository with correct schema columns."}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
 
-                      {/* Content Auto-Moderation cost-warning note */}
-                      <div className="p-3.5 bg-red-950/10 border border-red-950/20 rounded-2xl">
-                        <span className="text-[10px] text-slate-300 font-bold block uppercase mb-1">AI Auto-Moderation</span>
-                        <p className="text-[9px] text-slate-500 leading-relaxed font-mono">
-                          ⚠️ AI automatic scanning of media is disabled to optimize operational costs and prevent unneeded model invocation fees. All content moderation is currently handled manually via the Reports Queue.
-                        </p>
-                      </div>
+                          {/* Quick Specs */}
+                          <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+                            <div className="bg-slate-900/60 border border-slate-900 rounded-xl p-2.5">
+                              <span className="text-slate-500 block uppercase">Integration Setup</span>
+                              <span className={`font-bold ${dbStatus.configured ? "text-emerald-400" : "text-slate-400"}`}>
+                                {dbStatus.configured ? "✓ Configured" : "⚠️ Missing env variables"}
+                              </span>
+                            </div>
+                            <div className="bg-slate-900/60 border border-slate-900 rounded-xl p-2.5">
+                              <span className="text-slate-500 block uppercase">Clips Table Status</span>
+                              <span className={`font-bold ${dbStatus.tableExists ? "text-emerald-400" : "text-amber-400"}`}>
+                                {dbStatus.tableExists ? "✓ Table Exists" : "⚠️ Needs Creation"}
+                              </span>
+                            </div>
+                          </div>
 
+                          {dbStatus.supabaseUrl && (
+                            <div className="bg-slate-900/40 border border-slate-900 rounded-xl p-2.5 font-mono text-[9px] text-slate-400 truncate">
+                              <span className="text-slate-500 block uppercase text-[10px] mb-0.5">Supabase Endpoint</span>
+                              {dbStatus.supabaseUrl}
+                            </div>
+                          )}
+
+                          {/* Schema Fix SQL / Initialization Code Box */}
+                          <div className="space-y-1.5 pt-1">
+                            <span className="text-[10px] text-slate-300 font-bold block uppercase flex items-center justify-between">
+                              <span>Database SQL Schema / Migration</span>
+                              <button
+                                onClick={() => handleCopySql(dbStatus.schemaSql)}
+                                className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded text-[9px] font-mono text-slate-400 hover:text-slate-200 transition-all flex items-center gap-1"
+                              >
+                                {copiedSql ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-500" />
+                                    Copied!
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    Copy SQL
+                                  </>
+                                )}
+                              </button>
+                            </span>
+                            <div className="p-3 bg-slate-950 border border-slate-900 rounded-xl max-h-40 overflow-y-auto font-mono text-[9px] text-slate-400 leading-relaxed whitespace-pre select-all scrollbar-thin">
+                              {dbStatus.schemaSql}
+                            </div>
+                            <span className="text-[8.5px] text-slate-500 font-sans block leading-normal">
+                              💡 <strong>How to apply:</strong> Copy the SQL above, navigate to your <strong>Supabase Dashboard</strong> &rarr; <strong>SQL Editor</strong>, paste it, and click <strong>Run</strong>. This will automatically create or update your columns, enabling full persistent storage!
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-slate-500 font-mono py-4 text-center">
+                          Failed to check database connection status.
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  {/* Right settings col: Community Guidelines summary */}
-                  <div className="bg-slate-950 border border-slate-900 rounded-3xl p-5 space-y-4">
-                    <h3 className="text-xs font-sans font-black text-slate-200 uppercase tracking-widest flex items-center gap-2">
-                      <ShieldCheck className="w-4 h-4 text-red-500" />
-                      Community Safety Guide
-                    </h3>
-                    
-                    <div className="space-y-3 pt-2 text-[10px] text-slate-400 leading-relaxed font-sans">
-                      <p>
-                        Our launch moderation matrix centers soft-deletes and account limits to preserve a welcoming, hilarious ecosystem for audio creators.
-                      </p>
+                  {/* Right Column: Sandbox Tools & Safety Matrix */}
+                  <div className="space-y-6">
+                    {/* Sandbox Tools */}
+                    <div className="bg-slate-950 border border-slate-900 rounded-3xl p-5 space-y-4">
+                      <h3 className="text-xs font-sans font-black text-slate-200 uppercase tracking-widest flex items-center gap-2">
+                        <Settings className="w-4 h-4 text-red-500" />
+                        System Controls
+                      </h3>
                       
-                      <div className="space-y-2 border-l-2 border-red-500/20 pl-3">
-                        <div>
-                          <strong className="text-slate-200 block">✓ Soft-deletes are safe:</strong>
-                          <span>Setting `deleted: true` allows administrators to dismiss abusive posts in seconds, preserving database keys in case of accidents or appeals.</span>
+                      <div className="space-y-4 pt-1">
+                        {/* Seed a report action */}
+                        <div className="space-y-1">
+                          <span className="text-[10px] text-slate-300 font-bold block uppercase">Pre-seed Violation Report</span>
+                          <p className="text-[9px] text-slate-500 leading-tight">Generate a dummy abuse report dynamically targeting a random loop to test moderation flow queues.</p>
+                          <button 
+                            onClick={handleTriggerMockReport}
+                            className="mt-2 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/25 text-red-400 hover:text-red-300 rounded-xl text-[10px] font-mono font-bold uppercase transition-colors"
+                          >
+                            Trigger Test Report
+                          </button>
                         </div>
-                        <div>
-                          <strong className="text-slate-200 block">✓ Simple Strikes policy:</strong>
-                          <span>We automate safety by enforcing suspensions as soon as any account registers 3 moderation strikes. Strikes can be revoked or added manually.</span>
+
+                        <div className="w-full h-[1px] bg-slate-900" />
+
+                        {/* Content Auto-Moderation cost-warning note */}
+                        <div className="p-3.5 bg-red-950/10 border border-red-950/20 rounded-2xl">
+                          <span className="text-[10px] text-slate-300 font-bold block uppercase mb-1">AI Auto-Moderation</span>
+                          <p className="text-[9px] text-slate-500 leading-relaxed font-mono">
+                            ⚠️ AI automatic scanning of media is disabled to optimize operational costs and prevent unneeded model invocation fees. All content moderation is currently handled manually via the Reports Queue.
+                          </p>
                         </div>
-                        <div>
-                          <strong className="text-slate-200 block">✓ Abuse category matrix:</strong>
-                          <span>We organize reports by: Pornography, Copyright, Harassment, Spam, Violence, and Other to filter critical tickets first.</span>
+                      </div>
+                    </div>
+
+                    {/* Community Safety Guide */}
+                    <div className="bg-slate-950 border border-slate-900 rounded-3xl p-5 space-y-4">
+                      <h3 className="text-xs font-sans font-black text-slate-200 uppercase tracking-widest flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-red-500" />
+                        Community Safety Guide
+                      </h3>
+                      
+                      <div className="space-y-3 pt-1 text-[10px] text-slate-400 leading-relaxed font-sans">
+                        <p>
+                          Our launch moderation matrix centers soft-deletes and account limits to preserve a welcoming, hilarious ecosystem for audio creators.
+                        </p>
+                        
+                        <div className="space-y-2 border-l-2 border-red-500/20 pl-3">
+                          <div>
+                            <strong className="text-slate-200 block">✓ Soft-deletes are safe:</strong>
+                            <span>Setting `deleted: true` allows administrators to dismiss abusive posts in seconds, preserving database keys in case of accidents or appeals.</span>
+                          </div>
+                          <div>
+                            <strong className="text-slate-200 block">✓ Simple Strikes policy:</strong>
+                            <span>We automate safety by enforcing suspensions as soon as any account registers 3 moderation strikes. Strikes can be revoked or added manually.</span>
+                          </div>
+                          <div>
+                            <strong className="text-slate-200 block">✓ Abuse category matrix:</strong>
+                            <span>We organize reports by: Pornography, Copyright, Harassment, Spam, Violence, and Other to filter critical tickets first.</span>
+                          </div>
                         </div>
                       </div>
                     </div>
