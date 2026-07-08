@@ -56,6 +56,19 @@ const PORT = 3000;
 // Increase limit to allow base64 image/video uploads
 app.use(express.json({ limit: "50mb" }));
 
+// Restore original req.url on Vercel from the rewrite query parameter
+app.use((req: any, res: any, next: any) => {
+  if (req.query && typeof req.query.path === "string") {
+    const originalPath = req.query.path;
+    delete req.query.path;
+    
+    // Reconstruct the remaining query parameters
+    const queryParams = new URLSearchParams(req.query as any).toString();
+    req.url = "/api/" + originalPath + (queryParams ? "?" + queryParams : "");
+  }
+  next();
+});
+
 // Serve uploaded files statically
 app.use("/uploads", express.static(UPLOADS_DIR));
 
@@ -601,8 +614,22 @@ app.post("/api/upload", async (req, res) => {
 
 // Middleware to protect administrative routes
 const adminAuthMiddleware = (req: any, res: any, next: any) => {
-  const passcode = req.headers["x-admin-passcode"];
-  const expectedPasscode = process.env.ADMIN_PASSCODE || "admin123";
+  let passcode = req.headers["x-admin-passcode"];
+  if (typeof passcode === "string") {
+    passcode = passcode.trim();
+    if ((passcode.startsWith('"') && passcode.endsWith('"')) || (passcode.startsWith("'") && passcode.endsWith("'"))) {
+      passcode = passcode.slice(1, -1).trim();
+    }
+  }
+
+  let expectedPasscode = process.env.ADMIN_PASSCODE || "admin123";
+  if (typeof expectedPasscode === "string") {
+    expectedPasscode = expectedPasscode.trim();
+    if ((expectedPasscode.startsWith('"') && expectedPasscode.endsWith('"')) || (expectedPasscode.startsWith("'") && expectedPasscode.endsWith("'"))) {
+      expectedPasscode = expectedPasscode.slice(1, -1).trim();
+    }
+  }
+
   if (!passcode || passcode !== expectedPasscode) {
     return res.status(401).json({ error: "Unauthorized. Invalid admin passcode." });
   }
