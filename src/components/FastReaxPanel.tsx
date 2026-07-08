@@ -27,7 +27,7 @@ const TONE_PRESETS: Record<Clip["tone"], { url: string; mimeType: string; isVide
     description: "Amused smirk smirk"
   },
   chill: {
-    url: "https://assets.mixkit.co/videos/preview/mixkit-waves-breaking-in-the-ocean-1527-large.mp4",
+    url: "https://vjs.zencdn.net/v/oceans.mp4",
     mimeType: "video/mp4",
     isVideo: true,
     description: "Chill ocean waves"

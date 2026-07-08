@@ -32,7 +32,7 @@ const PRESETS = [
   },
   {
     name: "Calm Waves",
-    url: "https://assets.mixkit.co/videos/preview/mixkit-waves-breaking-in-the-ocean-1527-large.mp4",
+    url: "https://vjs.zencdn.net/v/oceans.mp4",
     description: "Chill looping ocean wave"
   }
 ];
