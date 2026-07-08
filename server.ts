@@ -45,9 +45,13 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY && !isPlaceholder(
 }
 
 // Ensure the uploads directory exists
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const UPLOADS_DIR = process.env.VERCEL ? "/tmp" : path.join(process.cwd(), "uploads");
+try {
+  if (!fs.existsSync(UPLOADS_DIR)) {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.log("Could not ensure uploads directory exists:", err);
 }
 
 const app = express();
@@ -56,9 +60,9 @@ const PORT = 3000;
 // Increase limit to allow base64 image/video uploads
 app.use(express.json({ limit: "50mb" }));
 
-// Restore original req.url on Vercel if /api prefix got stripped
+// Restore original req.url on Vercel if /api prefix got stripped (ignore static uploads)
 app.use((req: any, res: any, next: any) => {
-  if (process.env.VERCEL && !req.url.startsWith("/api")) {
+  if (process.env.VERCEL && !req.url.startsWith("/api") && !req.url.startsWith("/uploads")) {
     req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
   }
   next();
