@@ -15,27 +15,33 @@ const isPlaceholder = (url: string | undefined): boolean => {
   return l.includes("placeholder") || l.includes("your_") || l.startsWith("your-") || l.includes("example.com");
 };
 
-// Initialize Supabase Client if env vars are present
+// Quote cleaning helper for environment variables on Vercel
+const cleanEnvVar = (val: string | undefined): string | undefined => {
+  if (!val) return undefined;
+  let clean = val.trim();
+  if ((clean.startsWith('"') && clean.endsWith('"')) || (clean.startsWith("'") && clean.endsWith("'"))) {
+    clean = clean.slice(1, -1).trim();
+  }
+  return clean;
+};
+
+// Generic timeout helper for promises to prevent serverless function hangs
+const withTimeout = <T>(promise: Promise<T>, ms: number, timeoutErrorValue: T): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(timeoutErrorValue), ms))
+  ]);
+};
+
+const SUPABASE_URL = cleanEnvVar(process.env.SUPABASE_URL);
+const SUPABASE_ANON_KEY = cleanEnvVar(process.env.SUPABASE_ANON_KEY);
+
+// Initialize Supabase Client synchronously if env vars are present
 let supabase: any = null;
-if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY && !isPlaceholder(process.env.SUPABASE_URL)) {
+if (SUPABASE_URL && SUPABASE_ANON_KEY && !isPlaceholder(SUPABASE_URL)) {
   try {
-    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-    console.log("Supabase Client created. Running connection test...");
-    
-    // Async connection test
-    supabase.from("clips").select("id").limit(1).then(({ error }: any) => {
-      if (error && error.message && (error.message.includes("fetch") || error.message.includes("network") || error.message.includes("Failed to fetch"))) {
-        console.log("Supabase is offline or unreachable. Falling back entirely to memory store.");
-        supabase = null;
-      } else if (error) {
-        console.log("Supabase connection check completed (table may not exist yet, using memory fallback as needed):", error.message);
-      } else {
-        console.log("Supabase connection check passed! Database is live.");
-      }
-    }).catch((err: any) => {
-      console.log("Supabase connection check threw network exception. Fallback to local memory store is active.", err?.message || err);
-      supabase = null;
-    });
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    console.log("Supabase Client initialized safely. Background connection checks omitted to prevent serverless timeouts.");
   } catch (err: any) {
     console.log("Failed to initialize Supabase Client:", err?.message || err);
   }
@@ -337,13 +343,19 @@ function mapClipToDb(clip: any) {
 
 // API: Get DB configuration and connectivity status
 app.get("/api/db-status", async (req, res) => {
-  const hasEnv = !!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY && !isPlaceholder(process.env.SUPABASE_URL));
+  const url = cleanEnvVar(process.env.SUPABASE_URL);
+  const key = cleanEnvVar(process.env.SUPABASE_ANON_KEY);
+  const hasEnv = !!(url && key && !isPlaceholder(url));
   let tableExists = false;
   let connectionError = null;
 
   if (hasEnv && supabase) {
     try {
-      const { error } = await supabase.from("clips").select("id").limit(1);
+      const { error } = await withTimeout(
+        supabase.from("clips").select("id").limit(1),
+        3500,
+        { error: { message: "Supabase connection timed out after 3.5s" } }
+      );
       if (!error) {
         tableExists = true;
       } else {
@@ -353,12 +365,14 @@ app.get("/api/db-status", async (req, res) => {
       connectionError = err.message || String(err);
     }
   } else if (hasEnv) {
-    connectionError = "Supabase server is offline or connection check failed during server startup.";
+    connectionError = "Supabase environment variables are set, but the client failed to initialize.";
+  } else {
+    connectionError = "Supabase URL or Key environment variables are missing, incomplete, or contain placeholder values.";
   }
 
   res.json({
     configured: hasEnv,
-    supabaseUrl: process.env.SUPABASE_URL || null,
+    supabaseUrl: url || null,
     tableExists,
     connectionError,
     schemaSql: `-- WARNING: If you already have an old "clips" table and want to reset and start fresh with the new, robust schema, uncomment and run the line below first:
@@ -405,11 +419,15 @@ app.get("/api/clips", async (req, res) => {
   try {
     if (supabase) {
       try {
-        const { data, error } = await supabase
-          .from("clips")
-          .select("*")
-          .eq("deleted", false)
-          .order("created_at", { ascending: false });
+        const { data, error } = await withTimeout(
+          supabase
+            .from("clips")
+            .select("*")
+            .eq("deleted", false)
+            .order("created_at", { ascending: false }),
+          3500,
+          { data: null, error: { message: "Supabase query timed out" } }
+        );
 
         if (!error && data) {
           return res.json(data.map(mapDbToClip));
@@ -417,14 +435,18 @@ app.get("/api/clips", async (req, res) => {
         if (error) {
           console.warn("Supabase query error on /api/clips:", error.message);
           // Fallback query in case the table doesn't have a 'deleted' column yet
-          const { data: dataAll, error: errorAll } = await supabase
-            .from("clips")
-            .select("*")
-            .order("created_at", { ascending: false });
+          const { data: dataAll, error: errorAll } = await withTimeout(
+            supabase
+              .from("clips")
+              .select("*")
+              .order("created_at", { ascending: false }),
+            3500,
+            { data: null, error: { message: "Supabase fallback query timed out" } }
+          );
           if (!errorAll && dataAll) {
             return res.json(dataAll.map(mapDbToClip).filter(c => !c.deleted));
           }
-          if (error.message && (error.message.includes("fetch") || error.message.includes("network") || error.message.includes("Failed to fetch"))) {
+          if (error.message && (error.message.includes("fetch") || error.message.includes("network") || error.message.includes("Failed to fetch") || error.message.includes("timed out"))) {
             supabase = null;
           }
         }
