@@ -56,15 +56,10 @@ const PORT = 3000;
 // Increase limit to allow base64 image/video uploads
 app.use(express.json({ limit: "50mb" }));
 
-// Restore original req.url on Vercel from the rewrite query parameter
+// Restore original req.url on Vercel if /api prefix got stripped
 app.use((req: any, res: any, next: any) => {
-  if (req.query && typeof req.query.path === "string") {
-    const originalPath = req.query.path;
-    delete req.query.path;
-    
-    // Reconstruct the remaining query parameters
-    const queryParams = new URLSearchParams(req.query as any).toString();
-    req.url = "/api/" + originalPath + (queryParams ? "?" + queryParams : "");
+  if (process.env.VERCEL && !req.url.startsWith("/api")) {
+    req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
   }
   next();
 });
