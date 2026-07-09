@@ -73,7 +73,7 @@ app.use((req: any, res: any, next: any) => {
                         req.headers["x-original-url"];
   
   if (forwardedPath) {
-    let cleanPath = forwardedPath;
+    let cleanPath = Array.isArray(forwardedPath) ? String(forwardedPath[0]) : String(forwardedPath);
     if (cleanPath.startsWith("http://") || cleanPath.startsWith("https://")) {
       try {
         cleanPath = new URL(cleanPath).pathname;
@@ -83,11 +83,15 @@ app.use((req: any, res: any, next: any) => {
     }
     
     // Preserve query parameters if they exist
-    const queryIndex = req.url.indexOf("?");
-    const queryString = queryIndex !== -1 ? req.url.substring(queryIndex) : "";
+    const urlStr = String(req.url || "");
+    const queryIndex = urlStr.indexOf("?");
+    const queryString = queryIndex !== -1 ? urlStr.substring(queryIndex) : "";
     req.url = cleanPath + queryString;
-  } else if (process.env.VERCEL && !req.url.startsWith("/api") && !req.url.startsWith("/uploads")) {
-    req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
+  } else if (process.env.VERCEL && req.url) {
+    const urlStr = String(req.url);
+    if (!urlStr.startsWith("/api") && !urlStr.startsWith("/uploads")) {
+      req.url = "/api" + (urlStr.startsWith("/") ? urlStr : "/" + urlStr);
+    }
   }
   next();
 });
@@ -290,10 +294,11 @@ function isValidUuid(id: string | null | undefined): boolean {
 }
 
 function mapDbToClip(dbRow: any): Clip {
+  const safeRow = dbRow || {};
   let dateStr = new Date().toISOString();
-  if (dbRow && dbRow.created_at) {
+  if (safeRow.created_at) {
     try {
-      const d = new Date(dbRow.created_at);
+      const d = new Date(safeRow.created_at);
       if (!isNaN(d.getTime())) {
         dateStr = d.toISOString();
       }
@@ -302,22 +307,22 @@ function mapDbToClip(dbRow: any): Clip {
     }
   }
   return {
-    id: dbRow.id,
-    parentId: dbRow.parent_id || null,
-    mediaUrl: dbRow.media_url,
-    voiceText: dbRow.voice_text || undefined,
-    voiceAudioData: dbRow.voice_audio_data || undefined,
-    voiceStyle: dbRow.voice_style || undefined,
-    overlayText: dbRow.overlay_text || undefined,
-    tone: dbRow.tone,
-    effect: dbRow.effect,
-    authorName: dbRow.author_name,
-    likesCount: dbRow.likes_count ?? 0,
+    id: safeRow.id || crypto.randomUUID(),
+    parentId: safeRow.parent_id || null,
+    mediaUrl: safeRow.media_url || "",
+    voiceText: safeRow.voice_text || undefined,
+    voiceAudioData: safeRow.voice_audio_data || undefined,
+    voiceStyle: safeRow.voice_style || undefined,
+    overlayText: safeRow.overlay_text || undefined,
+    tone: safeRow.tone || "chill",
+    effect: safeRow.effect || "zoom",
+    authorName: safeRow.author_name || "Anonymous",
+    likesCount: safeRow.likes_count ?? 0,
     createdAt: dateStr,
-    originalAuthor: dbRow.original_author || undefined,
-    remixedFrom: dbRow.remixed_from || undefined,
-    deleted: dbRow.deleted || false,
-    reportCount: dbRow.report_count ?? 0,
+    originalAuthor: safeRow.original_author || undefined,
+    remixedFrom: safeRow.remixed_from || undefined,
+    deleted: safeRow.deleted || false,
+    reportCount: safeRow.report_count ?? 0,
   };
 }
 
@@ -438,7 +443,7 @@ app.get("/api/clips", async (req, res) => {
           { data: null, error: { message: "Supabase query timed out" } }
         );
 
-        if (!error && data) {
+        if (!error && data && Array.isArray(data)) {
           const dbClips = data.map(mapDbToClip);
           
           // Merge in-memory clips and DB clips to support "local fallback/backup mode" robustly.
@@ -739,8 +744,8 @@ app.get("/api/admin/stats", (req, res) => {
 
   const voiceReactions = clips.filter(c => !!(c.voiceText || c.voiceAudioData)).length;
   const silentReactions = clips.filter(c => !(c.voiceText || c.voiceAudioData)).length;
-  const videoReactions = clips.filter(c => c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-")).length;
-  const imageReactions = clips.filter(c => !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-"))).length;
+  const videoReactions = clips.filter(c => c.mediaUrl && (c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-"))).length;
+  const imageReactions = clips.filter(c => !c.mediaUrl || !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-"))).length;
 
   // Founder Analytics calculations
   const now = Date.now();
@@ -750,8 +755,8 @@ app.get("/api/admin/stats", (req, res) => {
   const postsToday = clips.filter(c => (now - new Date(c.createdAt).getTime()) <= oneDayMs).length;
   const postsThisWeek = clips.filter(c => (now - new Date(c.createdAt).getTime()) <= sevenDaysMs).length;
 
-  const videoClipsCount = clips.filter(c => c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-")).length;
-  const imageClipsCount = clips.filter(c => !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-"))).length;
+  const videoClipsCount = clips.filter(c => c.mediaUrl && (c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-"))).length;
+  const imageClipsCount = clips.filter(c => !c.mediaUrl || !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-"))).length;
   const voiceClipsCount = clips.filter(c => !!c.voiceAudioData).length;
 
   // Approximate storage calculation
@@ -804,7 +809,7 @@ app.get("/api/admin/clips", async (req, res) => {
           { data: null, error: { message: "Supabase admin clips query timed out" } }
         );
 
-        if (!error && data) {
+        if (!error && data && Array.isArray(data)) {
           const dbClips = data.map(mapDbToClip);
           const mergedMap = new Map<string, Clip>();
           
@@ -1098,3 +1103,9 @@ async function startServer() {
     });
   }
 }
+
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
