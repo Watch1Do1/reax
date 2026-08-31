@@ -214,7 +214,13 @@ export default function App() {
     setLoading(true);
 
     fetch("/api/clips")
-      .then((res) => {
+      .then(async (res) => {
+        if (res.status === 503) {
+          const errData = await res.json().catch(() => ({}));
+          if (errData.error === "database_unconfigured") {
+            throw new Error("DB not configured. Production database connection (Supabase) is required.");
+          }
+        }
         if (!res.ok) throw new Error("Could not fetch reaction clips");
         return res.json();
       })

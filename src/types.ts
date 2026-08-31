@@ -18,6 +18,37 @@ export type Clip = {
   reportCount?: number;
 };
 
+export type Report = {
+  id: string;
+  clipId: string;
+  reporter: string;
+  reason: "Slurs / Hate Speech" | "Harassment / Bullying" | "Threats / Violence" | "Pornography" | "Spam" | "Copyright" | "Other";
+  createdAt: string;
+};
+
+export type UserProfile = {
+  username: string;
+  createdAt: string;
+  lastActive: string;
+  reactionCount: number;
+  suspended: boolean;
+  strikes: number;
+};
+
+export type FunnelStats = {
+  visitors: number;
+  started_reaction: number;
+  posted_reaction: number;
+  posted_voice_reaction: number;
+};
+
+export type TodayStats = {
+  newUsers: number;
+  newThreads: number;
+  newReactions: number;
+  voiceReactions: number;
+};
+
 export interface SavedReaction {
   id: string;
   mediaUrl: string;
