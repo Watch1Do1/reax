@@ -9,10 +9,13 @@ export type Clip = {
   authorName: string;
   createdAt: string;
   likesCount: number;
+  laughsCount: number;
   effect: string; // e.g., 'zoom', 'shake', 'glitch', 'pulse', 'bounce', 'pan'
   overlayText?: string;
   originalAuthor?: string;
   remixedFrom?: string;
+  deleted?: boolean;
+  reportCount?: number;
 };
 
 export interface SavedReaction {

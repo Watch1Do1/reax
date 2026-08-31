@@ -112,6 +112,7 @@ type Clip = {
   authorName: string;
   createdAt: string;
   likesCount: number;
+  laughsCount: number;
   effect: string; // custom visual effect
   overlayText?: string;
   originalAuthor?: string;
@@ -125,7 +126,7 @@ type Report = {
   id: string;
   clipId: string;
   reporter: string;
-  reason: "Pornography" | "Copyright" | "Harassment" | "Spam" | "Violence" | "Other";
+  reason: "Slurs / Hate Speech" | "Harassment / Bullying" | "Threats / Violence" | "Pornography" | "Spam" | "Copyright" | "Other";
   createdAt: string;
 };
 
@@ -145,16 +146,8 @@ type FunnelStats = {
   posted_voice_reaction: number;
 };
 
-// Seeding default administrative records
-let reports: Report[] = [
-  {
-    id: "report-1",
-    clipId: "clip-1-reply-2",
-    reporter: "SnowCat",
-    reason: "Harassment",
-    createdAt: new Date(Date.now() - 3600000 * 2).toISOString()
-  }
-];
+// Administrative records (reports start completely empty for real moderation)
+let reports: Report[] = [];
 
 let userProfiles: UserProfile[] = [];
 
@@ -172,7 +165,7 @@ let todayStats = {
   voiceReactions: 2
 };
 
-// Initial seeded data
+// Initial seeded data with humor-first laughs & likes
 let clips: Clip[] = [
   {
     id: "clip-1",
@@ -182,7 +175,8 @@ let clips: Clip[] = [
     tone: "funny",
     authorName: "SnowCat",
     createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-    likesCount: 24,
+    likesCount: 14,
+    laughsCount: 48,
     effect: "bounce",
     overlayText: "BRRR WHERE IS COFFEE"
   },
@@ -194,7 +188,8 @@ let clips: Clip[] = [
     tone: "chill",
     authorName: "RescuePup",
     createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-    likesCount: 15,
+    likesCount: 9,
+    laughsCount: 22,
     effect: "zoom",
     overlayText: "ON MY WAY!"
   },
@@ -206,7 +201,8 @@ let clips: Clip[] = [
     tone: "sarcastic",
     authorName: "SkepticalSteve",
     createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
-    likesCount: 8,
+    likesCount: 5,
+    laughsCount: 31,
     effect: "shake",
     overlayText: "SO SLOW..."
   },
@@ -218,7 +214,8 @@ let clips: Clip[] = [
     tone: "dramatic",
     authorName: "SeaFarer",
     createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-    likesCount: 42,
+    likesCount: 28,
+    laughsCount: 37,
     effect: "glitch",
     overlayText: "THE STORM COMETH"
   },
@@ -230,7 +227,8 @@ let clips: Clip[] = [
     tone: "chaotic",
     authorName: "PanickedPam",
     createdAt: new Date(Date.now() - 3600000 * 1).toISOString(),
-    likesCount: 19,
+    likesCount: 12,
+    laughsCount: 45,
     effect: "shake",
     overlayText: "PANIC TIME!"
   }
@@ -239,12 +237,10 @@ let clips: Clip[] = [
 // Ensure all clips have defaults set and synchronize profiles
 clips.forEach(clip => {
   clip.deleted = clip.deleted ?? false;
-  clip.reportCount = clip.reportCount ?? 0;
+  clip.reportCount = 0;
+  clip.laughsCount = clip.laughsCount ?? 0;
+  clip.likesCount = clip.likesCount ?? 0;
 });
-const seedReportedClip = clips.find(c => c.id === "clip-1-reply-2");
-if (seedReportedClip) {
-  seedReportedClip.reportCount = 1;
-}
 
 function initUserProfiles() {
   const usersMap = new Map<string, UserProfile>();
@@ -318,6 +314,7 @@ function mapDbToClip(dbRow: any): Clip {
     effect: safeRow.effect || "zoom",
     authorName: safeRow.author_name || "Anonymous",
     likesCount: safeRow.likes_count ?? 0,
+    laughsCount: safeRow.laughs_count ?? 0,
     createdAt: dateStr,
     originalAuthor: safeRow.original_author || undefined,
     remixedFrom: safeRow.remixed_from || undefined,
@@ -339,6 +336,7 @@ function mapClipToDb(clip: any) {
     effect: clip.effect || "zoom",
     author_name: clip.authorName,
     likes_count: clip.likesCount ?? 0,
+    laughs_count: clip.laughsCount ?? 0,
     original_author: clip.originalAuthor || null,
     remixed_from: clip.remixedFrom || null,
     deleted: clip.deleted || false,
@@ -366,12 +364,12 @@ app.get("/api/db-status", async (req, res) => {
         
         // Detailed column validation
         const { error: columnError } = await withTimeout(
-          supabase.from("clips").select("id, deleted, report_count").limit(1),
+          supabase.from("clips").select("id, deleted, report_count, laughs_count").limit(1),
           3000,
           { error: { message: "Column validation timed out after 3.0s" } }
         );
         if (columnError) {
-          connectionError = "The 'clips' table exists, but is missing the 'deleted' or 'report_count' columns. Please run the ALTER TABLE SQL commands listed below in your Supabase SQL Editor to append these columns without losing any data!";
+          connectionError = "The 'clips' table exists, but may be missing 'deleted', 'report_count', or 'laughs_count' columns. Please run the ALTER TABLE SQL commands listed below in your Supabase SQL Editor to append these columns seamlessly!";
         }
       } else {
         connectionError = error.message;
@@ -390,10 +388,9 @@ app.get("/api/db-status", async (req, res) => {
     supabaseUrl: url || null,
     tableExists,
     connectionError,
-    schemaSql: `-- WARNING: If you already have an old "clips" table and want to reset and start fresh with the new, robust schema, uncomment and run the line below first:
--- DROP TABLE IF EXISTS public.clips CASCADE;
-
--- If you have an existing clips table, you can add the missing 'deleted' and 'report_count' columns by running:
+    schemaSql: `-- Reax Complete Schema with Laughs & Moderation
+-- If you have an existing clips table, add new columns without losing data:
+-- ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS laughs_count INTEGER DEFAULT 0;
 -- ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT false;
 -- ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS report_count INTEGER DEFAULT 0;
 
@@ -411,6 +408,7 @@ CREATE TABLE IF NOT EXISTS public.clips (
   effect TEXT NOT NULL,
   author_name TEXT NOT NULL,
   likes_count INTEGER DEFAULT 0,
+  laughs_count INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   original_author TEXT,
   remixed_from TEXT,
@@ -508,6 +506,7 @@ app.post("/api/clips", async (req, res) => {
     authorName,
     createdAt: new Date().toISOString(),
     likesCount: 0,
+    laughsCount: 0,
     effect: effect || "zoom",
     overlayText,
     originalAuthor,
@@ -576,6 +575,51 @@ app.post("/api/clips", async (req, res) => {
   res.json(newClip);
 });
 
+// API: Laugh at a clip (😂 Humor-first engagement metric)
+app.post("/api/clips/:id/laugh", async (req, res) => {
+  const clipId = req.params.id;
+
+  if (supabase) {
+    try {
+      const { data: currentClip, error: fetchError } = await supabase
+        .from("clips")
+        .select("laughs_count")
+        .eq("id", clipId)
+        .single();
+
+      if (!fetchError && currentClip) {
+        const nextLaughs = (currentClip.laughs_count || 0) + 1;
+        const { data, error: updateError } = await supabase
+          .from("clips")
+          .update({ laughs_count: nextLaughs })
+          .eq("id", clipId)
+          .select();
+
+        if (!updateError && data && data.length > 0) {
+          return res.json(mapDbToClip(data[0]));
+        } else if (updateError) {
+          if (updateError.message && (updateError.message.includes("fetch") || updateError.message.includes("network") || updateError.message.includes("Failed to fetch"))) {
+            supabase = null;
+          }
+        }
+      } else if (fetchError) {
+        if (fetchError.message && (fetchError.message.includes("fetch") || fetchError.message.includes("network") || fetchError.message.includes("Failed to fetch"))) {
+          supabase = null;
+        }
+      }
+    } catch (err: any) {
+      supabase = null;
+    }
+  }
+
+  const clip = clips.find(c => c.id === clipId);
+  if (!clip) {
+    return res.status(404).json({ error: "Clip not found" });
+  }
+  clip.laughsCount = (clip.laughsCount || 0) + 1;
+  res.json(clip);
+});
+
 // API: Like a clip
 app.post("/api/clips/:id/like", async (req, res) => {
   const clipId = req.params.id;
@@ -617,8 +661,50 @@ app.post("/api/clips/:id/like", async (req, res) => {
   if (!clip) {
     return res.status(404).json({ error: "Clip not found" });
   }
-  clip.likesCount += 1;
+  clip.likesCount = (clip.likesCount || 0) + 1;
   res.json(clip);
+});
+
+// API: User Delete Own Clip (Authors can delete their own reactions; OP CANNOT delete others' replies!)
+app.post("/api/clips/:id/user-delete", async (req, res) => {
+  const clipId = req.params.id;
+  const { username } = req.body;
+
+  if (!username) {
+    return res.status(400).json({ error: "Username is required to verify ownership." });
+  }
+
+  const clip = clips.find(c => c.id === clipId);
+  if (!clip) {
+    return res.status(404).json({ error: "Clip not found" });
+  }
+
+  // Strict Anti-Censorship & Ownership Enforcement:
+  // Original thread posters or corporations CANNOT delete reactions from other users.
+  // Only the original author of the reaction can delete their own reaction.
+  const cleanAuthor = clip.authorName.toLowerCase().replace(/^~/, "");
+  const cleanRequester = String(username).toLowerCase().replace(/^~/, "");
+
+  if (cleanAuthor !== cleanRequester) {
+    return res.status(403).json({
+      error: "Permission Denied: Thread starters cannot delete or suppress other people's reactions. Only the reaction author or a platform moderator can remove content."
+    });
+  }
+
+  clip.deleted = true;
+
+  if (supabase) {
+    try {
+      await supabase
+        .from("clips")
+        .update({ deleted: true })
+        .eq("id", clipId);
+    } catch (err) {
+      console.log("Supabase user delete sync ignored or failed.");
+    }
+  }
+
+  res.json({ success: true, message: "Reaction removed by author." });
 });
 
 // API: Upload asset (base64 image or video)

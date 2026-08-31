@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag } from "lucide-react";
+import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag, Trash2 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
@@ -8,7 +8,9 @@ interface ClipCardProps {
   key?: string | number | null;
   clip: Clip;
   allClips: Clip[];
+  onLaugh: (id: string) => void;
   onLike: (id: string) => void;
+  onDelete?: (id: string) => void;
   onRespond: (clip: Clip) => void;
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
   onRespondWithSaved?: (clip: Clip, reax: SavedReaction) => void;
@@ -20,7 +22,9 @@ interface ClipCardProps {
 export default function ClipCard({ 
   clip, 
   allClips, 
+  onLaugh,
   onLike, 
+  onDelete,
   onRespond, 
   onRespondWithTone, 
   onRespondWithSaved,
@@ -34,6 +38,20 @@ export default function ClipCard({
 
   const [showReportMenu, setShowReportMenu] = useState(false);
   const [isReported, setIsReported] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Author ownership check
+  const currentUsername = (localStorage.getItem("clips_username") || "").toLowerCase().replace(/^~/, "");
+  const clipAuthor = (clip.authorName || "").toLowerCase().replace(/^~/, "");
+  const isAuthor = Boolean(currentUsername && clipAuthor && currentUsername === clipAuthor);
+
+  const handleDelete = async () => {
+    if (!window.confirm("Are you sure you want to delete your reaction? This cannot be undone.")) return;
+    setIsDeleting(true);
+    if (onDelete) {
+      onDelete(clip.id);
+    }
+  };
 
   const handleReport = async (reason: string) => {
     try {
@@ -48,7 +66,7 @@ export default function ClipCard({
       if (res.ok) {
         setIsReported(true);
         setShowReportMenu(false);
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Report submitted. Thank you for keeping Reax safe!" } }));
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Report submitted to moderation queue. Thank you!" } }));
       }
     } catch (e) {
       console.error(e);
@@ -536,51 +554,80 @@ export default function ClipCard({
 
       {/* Bottom Engagement Panel */}
       <div className="flex items-center justify-between mt-3.5 pt-3 border-t border-slate-800/50">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {/* Primary Humor Metric: 😂 Laughs */}
+          <button 
+            onClick={() => onLaugh(clip.id)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 hover:text-amber-200 transition-all group/laugh active:scale-95 cursor-pointer"
+            title="Laugh at this clip"
+          >
+            <span className="text-sm transition-transform group-hover/laugh:scale-125">😂</span>
+            <span className="text-xs font-mono font-bold">{clip.laughsCount ?? 0}</span>
+          </button>
+
+          {/* Secondary Metric: ❤️ Likes */}
           <button 
             onClick={() => onLike(clip.id)}
-            className="flex items-center gap-1.5 text-slate-400 hover:text-rose-400 transition-colors group/like"
+            className="flex items-center gap-1.5 text-slate-400 hover:text-rose-400 transition-colors group/like cursor-pointer px-1.5 py-1"
+            title="Like this clip"
           >
             <Heart className="w-4 h-4 transition-transform group-hover/like:scale-125 hover:fill-rose-400" />
-            <span className="text-xs font-semibold">{clip.likesCount}</span>
+            <span className="text-xs font-semibold">{clip.likesCount ?? 0}</span>
           </button>
           
+          {/* React to Thread */}
           <button 
             onClick={() => onRespond(clip)}
-            className="flex items-center gap-1.5 text-slate-400 hover:text-indigo-400 transition-colors"
+            className="flex items-center gap-1.5 text-slate-400 hover:text-indigo-400 transition-colors cursor-pointer px-1.5 py-1"
+            title="Create a video or audio reaction response"
           >
             <CornerDownRight className="w-4 h-4" />
             <span className="text-xs font-semibold">React</span>
           </button>
 
+          {/* Save as Template */}
           <button 
             onClick={toggleSave}
-            className={`flex items-center gap-1.5 transition-colors ${
+            className={`flex items-center gap-1.5 transition-colors cursor-pointer px-1.5 py-1 ${
               isSaved ? "text-amber-400 hover:text-amber-500 font-bold" : "text-slate-400 hover:text-amber-400"
             }`}
             title={isSaved ? "Saved as Template" : "Save as reusable template for later reactions"}
           >
             <Star className={`w-4 h-4 ${isSaved ? "fill-amber-400 text-amber-400" : ""}`} />
-            <span className="text-xs">{isSaved ? "Template Saved" : "Save as Template"}</span>
+            <span className="text-xs hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
           </button>
 
+          {/* Report Button */}
           <button 
             onClick={() => setShowReportMenu(!showReportMenu)}
-            className={`flex items-center gap-1.5 transition-colors ${
-              isReported ? "text-red-500 font-bold" : "text-slate-400 hover:text-red-400"
+            className={`flex items-center gap-1.5 transition-colors cursor-pointer px-1.5 py-1 ${
+              isReported ? "text-red-500 font-bold" : "text-slate-500 hover:text-red-400"
             }`}
-            title="Report this post for community guidelines violations"
+            title="Report violation (Harassment, Slurs, Threats)"
           >
-            <Flag className="w-4 h-4" />
-            <span className="text-xs">{isReported ? "Reported" : "Report"}</span>
+            <Flag className="w-3.5 h-3.5" />
+            <span className="text-xs hidden sm:inline">{isReported ? "Reported" : "Report"}</span>
           </button>
+
+          {/* Author Only: Delete Own Reaction */}
+          {isAuthor && (
+            <button 
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="flex items-center gap-1 text-slate-500 hover:text-red-400 transition-colors cursor-pointer px-1.5 py-1 text-xs"
+              title="Delete your reaction (Only you can delete your reaction)"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="text-[11px] hidden sm:inline">Delete</span>
+            </button>
+          )}
         </div>
 
         {/* View Conversation Thread triggers if replies are present */}
         {!isNestedReply && (
           <button 
             onClick={() => onViewThread(clip.id)}
-            className="flex items-center gap-1 text-slate-500 hover:text-white text-xs font-mono transition-colors"
+            className="flex items-center gap-1 text-slate-500 hover:text-white text-xs font-mono transition-colors cursor-pointer"
           >
             <span>View Thread</span>
             <ChevronRight className="w-3.5 h-3.5" />
@@ -588,29 +635,46 @@ export default function ClipCard({
         )}
       </div>
 
-      {/* Dynamic Report Menu Tray */}
+      {/* Dynamic Report Menu Tray with Guidelines Statement */}
       {showReportMenu && (
-        <div className="mt-3 bg-[#1c0d12]/90 border border-red-900/30 rounded-xl p-3 space-y-2 text-left">
-          <span className="block text-[9px] font-mono font-black text-red-400 uppercase tracking-widest">
-            ⚠️ Select violation reason to report this post:
-          </span>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-            {["Pornography", "Copyright", "Harassment", "Spam", "Violence", "Other"].map((reason) => (
+        <div className="mt-3 bg-[#150a0e]/95 border border-red-900/40 rounded-xl p-3.5 space-y-2.5 text-left shadow-2xl">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <span className="block text-[10px] font-mono font-black text-red-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Flag className="w-3.5 h-3.5 text-red-400" /> Platform Safety & Moderation
+              </span>
+              <p className="text-[10px] text-slate-400 mt-0.5 leading-snug">
+                <strong>Rule: Criticize ideas, not people.</strong> Satire, mockery of products/ideas, and harsh opinions are allowed. Slurs, personal harassment, and threats will be reviewed and removed by moderators.
+              </p>
+            </div>
+            <button 
+              onClick={() => setShowReportMenu(false)}
+              className="text-slate-500 hover:text-slate-300 text-xs font-mono p-1"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1">
+            {[
+              "Slurs / Hate Speech",
+              "Harassment / Bullying",
+              "Threats / Violence",
+              "Pornography",
+              "Spam",
+              "Copyright",
+              "Other"
+            ].map((reason) => (
               <button
                 key={reason}
                 onClick={() => handleReport(reason)}
-                className="py-1.5 px-2.5 bg-[#090b0e] border border-slate-800 hover:border-red-500/30 text-slate-300 hover:text-red-400 rounded-lg text-[10px] font-mono font-bold transition-all text-left truncate cursor-pointer active:scale-95"
+                className="py-1.5 px-2.5 bg-[#090b0e] border border-slate-800 hover:border-red-500/40 text-slate-300 hover:text-red-400 rounded-lg text-[10px] font-mono font-bold transition-all text-left truncate cursor-pointer active:scale-95 flex items-center gap-1"
               >
-                ⚠ {reason}
+                <span className="text-red-400">⚠️</span>
+                <span className="truncate">{reason}</span>
               </button>
             ))}
           </div>
-          <button 
-            onClick={() => setShowReportMenu(false)}
-            className="text-[9px] font-mono font-bold text-slate-500 hover:text-slate-300 uppercase tracking-wide block mt-1"
-          >
-            Cancel
-          </button>
         </div>
       )}
 
@@ -623,7 +687,9 @@ export default function ClipCard({
               key={`reply-${reply.id}`} 
               clip={reply} 
               allClips={allClips} 
+              onLaugh={onLaugh}
               onLike={onLike} 
+              onDelete={onDelete}
               onRespond={onRespond} 
               onRespondWithTone={onRespondWithTone}
               onRespondWithSaved={onRespondWithSaved}

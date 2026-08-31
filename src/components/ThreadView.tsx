@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Heart, Volume2, Plus, ChevronRight, ArrowLeft, Sparkles, 
-  CornerDownRight, Play, Pause, VolumeX, Volume1, Star
+  CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2
 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
 import { speakText } from "../utils/audio";
@@ -13,7 +13,9 @@ interface ThreadViewProps {
   rootClipId: string;
   clips: Clip[];
   onClose: () => void;
+  onLaugh: (id: string) => void;
   onLike: (id: string) => void;
+  onDelete?: (id: string) => void;
   onRespond: (clip: Clip) => void;
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
   onRespondWithSaved?: (clip: Clip, reax: SavedReaction) => void;
@@ -23,7 +25,9 @@ export default function ThreadView({
   rootClipId, 
   clips, 
   onClose, 
+  onLaugh,
   onLike, 
+  onDelete,
   onRespond, 
   onRespondWithTone,
   onRespondWithSaved
@@ -388,30 +392,66 @@ export default function ThreadView({
 
             {/* Primary Engagement Row */}
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-800/60">
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
+                {/* Primary Humor Metric: 😂 Laughs */}
+                <button 
+                  onClick={() => onLaugh(focusedClip.id)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 hover:text-amber-200 transition-all group/laugh active:scale-95 cursor-pointer"
+                  title="Laugh at this clip"
+                >
+                  <span className="text-sm transition-transform group-hover/laugh:scale-125">😂</span>
+                  <span className="text-xs font-mono font-bold">{focusedClip.laughsCount ?? 0}</span>
+                </button>
+
+                {/* Secondary Metric: ❤️ Likes */}
                 <button 
                   onClick={() => onLike(focusedClip.id)}
-                  className="flex items-center gap-1.5 text-slate-400 hover:text-rose-400 transition-colors"
+                  className="flex items-center gap-1.5 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer px-1.5 py-1"
+                  title="Like this clip"
                 >
                   <Heart className="w-4 h-4 fill-transparent hover:fill-rose-400" />
-                  <span className="text-xs font-mono font-bold">{focusedClip.likesCount}</span>
+                  <span className="text-xs font-mono font-bold">{focusedClip.likesCount ?? 0}</span>
                 </button>
 
                 <button 
                   onClick={toggleSave}
-                  className={`flex items-center gap-1 text-xs font-mono transition-colors ${
+                  className={`flex items-center gap-1 text-xs font-mono transition-colors cursor-pointer px-1.5 py-1 ${
                     isSaved ? "text-amber-400 font-bold" : "text-slate-400 hover:text-amber-400"
                   }`}
                   title={isSaved ? "Remove from my Reactions" : "Save to my Reactions"}
                 >
                   <Star className={`w-4 h-4 ${isSaved ? "fill-amber-400 text-amber-400" : "text-slate-400"}`} />
-                  <span>{isSaved ? "Saved" : "Save"}</span>
+                  <span className="hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
                 </button>
+
+                {/* Author Only Delete Action */}
+                {(() => {
+                  const currentUsername = (localStorage.getItem("clips_username") || "").toLowerCase().replace(/^~/, "");
+                  const author = (focusedClip.authorName || "").toLowerCase().replace(/^~/, "");
+                  if (currentUsername && author && currentUsername === author && onDelete) {
+                    return (
+                      <button 
+                        onClick={() => {
+                          if (window.confirm("Are you sure you want to delete your reaction?")) {
+                            onDelete(focusedClip.id);
+                            onClose();
+                          }
+                        }}
+                        className="flex items-center gap-1 text-slate-500 hover:text-red-400 text-xs font-mono transition-colors cursor-pointer px-1.5 py-1"
+                        title="Delete your reaction"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Delete</span>
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
 
               <button 
                 onClick={() => onRespond(focusedClip)}
-                className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-600/10 hover:bg-indigo-600 border border-indigo-500/20 hover:border-indigo-500 text-indigo-400 hover:text-white text-[10px] font-mono font-black uppercase rounded-lg transition-all"
+                className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-600/10 hover:bg-indigo-600 border border-indigo-500/20 hover:border-indigo-500 text-indigo-400 hover:text-white text-[10px] font-mono font-black uppercase rounded-lg transition-all cursor-pointer"
               >
                 <Plus className="w-3 h-3" /> React to this branch
               </button>
@@ -623,10 +663,16 @@ export default function ThreadView({
                         </div>
 
                         <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-3 border-t border-slate-900 mt-2">
-                          <span className="flex items-center gap-1 font-bold text-rose-400">
-                            <Heart className="w-3.5 h-3.5 fill-rose-500/20 text-rose-400" />
-                            {sortedReplies[0].likesCount} likes
-                          </span>
+                          <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1 font-bold text-amber-400">
+                              <span>😂</span>
+                              {sortedReplies[0].laughsCount ?? 0}
+                            </span>
+                            <span className="flex items-center gap-1 text-slate-400">
+                              <Heart className="w-3.5 h-3.5 fill-rose-500/20 text-rose-400" />
+                              {sortedReplies[0].likesCount}
+                            </span>
+                          </div>
                           <span className="text-indigo-400 group-hover:translate-x-1 transition-transform flex items-center gap-0.5 font-black">
                             <span>EXPLORE CASCADE ➔</span>
                           </span>
@@ -686,10 +732,13 @@ export default function ThreadView({
                               )}
 
                               <div className="flex items-center justify-between text-[9px] font-mono text-slate-500 pt-2 border-t border-slate-900">
-                                <span className="flex items-center gap-1">
-                                  <Heart className="w-3 h-3 text-slate-600 group-hover:text-rose-500" />
-                                  <strong>{reply.likesCount}</strong> likes
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-amber-400 font-bold">😂 {reply.laughsCount ?? 0}</span>
+                                  <span className="flex items-center gap-0.5 text-slate-400">
+                                    <Heart className="w-3 h-3 text-slate-600 group-hover:text-rose-500" />
+                                    {reply.likesCount}
+                                  </span>
+                                </div>
                                 <span className="text-indigo-400 group-hover:underline flex items-center gap-0.5 font-bold">
                                   <span>➔ CASCADE</span>
                                   {childRepliesCount > 0 && <span>({childRepliesCount})</span>}

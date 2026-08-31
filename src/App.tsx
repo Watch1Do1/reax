@@ -270,6 +270,47 @@ export default function App() {
     }
   };
 
+  // Handle Laugh Action (😂 primary humor metric)
+  const handleLaugh = async (id: string) => {
+    try {
+      // Optimistic update
+      setClips(prev => prev.map(c => c.id === id ? { ...c, laughsCount: (c.laughsCount || 0) + 1 } : c));
+
+      const res = await fetch(`/api/clips/${id}/laugh`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to register laugh on server");
+      const updatedClip = await res.json();
+      
+      // Update with authoritative server state
+      setClips(prev => prev.map(c => c.id === id ? updatedClip : c));
+    } catch (err) {
+      console.error("Laugh error:", err);
+    }
+  };
+
+  // Handle Author-Only Deletion (author can remove own reaction; thread creators CANNOT delete replies)
+  const handleDeleteClip = async (id: string) => {
+    try {
+      const authorUsername = (username || localStorage.getItem("clips_username") || "").trim();
+      const res = await fetch(`/api/clips/${id}/user-delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: authorUsername })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to delete clip");
+      }
+
+      // Remove from client state
+      setClips(prev => prev.filter(c => c.id !== id));
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Your reaction was removed." } }));
+    } catch (err: any) {
+      console.error("Delete error:", err);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: err.message || "Could not delete clip." } }));
+    }
+  };
+
   // Open Respond modal for a specific clip with an optional preselected tone
   const handleRespondToClip = (parentClip: Clip, tone: Clip["tone"] | null = null) => {
     setReplyParent(parentClip);
@@ -824,7 +865,9 @@ export default function App() {
                   key={`clip-${clip.id}`}
                   clip={clip}
                   allClips={clips}
+                  onLaugh={handleLaugh}
                   onLike={handleLike}
+                  onDelete={handleDeleteClip}
                   onRespond={handleRespondToClip}
                   onRespondWithTone={handleFastRespond}
                   onRespondWithSaved={(parentClip, reax) => handlePostSavedReaction(reax, parentClip.id)}
@@ -878,7 +921,9 @@ export default function App() {
             rootClipId={selectedThreadRootId}
             clips={clips}
             onClose={() => setSelectedThreadRootId(null)}
+            onLaugh={handleLaugh}
             onLike={handleLike}
+            onDelete={handleDeleteClip}
             onRespond={handleRespondToClip}
             onRespondWithTone={handleFastRespond}
             onRespondWithSaved={(parentClip, reax) => handlePostSavedReaction(reax, parentClip.id)}
