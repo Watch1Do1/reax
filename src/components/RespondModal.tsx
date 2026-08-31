@@ -7,6 +7,7 @@ import {
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { Clip, SavedReaction } from "../types";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
+import { uploadMediaAsset, getAuthToken } from "../utils/supabaseClient";
 
 // Static preset templates for instant reaction clips
 const PRESETS = [
@@ -646,20 +647,29 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     try {
       let finalMediaUrl = selectedMedia.data;
 
-      // If the media is local base64, upload it first
+      // If the media is local base64/data URI, upload it to Supabase storage bucket 'media'
       if (selectedMedia.data.startsWith("data:")) {
-        const uploadRes = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            base64Data: selectedMedia.data,
-            mimeType: selectedMedia.mimeType
-          })
+        const uploadResult = await uploadMediaAsset({
+          data: selectedMedia.data,
+          kind: selectedMedia.isVideo ? "video" : "image",
+          mimeType: selectedMedia.mimeType,
+          filename: `reaction-${Date.now()}`
         });
+        finalMediaUrl = uploadResult.url;
+      }
 
-        if (!uploadRes.ok) throw new Error("Media upload failed");
-        const uploadData = await uploadRes.json();
-        finalMediaUrl = uploadData.url;
+      // If user recorded voice, upload voice note to storage as well (no base64 in clip payload)
+      if (audioMode === "record" && voiceAudioData && voiceAudioData.startsWith("data:")) {
+        try {
+          await uploadMediaAsset({
+            data: voiceAudioData,
+            kind: "audio",
+            mimeType: "audio/webm",
+            filename: `voice-note-${Date.now()}`
+          });
+        } catch (voiceUploadErr) {
+          console.warn("Could not upload separate voice note:", voiceUploadErr);
+        }
       }
 
       // Check if edited from remixData to apply precise lineage tracking
@@ -678,15 +688,20 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         ? (isEditedFromRemix ? remixData.authorName : remixData.remixedFrom)
         : undefined;
 
-      // Post the new clip payload
+      const token = await getAuthToken();
+
+      // Post the new clip payload (no base64 data in body)
       const postRes = await fetch("/api/clips", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({
           parentId,
           mediaUrl: finalMediaUrl,
+          mediaType: selectedMedia.isVideo ? "video" : "image",
           voiceText: audioMode === "tts" ? voiceText : (audioMode === "record" ? "🎤 Recorded Voice" : ""),
-          voiceAudioData: audioMode === "record" ? voiceAudioData : null,
           voiceStyle: voiceStyle, // Store selected voice filter or TTS voice accent style!
           tone,
           authorName: username.trim(),
@@ -697,12 +712,15 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         })
       });
 
-      if (!postRes.ok) throw new Error("Failed to post clip");
+      if (!postRes.ok) {
+        const errData = await postRes.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to post clip");
+      }
       window.dispatchEvent(new Event("reax_clip_posted"));
       onSuccess();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Submit error:", err);
-      setError("Failed to share your loop. Please try again.");
+      setError(err?.message || "Failed to share your loop. Please try again.");
     } finally {
       setLoading(false);
     }

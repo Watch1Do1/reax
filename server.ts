@@ -44,16 +44,32 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, timeoutErrorValue: T): 
 
 const SUPABASE_URL = cleanEnvVar(process.env.SUPABASE_URL);
 const SUPABASE_ANON_KEY = cleanEnvVar(process.env.SUPABASE_ANON_KEY);
+const SUPABASE_SERVICE_ROLE_KEY = cleanEnvVar(process.env.SUPABASE_SERVICE_ROLE_KEY);
 const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL === "1" || !!process.env.VERCEL;
 
 // Initialize Supabase Client if env vars are present
 let supabase: any = null;
+let supabaseAdmin: any = null;
 if (SUPABASE_URL && SUPABASE_ANON_KEY && !isPlaceholder(SUPABASE_URL)) {
   try {
     supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     console.log("Supabase Client initialized safely.");
   } catch (err: any) {
     console.error("Failed to initialize Supabase Client:", err?.message || err);
+  }
+}
+
+if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && !isPlaceholder(SUPABASE_URL)) {
+  try {
+    supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+    console.log("Supabase Admin (Service Role) Client initialized safely for storage operations.");
+  } catch (err: any) {
+    console.error("Failed to initialize Supabase Admin Client:", err?.message || err);
   }
 }
 
@@ -771,14 +787,22 @@ app.use("/uploads", express.static(UPLOADS_DIR));
 // Global Fail-Closed Middleware for /api routes
 // ----------------------------------------------------
 app.use("/api", (req, res, next) => {
-  // Always allow /api/db-status for status inspection
-  if (req.path === "/db-status") {
+  // Always allow status and public auth configuration inspection
+  if (req.path === "/db-status" || req.path === "/auth-config") {
     return next();
   }
   if (!store) {
     return res.status(503).json({ error: "database_unconfigured" });
   }
   next();
+});
+
+// API: Public Supabase configuration for client authentication
+app.get("/api/auth-config", (req, res) => {
+  res.json({
+    supabaseUrl: SUPABASE_URL || null,
+    supabaseAnonKey: SUPABASE_ANON_KEY || null
+  });
 });
 
 // API: Get DB configuration and connectivity status
@@ -873,9 +897,39 @@ app.get("/api/clips", async (req, res) => {
 
 // API: Create new clip
 app.post("/api/clips", async (req, res) => {
-  const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, tone, authorName, authorId, effect, overlayText, originalAuthor, remixedFrom } = req.body;
+  const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, tone, authorName, authorId, effect, overlayText, originalAuthor, remixedFrom, voiceAudioData } = req.body;
   if (!mediaUrl || !tone || !authorName) {
-    return res.status(400).json({ error: "Missing required fields" });
+    return res.status(400).json({ error: "Missing required fields: mediaUrl, tone, and authorName are required." });
+  }
+
+  // Reject bodies that include voiceAudioData longer than 100 chars (legacy preview only)
+  if (voiceAudioData && typeof voiceAudioData === "string" && voiceAudioData.length > 100) {
+    return res.status(400).json({
+      error: "voiceAudioData cannot contain base64 payloads in clip submissions. Upload audio assets to Supabase Storage first."
+    });
+  }
+
+  // Validate mediaUrl source
+  const isDevMemoryMode = !isProduction && process.env.DEV_MEMORY_STORE === "true";
+  const isValidStorageUrl = SUPABASE_URL && (
+    mediaUrl.startsWith(`${SUPABASE_URL}/storage/v1/object/`) ||
+    mediaUrl.startsWith(`${SUPABASE_URL}/storage/v1/render/image/`) ||
+    mediaUrl.includes(".supabase.co/storage/v1/object/") ||
+    mediaUrl.includes("/storage/v1/object/public/media/") ||
+    mediaUrl.includes("/storage/v1/object/sign/media/")
+  );
+
+  const isDevAllowedUrl = isDevMemoryMode && (
+    mediaUrl.startsWith("/uploads/") ||
+    mediaUrl.includes("images.unsplash.com") ||
+    mediaUrl.includes("vjs.zencdn.net") ||
+    mediaUrl.includes("mixkit-")
+  );
+
+  if (!isValidStorageUrl && !isDevAllowedUrl) {
+    return res.status(400).json({
+      error: "mediaUrl must be a valid public or signed URL from Supabase Storage bucket 'media'."
+    });
   }
 
   try {
@@ -886,17 +940,38 @@ app.post("/api/clips", async (req, res) => {
       return res.status(403).json({ error: "Your account is suspended due to violations of Community Guidelines." });
     }
 
-    // voiceAudioData is stripped and never persisted into DB
+    // Resolve author identity from Supabase Auth token if present
+    let resolvedAuthorId = isValidUuid(authorId) ? authorId : undefined;
+    let resolvedAuthorName = authorName;
+    if (supabase) {
+      const authHeader = (req.headers.authorization || "").toString().trim();
+      const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
+      if (token && token !== "dev-bearer-token") {
+        try {
+          const { data: userData } = await supabase.auth.getUser(token);
+          if (userData?.user?.id) {
+            resolvedAuthorId = userData.user.id;
+            if (userData.user.user_metadata?.username || userData.user.user_metadata?.display_name) {
+              resolvedAuthorName = userData.user.user_metadata.username || userData.user.user_metadata.display_name;
+            }
+          }
+        } catch (e) {
+          // Token verification fallback
+        }
+      }
+    }
+
+    // voiceAudioData is stripped and never persisted into DB; persist media_url + media_type only
     const newClip: Clip = {
       id: crypto.randomUUID(),
       parentId: parentId || null,
       mediaUrl,
-      mediaType,
+      mediaType: mediaType || inferMediaType(mediaUrl, mediaType),
       voiceText,
       voiceStyle,
       tone,
-      authorName,
-      authorId,
+      authorName: resolvedAuthorName,
+      authorId: resolvedAuthorId,
       createdAt: new Date().toISOString(),
       likesCount: 0,
       laughsCount: 0,
@@ -909,7 +984,7 @@ app.post("/api/clips", async (req, res) => {
     };
 
     const inserted = await store!.insertClip(newClip);
-    await store!.upsertUser({ username: authorName, lastActive: new Date().toISOString() });
+    await store!.upsertUser({ username: resolvedAuthorName, lastActive: new Date().toISOString() });
     await store!.incrementFunnel("posted_reaction");
     if (voiceText) {
       await store!.incrementFunnel("posted_voice_reaction");
@@ -988,52 +1063,121 @@ app.post("/api/clips/:id/user-delete", async (req, res) => {
   }
 });
 
-// API: Upload asset (base64 image or video)
+// API: Upload asset (audio, image, or video) to Supabase Storage "media" bucket
 app.post("/api/upload", async (req, res) => {
-  const { base64Data, mimeType } = req.body;
-  if (!base64Data || !mimeType) {
-    return res.status(400).json({ error: "Missing file data" });
+  const authHeader = (req.headers.authorization || "").toString().trim();
+  const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
+
+  let userId = "anonymous";
+  if (supabase) {
+    if (!token || token === "dev-bearer-token") {
+      return res.status(401).json({ error: "Unauthorized: Authorization Bearer token is required." });
+    }
+    try {
+      const { data: userData, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !userData?.user?.id) {
+        return res.status(401).json({
+          error: "Unauthorized: Invalid or expired Supabase access token.",
+          details: authError?.message
+        });
+      }
+      userId = userData.user.id;
+    } catch (err: any) {
+      return res.status(401).json({ error: "Unauthorized: Failed to authenticate Supabase token.", details: err?.message });
+    }
+  } else if (!isProduction && process.env.DEV_MEMORY_STORE === "true") {
+    // Local dev memory store mode
+    userId = token && token !== "dev-bearer-token" ? `dev-${token.slice(0, 8)}` : "dev-user-000";
+  } else {
+    return res.status(503).json({ error: "database_unconfigured" });
+  }
+
+  const { contentType, kind, filename, data, base64Data } = req.body;
+  const rawData = data || base64Data;
+  if (!rawData || !contentType || !kind) {
+    return res.status(400).json({ error: "Missing required upload fields: 'kind', 'contentType', and 'data' are required." });
+  }
+
+  if (kind !== "audio" && kind !== "image" && kind !== "video") {
+    return res.status(400).json({ error: "Invalid kind: must be 'audio', 'image', or 'video'." });
   }
 
   try {
-    const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, "");
+    const base64Clean = rawData.replace(/^data:[^;]+;base64,/, "");
     const buffer = Buffer.from(base64Clean, "base64");
-    
+    const sizeInBytes = buffer.length;
+
     let ext = "png";
-    if (mimeType.includes("video/mp4")) ext = "mp4";
-    else if (mimeType.includes("video/webm")) ext = "webm";
-    else if (mimeType.includes("image/jpeg")) ext = "jpg";
-    else if (mimeType.includes("image/gif")) ext = "gif";
-    else if (mimeType.includes("image/webp")) ext = "webp";
 
-    const fileName = `clip-${Date.now()}-${Math.random().toString(36).substr(2, 5)}.${ext}`;
+    // Validate type and size constraints
+    if (kind === "audio") {
+      const isAudio = contentType.includes("webm") || contentType.includes("mp4") || contentType.startsWith("audio/");
+      if (!isAudio) {
+        return res.status(400).json({ error: "Invalid audio contentType. Supported formats: audio/webm, audio/mp4." });
+      }
+      if (sizeInBytes > 2 * 1024 * 1024) {
+        return res.status(413).json({ error: "Audio exceeds maximum allowed size of 2MB." });
+      }
+      ext = contentType.includes("mp4") ? "mp4" : "webm";
+    } else if (kind === "image") {
+      const isImage = contentType === "image/jpeg" || contentType === "image/jpg" || contentType === "image/png" || contentType === "image/webp";
+      if (!isImage) {
+        return res.status(400).json({ error: "Invalid image contentType. Supported formats: image/jpeg, image/png, image/webp." });
+      }
+      if (sizeInBytes > 4 * 1024 * 1024) {
+        return res.status(413).json({ error: "Image exceeds maximum allowed size of 4MB." });
+      }
+      ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+    } else if (kind === "video") {
+      const isVideo = contentType === "video/mp4" || contentType === "video/webm";
+      if (!isVideo) {
+        return res.status(400).json({ error: "Invalid video contentType. Supported formats: video/mp4, video/webm." });
+      }
+      if (sizeInBytes > 12 * 1024 * 1024) {
+        return res.status(413).json({ error: "Video exceeds maximum allowed size of 12MB." });
+      }
+      ext = contentType.includes("webm") ? "webm" : "mp4";
+    }
 
-    // Upload to Supabase Storage "reactions" bucket if client configured
-    if (supabase) {
+    const now = new Date();
+    const yyyy = now.getUTCFullYear();
+    const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(now.getUTCDate()).padStart(2, "0");
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+    const fileUuid = crypto.randomUUID();
+    const storagePath = `${userId}/${dateStr}/${fileUuid}.${ext}`;
+
+    // Upload to Supabase Storage "media" bucket using SUPABASE_SERVICE_ROLE_KEY client if available
+    const storageClient = supabaseAdmin || supabase;
+    if (storageClient) {
       try {
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from("reactions")
-          .upload(fileName, buffer, {
-            contentType: mimeType,
+        const { data: uploadData, error: uploadError } = await storageClient.storage
+          .from("media")
+          .upload(storagePath, buffer, {
+            contentType,
             cacheControl: "3600",
             upsert: true
           });
 
         if (uploadError) {
-          console.warn("Storage upload error:", uploadError.message || uploadError);
-          return res.status(400).json({ error: uploadError.message || "Failed to upload asset to Supabase Storage bucket 'reactions'" });
+          console.warn("Storage upload error to bucket 'media':", uploadError.message || uploadError);
+          return res.status(400).json({ error: uploadError.message || "Failed to upload asset to Supabase Storage bucket 'media'" });
         }
 
         if (uploadData) {
-          const { data: publicUrlData } = supabase.storage
-            .from("reactions")
-            .getPublicUrl(fileName);
+          const { data: publicUrlData } = storageClient.storage
+            .from("media")
+            .getPublicUrl(storagePath);
 
           if (publicUrlData?.publicUrl) {
-            return res.json({ url: publicUrlData.publicUrl });
+            return res.json({
+              url: publicUrlData.publicUrl,
+              path: storagePath,
+              mediaType: kind
+            });
           }
         }
-        return res.status(500).json({ error: "Could not retrieve public URL for uploaded asset" });
+        return res.status(500).json({ error: "Could not retrieve public URL for uploaded media asset" });
       } catch (storageErr: any) {
         console.warn("Storage upload exception:", storageErr?.message || storageErr);
         return res.status(500).json({ error: storageErr?.message || "Storage upload failed" });
@@ -1041,10 +1185,15 @@ app.post("/api/upload", async (req, res) => {
     }
 
     // Local dev file write fallback
-    if (!isProduction) {
-      const filePath = path.join(UPLOADS_DIR, fileName);
+    if (!isProduction && process.env.DEV_MEMORY_STORE === "true") {
+      const localFileName = `${fileUuid}.${ext}`;
+      const filePath = path.join(UPLOADS_DIR, localFileName);
       fs.writeFileSync(filePath, buffer);
-      return res.json({ url: `/uploads/${fileName}` });
+      return res.json({
+        url: `/uploads/${localFileName}`,
+        path: storagePath,
+        mediaType: kind
+      });
     }
 
     res.status(500).json({ error: "Failed to upload asset to storage" });

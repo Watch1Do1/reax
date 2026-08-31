@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { Clip } from "../types";
 import { speakText } from "../utils/audio";
+import { getAuthToken, uploadMediaAsset } from "../utils/supabaseClient";
 
 // Map each reaction tone to its perfect high-quality backdrop preset for ultra-fast reaction matching
 const TONE_PRESETS: Record<Clip["tone"], { url: string; mimeType: string; isVideo: boolean; description: string }> = {
@@ -146,12 +147,29 @@ export default function FastReaxPanel({
   // Handle actual server posting
   const publishClip = async (voice: string, overlay: string, effect: string) => {
     try {
+      let finalMediaUrl = presetMedia.url;
+      if (finalMediaUrl.startsWith("data:")) {
+        const uploadResult = await uploadMediaAsset({
+          data: finalMediaUrl,
+          kind: presetMedia.isVideo ? "video" : "image",
+          mimeType: presetMedia.mimeType,
+          filename: `fastreax-${Date.now()}`
+        });
+        finalMediaUrl = uploadResult.url;
+      }
+
+      const token = await getAuthToken();
+
       const res = await fetch("/api/clips", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
         body: JSON.stringify({
           parentId: parentClip.id,
-          mediaUrl: presetMedia.url,
+          mediaUrl: finalMediaUrl,
+          mediaType: presetMedia.isVideo ? "video" : "image",
           voiceText: voice,
           tone,
           authorName: username.trim(),
@@ -160,7 +178,10 @@ export default function FastReaxPanel({
         })
       });
 
-      if (!res.ok) throw new Error("Posting failed");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Posting failed");
+      }
       
       window.dispatchEvent(new Event("reax_clip_posted"));
       setStep("success");
