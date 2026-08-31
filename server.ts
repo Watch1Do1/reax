@@ -62,11 +62,13 @@ export type Clip = {
   id: string;
   parentId: string | null;
   mediaUrl: string;
+  mediaType?: "video" | "image" | "audio" | string;
   voiceText?: string;
   voiceAudioData?: string;
   voiceStyle?: "casual" | "sarcastic" | "dramatic" | "announcer" | "oldschool";
   tone: "funny" | "dramatic" | "sarcastic" | "chill" | "chaotic";
   authorName: string;
+  authorId?: string;
   createdAt: string;
   likesCount: number;
   laughsCount: number;
@@ -363,6 +365,20 @@ function isValidUuid(id: string | null | undefined): boolean {
   return uuidRegex.test(id);
 }
 
+function inferMediaType(url: string, explicitType?: string): "video" | "image" | "audio" {
+  if (explicitType === "video" || explicitType === "image" || explicitType === "audio") {
+    return explicitType;
+  }
+  const lower = (url || "").toLowerCase();
+  if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mov") || lower.includes("mixkit-")) {
+    return "video";
+  }
+  if (lower.endsWith(".mp3") || lower.endsWith(".wav") || lower.endsWith(".ogg") || lower.endsWith(".m4a")) {
+    return "audio";
+  }
+  return "image";
+}
+
 function mapDbToClip(dbRow: any): Clip {
   const safeRow = dbRow || {};
   let dateStr = new Date().toISOString();
@@ -380,13 +396,14 @@ function mapDbToClip(dbRow: any): Clip {
     id: safeRow.id || crypto.randomUUID(),
     parentId: safeRow.parent_id || null,
     mediaUrl: safeRow.media_url || "",
+    mediaType: safeRow.media_type || undefined,
     voiceText: safeRow.voice_text || undefined,
-    voiceAudioData: safeRow.voice_audio_data || undefined,
     voiceStyle: safeRow.voice_style || undefined,
     overlayText: safeRow.overlay_text || undefined,
     tone: safeRow.tone || "chill",
     effect: safeRow.effect || "zoom",
     authorName: safeRow.author_name || "Anonymous",
+    authorId: safeRow.author_id || undefined,
     likesCount: safeRow.likes_count ?? 0,
     laughsCount: safeRow.laughs_count ?? 0,
     createdAt: dateStr,
@@ -398,24 +415,33 @@ function mapDbToClip(dbRow: any): Clip {
 }
 
 function mapClipToDb(clip: Clip) {
-  return {
+  const payload: Record<string, any> = {
     id: clip.id,
     parent_id: isValidUuid(clip.parentId) ? clip.parentId : null,
     media_url: clip.mediaUrl,
+    media_type: inferMediaType(clip.mediaUrl, clip.mediaType),
     voice_text: clip.voiceText || null,
-    voice_audio_data: clip.voiceAudioData || null,
     voice_style: clip.voiceStyle || null,
     overlay_text: clip.overlayText || null,
     tone: clip.tone,
     effect: clip.effect || "zoom",
     author_name: clip.authorName,
+    author_id: isValidUuid(clip.authorId) ? clip.authorId : null,
     likes_count: clip.likesCount ?? 0,
     laughs_count: clip.laughsCount ?? 0,
     original_author: clip.originalAuthor || null,
-    remixed_from: clip.remixedFrom || null,
+    remixed_from: isValidUuid(clip.remixedFrom) ? clip.remixedFrom : null,
     deleted: clip.deleted || false,
     report_count: clip.reportCount ?? 0,
   };
+
+  const cleanPayload: Record<string, any> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (value !== undefined) {
+      cleanPayload[key] = value;
+    }
+  }
+  return cleanPayload;
 }
 
 class SupabaseStore implements Store {
@@ -775,12 +801,12 @@ app.get("/api/db-status", async (req, res) => {
         
         // Column validation
         const { error: columnError } = await withTimeout(
-          supabase.from("clips").select("id, deleted, report_count, laughs_count").limit(1),
+          supabase.from("clips").select("id, deleted, report_count, laughs_count, media_url, author_name").limit(1),
           3000,
           { error: { message: "Column validation timed out after 3.0s" } }
         );
         if (columnError) {
-          connectionError = "The 'clips' table exists, but may be missing 'deleted', 'report_count', or 'laughs_count' columns. Please run ALTER TABLE commands to append these columns.";
+          connectionError = "The 'clips' table exists, but may be missing one or more required columns (id, deleted, report_count, laughs_count, media_url, author_name). Please run the schema SQL to update.";
         }
       } else {
         connectionError = error.message;
@@ -799,25 +825,26 @@ app.get("/api/db-status", async (req, res) => {
     supabaseUrl: url || null,
     tableExists,
     connectionError,
-    schemaSql: `-- Reax Complete Schema with Laughs & Moderation
+    schemaSql: `-- Reax Phase 2 Schema with Laughs, Moderation & Storage References
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS public.clips (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   parent_id UUID REFERENCES public.clips(id) ON DELETE CASCADE,
   media_url TEXT NOT NULL,
+  media_type TEXT,
   voice_text TEXT,
-  voice_audio_data TEXT,
   voice_style TEXT,
   overlay_text TEXT,
   tone TEXT NOT NULL,
   effect TEXT NOT NULL,
   author_name TEXT NOT NULL,
+  author_id UUID,
   likes_count INTEGER DEFAULT 0,
   laughs_count INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   original_author TEXT,
-  remixed_from TEXT,
+  remixed_from UUID REFERENCES public.clips(id) ON DELETE SET NULL,
   deleted BOOLEAN DEFAULT false,
   report_count INTEGER DEFAULT 0
 );
@@ -846,7 +873,7 @@ app.get("/api/clips", async (req, res) => {
 
 // API: Create new clip
 app.post("/api/clips", async (req, res) => {
-  const { parentId, mediaUrl, voiceText, voiceAudioData, voiceStyle, tone, authorName, effect, overlayText, originalAuthor, remixedFrom } = req.body;
+  const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, tone, authorName, authorId, effect, overlayText, originalAuthor, remixedFrom } = req.body;
   if (!mediaUrl || !tone || !authorName) {
     return res.status(400).json({ error: "Missing required fields" });
   }
@@ -859,15 +886,17 @@ app.post("/api/clips", async (req, res) => {
       return res.status(403).json({ error: "Your account is suspended due to violations of Community Guidelines." });
     }
 
+    // voiceAudioData is stripped and never persisted into DB
     const newClip: Clip = {
       id: crypto.randomUUID(),
       parentId: parentId || null,
       mediaUrl,
+      mediaType,
       voiceText,
-      voiceAudioData,
       voiceStyle,
       tone,
       authorName,
+      authorId,
       createdAt: new Date().toISOString(),
       likesCount: 0,
       laughsCount: 0,
@@ -882,7 +911,7 @@ app.post("/api/clips", async (req, res) => {
     const inserted = await store!.insertClip(newClip);
     await store!.upsertUser({ username: authorName, lastActive: new Date().toISOString() });
     await store!.incrementFunnel("posted_reaction");
-    if (voiceText || voiceAudioData) {
+    if (voiceText) {
       await store!.incrementFunnel("posted_voice_reaction");
     }
 
@@ -990,7 +1019,12 @@ app.post("/api/upload", async (req, res) => {
             upsert: true
           });
 
-        if (!uploadError && uploadData) {
+        if (uploadError) {
+          console.warn("Storage upload error:", uploadError.message || uploadError);
+          return res.status(400).json({ error: uploadError.message || "Failed to upload asset to Supabase Storage bucket 'reactions'" });
+        }
+
+        if (uploadData) {
           const { data: publicUrlData } = supabase.storage
             .from("reactions")
             .getPublicUrl(fileName);
@@ -999,8 +1033,10 @@ app.post("/api/upload", async (req, res) => {
             return res.json({ url: publicUrlData.publicUrl });
           }
         }
+        return res.status(500).json({ error: "Could not retrieve public URL for uploaded asset" });
       } catch (storageErr: any) {
-        console.warn("Storage upload to Supabase bucket failed:", storageErr?.message || storageErr);
+        console.warn("Storage upload exception:", storageErr?.message || storageErr);
+        return res.status(500).json({ error: storageErr?.message || "Storage upload failed" });
       }
     }
 

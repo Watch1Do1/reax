@@ -2,11 +2,13 @@ export type Clip = {
   id: string;
   parentId: string | null;
   mediaUrl: string;
+  mediaType?: "video" | "image" | "audio" | string;
   voiceText?: string;
-  voiceAudioData?: string; // Base64 audio URI string for custom voice recording
+  voiceAudioData?: string; // Client-side recording preview if present; not stored in DB
   voiceStyle?: "casual" | "sarcastic" | "dramatic" | "announcer" | "oldschool";
   tone: "funny" | "dramatic" | "sarcastic" | "chill" | "chaotic";
   authorName: string;
+  authorId?: string;
   createdAt: string;
   likesCount: number;
   laughsCount: number;
