@@ -63,7 +63,14 @@ export async function getAuthToken(): Promise<string> {
     console.warn("Error getting Supabase auth token:", err);
   }
 
-  // Fallback for dev mode
+  // Remove fallback token in production
+  const metaEnv = (import.meta as any).env || {};
+  const isProd = metaEnv.PROD || metaEnv.MODE === "production";
+  if (isProd) {
+    return "";
+  }
+
+  // Fallback strictly for local dev mode
   return "dev-bearer-token";
 }
 

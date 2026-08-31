@@ -640,15 +640,32 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
   // Complete submission
   const handlePostClip = async () => {
-    if (!selectedMedia) return;
+    if (!selectedMedia && !voiceAudioData) return;
     setLoading(true);
     setError(null);
 
     try {
-      let finalMediaUrl = selectedMedia.data;
+      let finalMediaUrl = selectedMedia ? selectedMedia.data : "";
+      let finalMediaType: "image" | "video" | "audio" = selectedMedia?.isVideo ? "video" : "image";
+      let uploadedVoiceUrl = "";
 
-      // If the media is local base64/data URI, upload it to Supabase storage bucket 'media'
-      if (selectedMedia.data.startsWith("data:")) {
+      // If user recorded voice, upload voice note to Supabase Storage
+      if (audioMode === "record" && voiceAudioData && voiceAudioData.startsWith("data:")) {
+        try {
+          const voiceUploadResult = await uploadMediaAsset({
+            data: voiceAudioData,
+            kind: "audio",
+            mimeType: "audio/webm",
+            filename: `voice-note-${Date.now()}`
+          });
+          uploadedVoiceUrl = voiceUploadResult.url;
+        } catch (voiceUploadErr) {
+          console.warn("Could not upload separate voice note:", voiceUploadErr);
+        }
+      }
+
+      // If the main media is local base64/data URI, upload it to Supabase storage bucket 'media'
+      if (selectedMedia && selectedMedia.data.startsWith("data:")) {
         const uploadResult = await uploadMediaAsset({
           data: selectedMedia.data,
           kind: selectedMedia.isVideo ? "video" : "image",
@@ -656,20 +673,17 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           filename: `reaction-${Date.now()}`
         });
         finalMediaUrl = uploadResult.url;
+        finalMediaType = selectedMedia.isVideo ? "video" : "image";
       }
 
-      // If user recorded voice, upload voice note to storage as well (no base64 in clip payload)
-      if (audioMode === "record" && voiceAudioData && voiceAudioData.startsWith("data:")) {
-        try {
-          await uploadMediaAsset({
-            data: voiceAudioData,
-            kind: "audio",
-            mimeType: "audio/webm",
-            filename: `voice-note-${Date.now()}`
-          });
-        } catch (voiceUploadErr) {
-          console.warn("Could not upload separate voice note:", voiceUploadErr);
-        }
+      // If main visual media is missing but voice audio exists, set mediaUrl to audio url and mediaType to "audio"
+      if (!finalMediaUrl && uploadedVoiceUrl) {
+        finalMediaUrl = uploadedVoiceUrl;
+        finalMediaType = "audio";
+      }
+
+      if (!finalMediaUrl) {
+        throw new Error("Please select a media template or record a reaction.");
       }
 
       // Check if edited from remixData to apply precise lineage tracking
@@ -690,7 +704,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
       const token = await getAuthToken();
 
-      // Post the new clip payload (no base64 data in body)
+      // Post the new clip payload (voice_text stays short; no base64 dumped into DB)
       const postRes = await fetch("/api/clips", {
         method: "POST",
         headers: {
@@ -700,8 +714,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         body: JSON.stringify({
           parentId,
           mediaUrl: finalMediaUrl,
-          mediaType: selectedMedia.isVideo ? "video" : "image",
-          voiceText: audioMode === "tts" ? voiceText : (audioMode === "record" ? "🎤 Recorded Voice" : ""),
+          mediaType: finalMediaType,
+          voiceText: audioMode === "tts" ? (voiceText || "").slice(0, 200) : (audioMode === "record" ? "🎤 Voice Reaction" : ""),
           voiceStyle: voiceStyle, // Store selected voice filter or TTS voice accent style!
           tone,
           authorName: username.trim(),
