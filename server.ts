@@ -1,3 +1,12 @@
+/**
+ * Environment Variables:
+ * - SUPABASE_URL: Supabase project API URL
+ * - SUPABASE_ANON_KEY: Supabase public anonymous key
+ * - SUPABASE_SERVICE_ROLE_KEY: Supabase service role key (for administrative operations)
+ * - GEMINI_API_KEY: Google Gemini API key for AI dialogue generation
+ * - DEV_MEMORY_STORE: Set to 'true' to allow local dev in-memory store when Supabase is unset
+ */
+
 import express from "express";
 import path from "path";
 import fs from "fs";
