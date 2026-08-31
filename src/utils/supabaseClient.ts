@@ -63,11 +63,15 @@ export async function getAuthToken(): Promise<string> {
     console.warn("Error getting Supabase auth token:", err);
   }
 
-  // Remove fallback token in production
+  // Check production environment
   const metaEnv = (import.meta as any).env || {};
-  const isProd = metaEnv.PROD || metaEnv.MODE === "production";
+  const isProd =
+    metaEnv.PROD ||
+    metaEnv.MODE === "production" ||
+    (typeof window !== "undefined" && window.location.hostname.includes("vercel.app"));
+
   if (isProd) {
-    return "";
+    throw new Error("Sign-in required to upload. Enable Anonymous auth in Supabase.");
   }
 
   // Fallback strictly for local dev mode

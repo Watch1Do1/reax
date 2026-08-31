@@ -909,26 +909,52 @@ app.post("/api/clips", async (req, res) => {
     });
   }
 
+  // Reject data: or blob: URLs
+  if (typeof mediaUrl !== "string" || mediaUrl.startsWith("data:") || mediaUrl.startsWith("blob:")) {
+    return res.status(400).json({
+      error: "data: and blob: URLs are not permitted in clip submissions. Please upload media first."
+    });
+  }
+
   // Validate mediaUrl source
   if (isProduction) {
-    let isValidProdStorageUrl = false;
+    let isValidProdUrl = false;
     try {
       const parsedUrl = new URL(mediaUrl);
-      if (parsedUrl.protocol === "https:" && parsedUrl.pathname.includes("/storage/v1/object/public/")) {
+      if (parsedUrl.protocol === "https:") {
+        const host = parsedUrl.host.toLowerCase();
+        const path = parsedUrl.pathname;
+
+        // 1. host is this project's Supabase host and path contains /storage/v1/object/
         if (SUPABASE_URL) {
-          const expectedHost = new URL(SUPABASE_URL).host;
-          if (parsedUrl.host === expectedHost || parsedUrl.host.endsWith(".supabase.co")) {
-            isValidProdStorageUrl = true;
-          }
-        } else if (parsedUrl.host.endsWith(".supabase.co")) {
-          isValidProdStorageUrl = true;
+          try {
+            const expectedHost = new URL(SUPABASE_URL).host.toLowerCase();
+            if (host === expectedHost && path.includes("/storage/v1/object/")) {
+              isValidProdUrl = true;
+            }
+          } catch {}
+        }
+
+        // 2. host ends with .supabase.co and path contains /storage/v1/object/
+        if (host.endsWith(".supabase.co") && path.includes("/storage/v1/object/")) {
+          isValidProdUrl = true;
+        }
+
+        // 3. host is images.unsplash.com
+        if (host === "images.unsplash.com") {
+          isValidProdUrl = true;
+        }
+
+        // 4. url includes mixkit.co or mixkit-
+        if (mediaUrl.includes("mixkit.co") || mediaUrl.includes("mixkit-")) {
+          isValidProdUrl = true;
         }
       }
     } catch {}
 
-    if (!isValidProdStorageUrl) {
+    if (!isValidProdUrl) {
       return res.status(400).json({
-        error: "In production, mediaUrl must be an HTTPS URL hosted on Supabase Storage (*.supabase.co/storage/v1/object/public/...)."
+        error: "In production, mediaUrl must be an HTTPS URL hosted on Supabase Storage (*.supabase.co/storage/v1/object/...), images.unsplash.com, or mixkit."
       });
     }
   } else {
@@ -938,10 +964,11 @@ app.post("/api/clips", async (req, res) => {
       mediaUrl.startsWith("/uploads/") ||
       mediaUrl.includes("images.unsplash.com") ||
       mediaUrl.includes("vjs.zencdn.net") ||
+      mediaUrl.includes("mixkit.co") ||
       mediaUrl.includes("mixkit-")
     );
 
-    if (!isValidStorageUrl && !isDevAllowedUrl) {
+    if (!isValidStorageUrl && !isDevAllowedUrl && !mediaUrl.includes("images.unsplash.com") && !mediaUrl.includes("mixkit")) {
       return res.status(400).json({
         error: "mediaUrl must be a valid Supabase Storage URL or an allowed demo preset in DEV_MEMORY_STORE mode."
       });
@@ -1107,6 +1134,11 @@ app.post("/api/upload", async (req, res) => {
     return res.status(503).json({ error: "database_unconfigured" });
   }
 
+  // In production, ensure admin client with service role key is configured for storage
+  if (isProduction && !supabaseAdmin) {
+    return res.status(503).json({ error: "storage_unconfigured" });
+  }
+
   // Accept { contentType, kind, filename, data } and legacy { base64Data, mimeType }
   const { filename } = req.body;
   const rawData = req.body.data || req.body.base64Data;
@@ -1186,12 +1218,8 @@ app.post("/api/upload", async (req, res) => {
     const fileUuid = crypto.randomUUID();
     const storagePath = `${userId}/${dateStr}/${fileUuid}.${ext}`;
 
-    // Create service-role client from SUPABASE_SERVICE_ROLE_KEY to use strictly for storage.upload
-    const storageClient = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && !isPlaceholder(SUPABASE_URL))
-      ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-          auth: { autoRefreshToken: false, persistSession: false }
-        })
-      : (supabaseAdmin || supabase);
+    // Use supabaseAdmin (SUPABASE_SERVICE_ROLE_KEY) exclusively for storage.upload
+    const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
 
     if (storageClient) {
       try {
