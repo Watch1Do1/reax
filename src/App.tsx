@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { 
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
-  ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut
+  ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -11,58 +11,18 @@ import ThreadView from "./components/ThreadView";
 import FastReaxPanel from "./components/FastReaxPanel";
 import SavedReactionsVault from "./components/SavedReactionsVault";
 import OnboardingModal from "./components/OnboardingModal";
+import ProfilePanel from "./components/ProfilePanel";
 import AdminPanel from "./components/AdminPanel";
 import { Clip, SavedReaction } from "./types";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "./utils/keyUtils";
-import { getAuthToken, fetchMyProfile, syncUserProfile, signOutSupabase, getSupabaseClient } from "./utils/supabaseClient";
-
-// Helper to exchange magic link / OTP / URL tokens on mount without relying on external export
-async function checkAndProcessUrlAuth() {
-  if (typeof window === "undefined") return { success: false, user: null };
-
-  const hash = window.location.hash || "";
-  const search = window.location.search || "";
-  const hasTokens =
-    hash.includes("access_token") ||
-    hash.includes("refresh_token") ||
-    hash.includes("type=signup") ||
-    hash.includes("type=magiclink") ||
-    hash.includes("type=recovery") ||
-    search.includes("type=signup") ||
-    search.includes("type=magiclink") ||
-    search.includes("code=");
-
-  if (!hasTokens) return { success: false, user: null };
-
-  try {
-    const supabase = await getSupabaseClient();
-    if (!supabase) return { success: false, user: null };
-
-    const searchParams = new URLSearchParams(search);
-    const code = searchParams.get("code");
-    if (code) {
-      try {
-        const { data: codeData } = await supabase.auth.exchangeCodeForSession(code);
-        if (codeData?.session?.user) {
-          window.history.replaceState({}, document.title, window.location.pathname);
-          return { success: true, user: codeData.session.user };
-        }
-      } catch (codeErr) {
-        console.warn("Code exchange error:", codeErr);
-      }
-    }
-
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (sessionData?.session?.user) {
-      window.history.replaceState({}, document.title, window.location.pathname);
-      return { success: true, user: sessionData.session.user };
-    }
-  } catch (err) {
-    console.warn("Error processing URL auth tokens:", err);
-  }
-
-  return { success: false, user: null };
-}
+import { 
+  getAuthToken, 
+  fetchMyProfile, 
+  syncUserProfile, 
+  signOutSupabase, 
+  handleUrlAuthTokens,
+  getSupabaseClient 
+} from "./utils/supabaseClient";
 
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([]);
@@ -99,44 +59,40 @@ export default function App() {
   const [isEditingUsername, setIsEditingUsername] = useState(false);
   const [tempUsername, setTempUsername] = useState(username);
 
-  // Onboarding & Age constraint states
-  const [ageConfirmed, setAgeConfirmed] = useState(() => {
-    return localStorage.getItem("reax_age_confirmed") === "true";
-  });
+  // Profile Panel & Onboarding Modal states
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeTriggerReason, setUpgradeTriggerReason] = useState<"save_reaction" | "post_limit" | "edit_username" | "nav_click" | null>(null);
 
-  // Sync profile & handle magic link URL tokens on mount
+  // Age constraint state
+  const [ageConfirmed, setAgeConfirmed] = useState(() => {
+    return localStorage.getItem("reax_age_confirmed") === "true";
+  });
+
+  // Sync profile & handle auth URL tokens on mount
   useEffect(() => {
     let isMounted = true;
 
     async function initAuth() {
-      // 1. Process URL tokens if user arrived via magic link / confirmation email
-      const urlAuth = await checkAndProcessUrlAuth();
-      if (urlAuth.success) {
-        setIsLoggedIn(true);
-        localStorage.setItem("reax_is_logged_in", "true");
-        localStorage.setItem("reax_age_confirmed", "true");
-        setAgeConfirmed(true);
+      // 1. Process URL tokens if user arrived via email confirmation link
+      try {
+        const urlAuth = await handleUrlAuthTokens();
+        if (urlAuth.success) {
+          setIsLoggedIn(true);
+          localStorage.setItem("reax_is_logged_in", "true");
+          localStorage.setItem("reax_age_confirmed", "true");
+          setAgeConfirmed(true);
 
-        const metaUsername =
-          urlAuth.user?.user_metadata?.username ||
-          urlAuth.user?.user_metadata?.display_name;
-
-        if (metaUsername) {
-          try {
-            const synced = await syncUserProfile(metaUsername);
-            if (synced?.username && isMounted) {
-              setUsername(synced.username);
-              setTempUsername(synced.username);
-              localStorage.setItem("clips_username", synced.username);
-            }
-          } catch (err) {
-            console.warn("Could not sync metadata username:", err);
+          if (urlAuth.username && isMounted) {
+            setUsername(urlAuth.username);
+            setTempUsername(urlAuth.username);
+            localStorage.setItem("clips_username", urlAuth.username);
           }
-        }
 
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎉 Successfully signed in via magic link!" } }));
+          window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎉 Successfully confirmed & signed in!" } }));
+        }
+      } catch (err) {
+        console.warn("Error handling auth URL tokens on mount:", err);
       }
 
       // 2. Fetch profile from backend
@@ -277,7 +233,18 @@ export default function App() {
     const handleUrlCheck = async () => {
       const isPathAdmin = window.location.pathname === "/admin";
       const isHashAdmin = window.location.hash === "#admin";
+      const isHashProfile = window.location.hash === "#profile";
       
+      if (isHashProfile) {
+        const logged = localStorage.getItem("reax_is_logged_in") === "true";
+        if (logged) {
+          setIsProfileOpen(true);
+        } else {
+          setUpgradeTriggerReason("nav_click");
+          setIsUpgradeModalOpen(true);
+        }
+      }
+
       if (isPathAdmin || isHashAdmin) {
         const storedPasscode = localStorage.getItem("reax_admin_passcode") || "";
         let token = "";
@@ -703,16 +670,13 @@ export default function App() {
             ) : (
               <div className="flex items-center gap-2">
                 <button 
-                  onClick={() => {
-                    setTempUsername(username);
-                    setIsEditingUsername(true);
-                  }}
+                  onClick={() => setIsProfileOpen(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 border border-emerald-500/30 hover:border-emerald-500/50 text-emerald-400 font-mono text-xs rounded-xl transition-all active:scale-95 shadow-sm cursor-pointer"
-                  title="Click to edit your username"
+                  title="View Profile and creations"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   <span className="font-bold">@{username}</span>
-                  <UserCheck className="w-3.5 h-3.5 text-emerald-400 ml-1 shrink-0" />
+                  <User className="w-3.5 h-3.5 text-emerald-400 ml-0.5 shrink-0" />
                 </button>
                 <button 
                   onClick={handleLogout}
@@ -1453,6 +1417,26 @@ export default function App() {
         onLoginSuccess={handleLoginSuccess}
         guestUsername={username}
         triggerReason={upgradeTriggerReason}
+      />
+
+      {/* USER PROFILE PANEL */}
+      <ProfilePanel
+        isOpen={isProfileOpen}
+        onClose={() => {
+          setIsProfileOpen(false);
+          if (window.location.hash === "#profile") {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        }}
+        currentUsername={username}
+        onSignOut={handleLogout}
+        onUsernameUpdated={(newUsername) => {
+          setUsername(newUsername);
+          setTempUsername(newUsername);
+          localStorage.setItem("clips_username", newUsername);
+        }}
+        clips={clips}
+        onClipSelect={(targetId) => setSelectedThreadRootId(targetId)}
       />
 
       {/* FLOATING SUBTLE TOAST NOTIFICATION CONTAINER */}
