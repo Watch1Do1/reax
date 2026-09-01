@@ -155,6 +155,11 @@ export default function OnboardingModal({
   // Human, friendly trigger copy
   const getTriggerCopy = () => {
     switch (triggerReason) {
+      case "nav_click":
+        return {
+          title: "Sign in or claim your username",
+          desc: "Email magic link to keep your name. Or continue as guest."
+        };
       case "save_reaction":
         return {
           title: "Save Reaction to Cloud Vault",
@@ -172,8 +177,8 @@ export default function OnboardingModal({
         };
       default:
         return {
-          title: "Upgrade to Reax Pro Profile",
-          desc: "Secure your username, preserve all saved items, and post unlimited interactive AI loops instantly."
+          title: "Sign in or claim your username",
+          desc: "Email magic link to keep your name. Or continue as guest."
         };
     }
   };
@@ -373,14 +378,16 @@ export default function OnboardingModal({
 
             {/* Quick Guest Continue Option */}
             {!waitingForOtp && (
-              <button
-                type="button"
-                onClick={handleAnonymousSignIn}
-                disabled={isSubmitting}
-                className="w-full py-2 bg-slate-950 hover:bg-slate-800 border border-slate-800/80 text-slate-400 hover:text-slate-200 font-bold text-xs uppercase tracking-wider rounded-xl transition-all font-mono flex items-center justify-center gap-2"
-              >
-                <span>Continue as Guest (@{guestUsername})</span>
-              </button>
+              <div className="pt-1 text-center">
+                <button
+                  type="button"
+                  onClick={handleAnonymousSignIn}
+                  disabled={isSubmitting}
+                  className="text-[11px] text-slate-400 hover:text-slate-200 transition-colors font-mono underline decoration-slate-700 underline-offset-4 cursor-pointer py-1 px-3 rounded-lg hover:bg-slate-800/40"
+                >
+                  Continue as Guest (@{guestUsername})
+                </button>
+              </div>
             )}
           </div>
         )}

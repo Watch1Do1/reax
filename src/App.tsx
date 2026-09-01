@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { 
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
-  ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert
+  ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -551,27 +551,48 @@ export default function App() {
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="font-sans font-black text-xl tracking-tight text-white uppercase">Reax</span>
-                <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-[9px] font-bold font-mono text-indigo-400">AI PRO</span>
               </div>
-              <span className="text-[10px] text-slate-500 font-mono tracking-wider block -mt-0.5 uppercase">VISUAL REACTION CASING</span>
+              <span className="text-[10px] text-slate-500 font-mono tracking-wider block -mt-0.5 uppercase">VISUAL REACTION CASCADES</span>
             </div>
           </div>
 
           {/* Core Stats & Navigation actions */}
-          <div className="flex items-center gap-3">
-            {/* Inline Username Editor */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Inline Username Editor & Authentication Controls */}
             {!isLoggedIn ? (
-              <button 
-                onClick={() => {
-                  window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "edit_username" } }));
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900/80 hover:bg-slate-800 border border-dashed border-slate-700/80 text-slate-400 hover:text-slate-200 font-mono text-xs rounded-xl transition-all active:scale-95"
-                title="Click to upgrade guest profile and claim your username"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                <span className="font-bold">{username}</span>
-                <span className="text-[9px] px-1 bg-slate-950 border border-slate-800 rounded text-slate-500 font-bold ml-1 uppercase">Guest</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {/* Guest Chip with clear solid border */}
+                <button 
+                  onClick={() => {
+                    setUpgradeTriggerReason("edit_username");
+                    setIsUpgradeModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white font-mono text-xs rounded-xl transition-all active:scale-95 shadow-sm cursor-pointer"
+                  title="Your guest alias (click to customize)"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  <span className="font-bold">{username}</span>
+                  <span className="text-[9px] px-1.5 py-0.5 bg-slate-800 border border-slate-600 rounded text-amber-300 font-bold ml-0.5 uppercase tracking-wider">
+                    Guest
+                  </span>
+                </button>
+
+                {/* Always visible Sign in button with desktop secondary text */}
+                <button
+                  onClick={() => {
+                    setUpgradeTriggerReason("nav_click");
+                    setIsUpgradeModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 cursor-pointer font-mono border border-indigo-500 hover:border-indigo-400"
+                  title="Sign in or claim your permanent username"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Sign in</span>
+                  <span className="hidden md:inline text-[10px] text-indigo-200 font-normal border-l border-indigo-400/40 pl-1.5">
+                    Claim @username
+                  </span>
+                </button>
+              </div>
             ) : isEditingUsername ? (
               <div className="flex items-center gap-1.5 bg-slate-900 border border-indigo-500/50 rounded-xl px-2.5 py-1.5">
                 <span className="text-[11px] font-mono font-bold text-indigo-400">@</span>
@@ -587,7 +608,7 @@ export default function App() {
                   maxLength={18}
                   autoFocus
                 />
-                <button onClick={saveUsername} className="text-[10px] font-bold text-emerald-400 font-mono">SAVE</button>
+                <button onClick={saveUsername} className="text-[10px] font-bold text-emerald-400 font-mono cursor-pointer">SAVE</button>
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -596,8 +617,8 @@ export default function App() {
                     setTempUsername(username);
                     setIsEditingUsername(true);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 font-mono text-xs rounded-xl transition-all active:scale-95 shadow-sm"
-                  title="Click to edit your custom username"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 border border-emerald-500/30 hover:border-emerald-500/50 text-emerald-400 font-mono text-xs rounded-xl transition-all active:scale-95 shadow-sm cursor-pointer"
+                  title="Click to edit your username"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                   <span className="font-bold">@{username}</span>
@@ -605,10 +626,11 @@ export default function App() {
                 </button>
                 <button 
                   onClick={handleLogout}
-                  className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-rose-400 rounded-xl transition-colors cursor-pointer"
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-900 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 font-mono text-xs rounded-xl transition-colors cursor-pointer"
                   title="Sign Out"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Sign out</span>
                 </button>
               </div>
             )}
