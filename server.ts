@@ -1198,6 +1198,9 @@ app.post("/api/upload", async (req, res) => {
       if (sizeInBytes > 4 * 1024 * 1024) {
         return res.status(413).json({ error: "Image exceeds maximum allowed size of 4MB." });
       }
+      if (contentType === "image/jpg") {
+        contentType = "image/jpeg";
+      }
       ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
     } else if (kind === "video") {
       const isVideo = contentType === "video/mp4" || contentType === "video/webm";

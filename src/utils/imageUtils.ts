@@ -19,6 +19,8 @@ export function isHeicFile(file: File): boolean {
    */
   export async function convertHeicToJpeg(file: File): Promise<{ data: string; mimeType: "image/jpeg" }> {
     const url = URL.createObjectURL(file);
+    let bitmapToClose: ImageBitmap | null = null;
+  
     try {
       let imgSource: CanvasImageSource;
       let width = 0;
@@ -28,6 +30,7 @@ export function isHeicFile(file: File): boolean {
       if (typeof createImageBitmap === "function") {
         try {
           const bitmap = await createImageBitmap(file);
+          bitmapToClose = bitmap;
           imgSource = bitmap;
           width = bitmap.width;
           height = bitmap.height;
@@ -106,6 +109,12 @@ export function isHeicFile(file: File): boolean {
         mimeType: "image/jpeg"
       };
     } finally {
+      // Release bitmap memory if created
+      if (bitmapToClose && typeof bitmapToClose.close === "function") {
+        try {
+          bitmapToClose.close();
+        } catch {}
+      }
       // 7. RevokeObjectURL
       URL.revokeObjectURL(url);
     }
