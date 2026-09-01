@@ -1,4 +1,5 @@
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient, User, Session } from "@supabase/supabase-js";
+import { UserProfile } from "../types";
 
 let clientInstance: SupabaseClient | null = null;
 let initPromise: Promise<SupabaseClient | null> | null = null;
@@ -71,11 +72,140 @@ export async function getAuthToken(): Promise<string> {
     (typeof window !== "undefined" && window.location.hostname.includes("vercel.app"));
 
   if (isProd) {
-    throw new Error("Sign-in required to upload. Enable Anonymous auth in Supabase.");
+    throw new Error("Sign-in required to perform action. Please sign in via magic link or enable Anonymous auth in Supabase.");
   }
 
   // Fallback strictly for local dev mode
   return "dev-bearer-token";
+}
+
+/**
+ * Request an email magic link for passwordless Supabase authentication
+ */
+export async function sendMagicLink(email: string, username?: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const supabase = await getSupabaseClient();
+    if (!supabase) {
+      return { success: false, error: "Supabase client unconfigured" };
+    }
+
+    const redirectTo = typeof window !== "undefined" ? window.location.origin : undefined;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: redirectTo,
+        data: username ? { username, display_name: username } : undefined
+      }
+    });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Failed to send magic link" };
+  }
+}
+
+/**
+ * Verify an emailed OTP token (for 6-digit email codes)
+ */
+export async function verifyEmailOtp(email: string, token: string): Promise<{ success: boolean; session?: Session | null; error?: string }> {
+  try {
+    const supabase = await getSupabaseClient();
+    if (!supabase) {
+      return { success: false, error: "Supabase client unconfigured" };
+    }
+
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token,
+      type: "email"
+    });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true, session: data.session };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Failed to verify OTP code" };
+  }
+}
+
+/**
+ * Sign out of current Supabase session
+ */
+export async function signOutSupabase(): Promise<void> {
+  try {
+    const supabase = await getSupabaseClient();
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+  } catch (err) {
+    console.warn("Sign out error:", err);
+  }
+}
+
+/**
+ * Get current authenticated Supabase user
+ */
+export async function getCurrentSupabaseUser(): Promise<User | null> {
+  try {
+    const supabase = await getSupabaseClient();
+    if (!supabase) return null;
+    const { data } = await supabase.auth.getUser();
+    return data?.user || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sync / upsert user profile on backend (POST /api/me)
+ */
+export async function syncUserProfile(username: string): Promise<UserProfile> {
+  const token = await getAuthToken();
+  const res = await fetch("/api/me", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ username })
+  });
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || `Profile sync failed with HTTP ${res.status}`);
+  }
+
+  const data = await res.json();
+  return data.profile;
+}
+
+/**
+ * Fetch authenticated profile from backend (GET /api/me)
+ */
+export async function fetchMyProfile(): Promise<{ profile: UserProfile | null; isAdmin: boolean }> {
+  try {
+    const token = await getAuthToken();
+    const res = await fetch("/api/me", {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        profile: data.profile || null,
+        isAdmin: Boolean(data.isAdmin)
+      };
+    }
+  } catch (e) {
+    console.warn("Could not fetch my profile:", e);
+  }
+  return { profile: null, isAdmin: false };
 }
 
 export interface UploadResult {

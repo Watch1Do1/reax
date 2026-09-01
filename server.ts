@@ -105,7 +105,9 @@ export type Report = {
 };
 
 export type UserProfile = {
+  id?: string;
   username: string;
+  email?: string;
   createdAt: string;
   lastActive: string;
   reactionCount: number;
@@ -133,10 +135,14 @@ export interface Store {
   getClip(id: string): Promise<Clip | null>;
   insertClip(clip: Clip): Promise<Clip>;
   updateClip(id: string, updates: Partial<Clip>): Promise<Clip | null>;
+  recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }>;
+  recordLaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }>;
   insertReport(report: Report): Promise<Report>;
   getReports(): Promise<Array<Report & { clip?: Partial<Clip> | null }>>;
   dismissReport(reportId: string): Promise<boolean>;
   getUsers(): Promise<UserProfile[]>;
+  getUserProfile(query: { id?: string; username?: string }): Promise<UserProfile | null>;
+  upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string }): Promise<UserProfile>;
   upsertUser(user: Partial<UserProfile> & { username: string }): Promise<UserProfile>;
   incrementFunnel(event: keyof FunnelStats): Promise<FunnelStats>;
   getFunnel(): Promise<FunnelStats>;
@@ -227,6 +233,8 @@ class MemoryStore implements Store {
 
   private reports: Report[] = [];
   private userProfiles: UserProfile[] = [];
+  private likesMap: Map<string, Set<string>> = new Map();
+  private laughsMap: Map<string, Set<string>> = new Map();
   private funnelStats: FunnelStats = {
     visitors: 0,
     started_reaction: 0,
@@ -255,6 +263,7 @@ class MemoryStore implements Store {
         }
       } else {
         usersMap.set(clip.authorName.toLowerCase(), {
+          id: clip.authorId || `user-${clip.authorName.toLowerCase()}`,
           username: clip.authorName,
           createdAt: clip.createdAt,
           lastActive: clip.createdAt,
@@ -296,6 +305,46 @@ class MemoryStore implements Store {
     return clip;
   }
 
+  async recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
+    const clip = this.clips.find(c => c.id === clipId);
+    if (!clip) return { liked: false, likesCount: 0 };
+
+    let userSet = this.likesMap.get(clipId);
+    if (!userSet) {
+      userSet = new Set();
+      this.likesMap.set(clipId, userSet);
+    }
+
+    if (userSet.has(userId)) {
+      // Already liked - prevent smash click duplicate
+      return { liked: false, likesCount: clip.likesCount };
+    }
+
+    userSet.add(userId);
+    clip.likesCount = (clip.likesCount || 0) + 1;
+    return { liked: true, likesCount: clip.likesCount };
+  }
+
+  async recordLaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }> {
+    const clip = this.clips.find(c => c.id === clipId);
+    if (!clip) return { laughed: false, laughsCount: 0 };
+
+    let userSet = this.laughsMap.get(clipId);
+    if (!userSet) {
+      userSet = new Set();
+      this.laughsMap.set(clipId, userSet);
+    }
+
+    if (userSet.has(userId)) {
+      // Already laughed - prevent smash click duplicate
+      return { laughed: false, laughsCount: clip.laughsCount || 0 };
+    }
+
+    userSet.add(userId);
+    clip.laughsCount = (clip.laughsCount || 0) + 1;
+    return { laughed: true, laughsCount: clip.laughsCount };
+  }
+
   async insertReport(report: Report): Promise<Report> {
     this.reports.push(report);
     return report;
@@ -335,6 +384,46 @@ class MemoryStore implements Store {
     return this.userProfiles;
   }
 
+  async getUserProfile(query: { id?: string; username?: string }): Promise<UserProfile | null> {
+    if (query.id) {
+      const byId = this.userProfiles.find(u => u.id === query.id);
+      if (byId) return byId;
+    }
+    if (query.username) {
+      const clean = query.username.toLowerCase();
+      const byUsername = this.userProfiles.find(u => u.username.toLowerCase() === clean);
+      if (byUsername) return byUsername;
+    }
+    return null;
+  }
+
+  async upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string }): Promise<UserProfile> {
+    let existing = this.userProfiles.find(u => u.id === profile.id || u.username.toLowerCase() === profile.username.toLowerCase());
+    if (existing) {
+      existing.id = profile.id;
+      existing.username = profile.username;
+      if (profile.email) existing.email = profile.email;
+      if (profile.suspended !== undefined) existing.suspended = profile.suspended;
+      if (profile.strikes !== undefined) existing.strikes = profile.strikes;
+      existing.lastActive = profile.lastActive || new Date().toISOString();
+      return existing;
+    } else {
+      const newUser: UserProfile = {
+        id: profile.id,
+        username: profile.username,
+        email: profile.email,
+        createdAt: new Date().toISOString(),
+        lastActive: profile.lastActive || new Date().toISOString(),
+        reactionCount: 0,
+        suspended: profile.suspended || false,
+        strikes: profile.strikes || 0
+      };
+      this.userProfiles.push(newUser);
+      this.todayStats.newUsers += 1;
+      return newUser;
+    }
+  }
+
   async upsertUser(user: Partial<UserProfile> & { username: string }): Promise<UserProfile> {
     let existing = this.userProfiles.find(u => u.username.toLowerCase() === user.username.toLowerCase());
     if (existing) {
@@ -345,7 +434,9 @@ class MemoryStore implements Store {
       return existing;
     } else {
       const newUser: UserProfile = {
+        id: user.id || `user-${user.username.toLowerCase()}`,
         username: user.username,
+        email: user.email,
         createdAt: user.createdAt || new Date().toISOString(),
         lastActive: user.lastActive || new Date().toISOString(),
         reactionCount: user.reactionCount || 1,
@@ -531,6 +622,62 @@ class SupabaseStore implements Store {
     return data ? mapDbToClip(data) : null;
   }
 
+  async recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
+    const currentClip = await this.getClip(clipId);
+    if (!currentClip) return { liked: false, likesCount: 0 };
+
+    if (isValidUuid(userId) && isValidUuid(clipId)) {
+      try {
+        const { error: likeInsertErr } = await this.client
+          .from("likes")
+          .insert([{ clip_id: clipId, user_id: userId }]);
+
+        if (likeInsertErr) {
+          // Check for unique key violation (user already liked)
+          const isUniqueViolation = likeInsertErr.code === "23505" || 
+            (likeInsertErr.message && likeInsertErr.message.toLowerCase().includes("unique"));
+          if (isUniqueViolation) {
+            return { liked: false, likesCount: currentClip.likesCount };
+          }
+        }
+      } catch (tableErr) {
+        // If likes table is missing, proceed gracefully with direct clip update
+      }
+    }
+
+    const nextLikes = (currentClip.likesCount || 0) + 1;
+    await this.updateClip(clipId, { likesCount: nextLikes });
+    return { liked: true, likesCount: nextLikes };
+  }
+
+  async recordLaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }> {
+    const currentClip = await this.getClip(clipId);
+    if (!currentClip) return { laughed: false, laughsCount: 0 };
+
+    if (isValidUuid(userId) && isValidUuid(clipId)) {
+      try {
+        const { error: laughInsertErr } = await this.client
+          .from("laughs")
+          .insert([{ clip_id: clipId, user_id: userId }]);
+
+        if (laughInsertErr) {
+          // Check for unique key violation (user already laughed)
+          const isUniqueViolation = laughInsertErr.code === "23505" || 
+            (laughInsertErr.message && laughInsertErr.message.toLowerCase().includes("unique"));
+          if (isUniqueViolation) {
+            return { laughed: false, laughsCount: currentClip.laughsCount };
+          }
+        }
+      } catch (tableErr) {
+        // If laughs table is missing, proceed gracefully with direct clip update
+      }
+    }
+
+    const nextLaughs = (currentClip.laughsCount || 0) + 1;
+    await this.updateClip(clipId, { laughsCount: nextLaughs });
+    return { laughed: true, laughsCount: nextLaughs };
+  }
+
   async insertReport(report: Report): Promise<Report> {
     try {
       await this.client.from("reports").insert([{
@@ -601,7 +748,9 @@ class SupabaseStore implements Store {
 
       if (!error && data && Array.isArray(data)) {
         return data.map((u: any) => ({
+          id: u.id,
           username: u.username,
+          email: u.email,
           createdAt: u.created_at,
           lastActive: u.last_active,
           reactionCount: u.reaction_count || 0,
@@ -625,6 +774,7 @@ class SupabaseStore implements Store {
         }
       } else {
         usersMap.set(name.toLowerCase(), {
+          id: clip.authorId || undefined,
           username: name,
           createdAt: clip.createdAt,
           lastActive: clip.createdAt,
@@ -637,22 +787,122 @@ class SupabaseStore implements Store {
     return Array.from(usersMap.values());
   }
 
-  async upsertUser(user: Partial<UserProfile> & { username: string }): Promise<UserProfile> {
+  async getUserProfile(query: { id?: string; username?: string }): Promise<UserProfile | null> {
+    try {
+      if (query.id && isValidUuid(query.id)) {
+        const { data, error } = await this.client
+          .from("user_profiles")
+          .select("*")
+          .eq("id", query.id)
+          .maybeSingle();
+
+        if (!error && data) {
+          return {
+            id: data.id,
+            username: data.username,
+            email: data.email,
+            createdAt: data.created_at,
+            lastActive: data.last_active,
+            reactionCount: data.reaction_count || 0,
+            suspended: data.suspended || false,
+            strikes: data.strikes || 0
+          };
+        }
+      }
+
+      if (query.username) {
+        const { data, error } = await this.client
+          .from("user_profiles")
+          .select("*")
+          .ilike("username", query.username.trim())
+          .maybeSingle();
+
+        if (!error && data) {
+          return {
+            id: data.id,
+            username: data.username,
+            email: data.email,
+            createdAt: data.created_at,
+            lastActive: data.last_active,
+            reactionCount: data.reaction_count || 0,
+            suspended: data.suspended || false,
+            strikes: data.strikes || 0
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("getUserProfile query error:", err);
+    }
+    return null;
+  }
+
+  async upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string }): Promise<UserProfile> {
+    const payload: Record<string, any> = {
+      id: profile.id,
+      username: profile.username,
+      last_active: profile.lastActive || new Date().toISOString()
+    };
+    if (profile.email) payload.email = profile.email;
+    if (profile.suspended !== undefined) payload.suspended = profile.suspended;
+    if (profile.strikes !== undefined) payload.strikes = profile.strikes;
+
     try {
       const { data, error } = await this.client
         .from("user_profiles")
-        .upsert({
-          username: user.username,
-          last_active: user.lastActive || new Date().toISOString(),
-          suspended: user.suspended,
-          strikes: user.strikes
-        }, { onConflict: "username" })
+        .upsert(payload, { onConflict: "id" })
         .select()
         .single();
 
       if (!error && data) {
         return {
+          id: data.id,
           username: data.username,
+          email: data.email,
+          createdAt: data.created_at,
+          lastActive: data.last_active,
+          reactionCount: data.reaction_count || 0,
+          suspended: data.suspended || false,
+          strikes: data.strikes || 0
+        };
+      }
+    } catch (err) {
+      console.warn("upsertUserProfile error:", err);
+    }
+
+    return {
+      id: profile.id,
+      username: profile.username,
+      email: profile.email,
+      createdAt: new Date().toISOString(),
+      lastActive: profile.lastActive || new Date().toISOString(),
+      reactionCount: 0,
+      suspended: profile.suspended || false,
+      strikes: profile.strikes || 0
+    };
+  }
+
+  async upsertUser(user: Partial<UserProfile> & { username: string }): Promise<UserProfile> {
+    try {
+      const payload: Record<string, any> = {
+        username: user.username,
+        last_active: user.lastActive || new Date().toISOString()
+      };
+      if (user.id) payload.id = user.id;
+      if (user.email) payload.email = user.email;
+      if (user.suspended !== undefined) payload.suspended = user.suspended;
+      if (user.strikes !== undefined) payload.strikes = user.strikes;
+
+      const { data, error } = await this.client
+        .from("user_profiles")
+        .upsert(payload, { onConflict: user.id ? "id" : "username" })
+        .select()
+        .single();
+
+      if (!error && data) {
+        return {
+          id: data.id,
+          username: data.username,
+          email: data.email,
           createdAt: data.created_at,
           lastActive: data.last_active,
           reactionCount: data.reaction_count || 0,
@@ -665,7 +915,9 @@ class SupabaseStore implements Store {
     }
 
     return {
+      id: user.id,
       username: user.username,
+      email: user.email,
       createdAt: user.createdAt || new Date().toISOString(),
       lastActive: user.lastActive || new Date().toISOString(),
       reactionCount: user.reactionCount || 1,
@@ -783,6 +1035,99 @@ app.use((req: any, res: any, next: any) => {
 // Serve uploaded files statically
 app.use("/uploads", express.static(UPLOADS_DIR));
 
+// Admin User IDs Allowlist
+const ADMIN_USER_IDS: string[] = (cleanEnvVar(process.env.ADMIN_USER_IDS) || "")
+  .split(",")
+  .map(id => id.trim().toLowerCase())
+  .filter(Boolean);
+
+// Authentication helper for protected mutating routes
+export interface AuthResult {
+  user: {
+    id: string;
+    email?: string;
+  };
+  profile: UserProfile;
+}
+
+export type AuthSuccess = { ok: true; auth: AuthResult };
+export type AuthFailure = { ok: false; status: number; error: string };
+export type AuthOutcome = AuthSuccess | AuthFailure;
+
+async function authenticateUser(req: any): Promise<AuthOutcome> {
+  const authHeader = (req.headers.authorization || "").toString().trim();
+  const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
+
+  if (supabase) {
+    if (!token || token === "dev-bearer-token") {
+      return { ok: false, status: 401, error: "Unauthorized: Supabase session Bearer token is required." };
+    }
+
+    try {
+      const { data: userData, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !userData?.user?.id) {
+        return { ok: false, status: 401, error: "Unauthorized: Invalid or expired Supabase session." };
+      }
+
+      const user = {
+        id: userData.user.id,
+        email: userData.user.email
+      };
+
+      // Load profile from store
+      let profile = await store!.getUserProfile({ id: user.id });
+      if (!profile) {
+        const rawUsername = userData.user.user_metadata?.username || 
+                            userData.user.user_metadata?.display_name || 
+                            (user.email ? user.email.split("@")[0] : `user_${user.id.slice(0, 6)}`);
+        
+        profile = await store!.upsertUserProfile({
+          id: user.id,
+          username: rawUsername,
+          email: user.email,
+          lastActive: new Date().toISOString()
+        });
+      }
+
+      if (profile.suspended) {
+        return { ok: false, status: 403, error: "Your account is suspended due to violations of Community Guidelines." };
+      }
+
+      return { ok: true, auth: { user, profile } };
+    } catch (err: any) {
+      return { ok: false, status: 401, error: "Unauthorized: Failed to verify authentication token." };
+    }
+  }
+
+  // Local dev memory store mode fallback
+  if (!isProduction && process.env.DEV_MEMORY_STORE === "true") {
+    const devId = token && token !== "dev-bearer-token" ? `dev-${token.slice(0, 8)}` : "dev-user-000";
+    let profile = await store!.getUserProfile({ id: devId });
+    if (!profile) {
+      profile = await store!.upsertUserProfile({
+        id: devId,
+        username: `DevUser_${devId.slice(-4)}`,
+        email: "dev@reax.local",
+        lastActive: new Date().toISOString()
+      });
+    }
+
+    if (profile.suspended) {
+      return { ok: false, status: 403, error: "Your account is suspended due to violations of Community Guidelines." };
+    }
+
+    return {
+      ok: true,
+      auth: {
+        user: { id: devId, email: profile.email || "dev@reax.local" },
+        profile
+      }
+    };
+  }
+
+  return { ok: false, status: 503, error: "database_unconfigured" };
+}
+
 // ----------------------------------------------------
 // Global Fail-Closed Middleware for /api routes
 // ----------------------------------------------------
@@ -849,9 +1194,22 @@ app.get("/api/db-status", async (req, res) => {
     supabaseUrl: url || null,
     tableExists,
     connectionError,
-    schemaSql: `-- Reax Phase 2 Schema with Laughs, Moderation & Storage References
+    schemaSql: `-- Reax Production Schema with Auth Profiles, Unique Likes/Laughs, Reports & Storage
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- User Profiles Table
+CREATE TABLE IF NOT EXISTS public.user_profiles (
+  id UUID PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  email TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  last_active TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  reaction_count INTEGER DEFAULT 0,
+  suspended BOOLEAN DEFAULT false,
+  strikes INTEGER DEFAULT 0
+);
+
+-- Clips Table
 CREATE TABLE IF NOT EXISTS public.clips (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   parent_id UUID REFERENCES public.clips(id) ON DELETE CASCADE,
@@ -863,7 +1221,7 @@ CREATE TABLE IF NOT EXISTS public.clips (
   tone TEXT NOT NULL,
   effect TEXT NOT NULL,
   author_name TEXT NOT NULL,
-  author_id UUID,
+  author_id UUID REFERENCES public.user_profiles(id) ON DELETE SET NULL,
   likes_count INTEGER DEFAULT 0,
   laughs_count INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -873,15 +1231,101 @@ CREATE TABLE IF NOT EXISTS public.clips (
   report_count INTEGER DEFAULT 0
 );
 
--- Enable Row Level Security (RLS)
-ALTER TABLE public.clips ENABLE ROW LEVEL SECURITY;
+-- Unique Likes Table
+CREATE TABLE IF NOT EXISTS public.likes (
+  clip_id UUID REFERENCES public.clips(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  PRIMARY KEY (clip_id, user_id)
+);
 
--- Enable public RLS policies
-CREATE POLICY "Allow public read" ON public.clips FOR SELECT USING (true);
-CREATE POLICY "Allow public insert" ON public.clips FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow public update" ON public.clips FOR UPDATE USING (true);
+-- Unique Laughs Table
+CREATE TABLE IF NOT EXISTS public.laughs (
+  clip_id UUID REFERENCES public.clips(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  PRIMARY KEY (clip_id, user_id)
+);
+
+-- Moderation Reports Table
+CREATE TABLE IF NOT EXISTS public.reports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  clip_id UUID REFERENCES public.clips(id) ON DELETE CASCADE,
+  reporter TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.clips ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.likes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.laughs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
+
+-- Enable Public/Authenticated RLS Policies
+CREATE POLICY "Allow public read profiles" ON public.user_profiles FOR SELECT USING (true);
+CREATE POLICY "Allow authenticated insert/update profiles" ON public.user_profiles FOR ALL USING (true);
+
+CREATE POLICY "Allow public read clips" ON public.clips FOR SELECT USING (true);
+CREATE POLICY "Allow public insert clips" ON public.clips FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow public update clips" ON public.clips FOR UPDATE USING (true);
+
+CREATE POLICY "Allow public likes" ON public.likes FOR ALL USING (true);
+CREATE POLICY "Allow public laughs" ON public.laughs FOR ALL USING (true);
+CREATE POLICY "Allow public reports" ON public.reports FOR ALL USING (true);
 `
   });
+});
+
+// API: Get Current Authenticated User Profile & Admin Status
+app.get("/api/me", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user, profile } = authRes.auth;
+  const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
+  return res.json({ profile, isAdmin });
+});
+
+// API: Upsert / Update Current Authenticated User Profile (Username)
+app.post("/api/me", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+  const { username } = req.body;
+
+  if (!username || typeof username !== "string" || username.trim().length < 3 || username.trim().length > 20) {
+    return res.status(400).json({ error: "Username must be between 3 and 20 characters." });
+  }
+
+  const cleanUsername = username.trim().replace(/^@/, "");
+  if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
+    return res.status(400).json({ error: "Username can only contain letters, numbers, and underscores." });
+  }
+
+  try {
+    const existing = await store!.getUserProfile({ username: cleanUsername });
+    if (existing && existing.id && existing.id !== user.id) {
+      return res.status(409).json({ error: "Username is already taken by another account." });
+    }
+
+    const updatedProfile = await store!.upsertUserProfile({
+      id: user.id,
+      username: cleanUsername,
+      email: user.email,
+      lastActive: new Date().toISOString()
+    });
+
+    const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
+    return res.json({ profile: updatedProfile, isAdmin });
+  } catch (err: any) {
+    console.error("Error in POST /api/me:", err);
+    return res.status(500).json({ error: "Failed to update profile" });
+  }
 });
 
 // API: Get all active, non-deleted clips
@@ -895,11 +1339,17 @@ app.get("/api/clips", async (req, res) => {
   }
 });
 
-// API: Create new clip
+// API: Create new clip (Protected by Bearer Token & User Profile)
 app.post("/api/clips", async (req, res) => {
-  const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, tone, authorName, authorId, effect, overlayText, originalAuthor, remixedFrom, voiceAudioData } = req.body;
-  if (!mediaUrl || !tone || !authorName) {
-    return res.status(400).json({ error: "Missing required fields: mediaUrl, tone, and authorName are required." });
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user, profile } = authRes.auth;
+
+  const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, tone, effect, overlayText, originalAuthor, remixedFrom, voiceAudioData } = req.body;
+  if (!mediaUrl || !tone) {
+    return res.status(400).json({ error: "Missing required fields: mediaUrl and tone are required." });
   }
 
   // Reject bodies that include voiceAudioData longer than 100 chars (legacy preview only)
@@ -976,34 +1426,7 @@ app.post("/api/clips", async (req, res) => {
   }
 
   try {
-    // Check suspension status
-    const users = await store!.getUsers();
-    const userProfile = users.find(u => u.username.toLowerCase() === authorName.toLowerCase());
-    if (userProfile && userProfile.suspended) {
-      return res.status(403).json({ error: "Your account is suspended due to violations of Community Guidelines." });
-    }
-
-    // Resolve author identity from Supabase Auth token if present; ignore client-provided authorId
-    let resolvedAuthorId: string | undefined = undefined;
-    let resolvedAuthorName = authorName;
-    const authHeader = (req.headers.authorization || "").toString().trim();
-    const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
-
-    if (token && supabase && token !== "dev-bearer-token") {
-      try {
-        const { data: userData } = await supabase.auth.getUser(token);
-        if (userData?.user?.id) {
-          resolvedAuthorId = userData.user.id;
-          if (userData.user.user_metadata?.username || userData.user.user_metadata?.display_name) {
-            resolvedAuthorName = userData.user.user_metadata.username || userData.user.user_metadata.display_name;
-          }
-        }
-      } catch (e) {
-        // Token verification fallback
-      }
-    }
-
-    // voiceAudioData is stripped and never persisted into DB; persist media_url + media_type only
+    // Identity is derived exclusively from authenticated user profile
     const newClip: Clip = {
       id: crypto.randomUUID(),
       parentId: parentId || null,
@@ -1012,8 +1435,8 @@ app.post("/api/clips", async (req, res) => {
       voiceText,
       voiceStyle,
       tone,
-      authorName: resolvedAuthorName,
-      authorId: resolvedAuthorId,
+      authorName: profile.username,
+      authorId: user.id,
       createdAt: new Date().toISOString(),
       likesCount: 0,
       laughsCount: 0,
@@ -1026,7 +1449,12 @@ app.post("/api/clips", async (req, res) => {
     };
 
     const inserted = await store!.insertClip(newClip);
-    await store!.upsertUser({ username: resolvedAuthorName, lastActive: new Date().toISOString() });
+    await store!.upsertUserProfile({
+      id: user.id,
+      username: profile.username,
+      email: user.email,
+      lastActive: new Date().toISOString()
+    });
     await store!.incrementFunnel("posted_reaction");
     if (voiceText) {
       await store!.incrementFunnel("posted_voice_reaction");
@@ -1039,34 +1467,44 @@ app.post("/api/clips", async (req, res) => {
   }
 });
 
-// API: Laugh at a clip (😂 Humor-first engagement metric)
+// API: Laugh at a clip (😂 Humor-first engagement metric with unique prevention)
 app.post("/api/clips/:id/laugh", async (req, res) => {
   const clipId = req.params.id;
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+
   try {
+    const result = await store!.recordLaugh(clipId, user.id);
     const clip = await store!.getClip(clipId);
     if (!clip) {
       return res.status(404).json({ error: "Clip not found" });
     }
-    const nextLaughs = (clip.laughsCount || 0) + 1;
-    const updated = await store!.updateClip(clipId, { laughsCount: nextLaughs });
-    res.json(updated || { ...clip, laughsCount: nextLaughs });
+    res.json({ ...clip, laughsCount: result.laughsCount, laughed: result.laughed });
   } catch (err: any) {
     console.error("Error registering laugh:", err);
     res.status(500).json({ error: "Failed to register laugh" });
   }
 });
 
-// API: Like a clip
+// API: Like a clip (Unique per user)
 app.post("/api/clips/:id/like", async (req, res) => {
   const clipId = req.params.id;
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+
   try {
+    const result = await store!.recordLike(clipId, user.id);
     const clip = await store!.getClip(clipId);
     if (!clip) {
       return res.status(404).json({ error: "Clip not found" });
     }
-    const nextLikes = (clip.likesCount || 0) + 1;
-    const updated = await store!.updateClip(clipId, { likesCount: nextLikes });
-    res.json(updated || { ...clip, likesCount: nextLikes });
+    res.json({ ...clip, likesCount: result.likesCount, liked: result.liked });
   } catch (err: any) {
     console.error("Error registering like:", err);
     res.status(500).json({ error: "Failed to register like" });
@@ -1076,11 +1514,11 @@ app.post("/api/clips/:id/like", async (req, res) => {
 // API: User Delete Own Clip (Authors can delete their own reactions; OP CANNOT delete others' replies!)
 app.post("/api/clips/:id/user-delete", async (req, res) => {
   const clipId = req.params.id;
-  const { username } = req.body;
-
-  if (!username) {
-    return res.status(400).json({ error: "Username is required to verify ownership." });
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
   }
+  const { user, profile } = authRes.auth;
 
   try {
     const clip = await store!.getClip(clipId);
@@ -1088,10 +1526,10 @@ app.post("/api/clips/:id/user-delete", async (req, res) => {
       return res.status(404).json({ error: "Clip not found" });
     }
 
-    const cleanAuthor = clip.authorName.toLowerCase().replace(/^~/, "");
-    const cleanRequester = String(username).toLowerCase().replace(/^~/, "");
+    const isAuthorById = clip.authorId && clip.authorId === user.id;
+    const isAuthorByName = clip.authorName && clip.authorName.toLowerCase() === profile.username.toLowerCase();
 
-    if (cleanAuthor !== cleanRequester) {
+    if (!isAuthorById && !isAuthorByName) {
       return res.status(403).json({
         error: "Permission Denied: Thread starters cannot delete or suppress other people's reactions. Only the reaction author or a platform moderator can remove content."
       });
@@ -1105,34 +1543,14 @@ app.post("/api/clips/:id/user-delete", async (req, res) => {
   }
 });
 
-// API: Upload asset (audio, image, or video) to Supabase Storage
+// API: Upload asset (audio, image, or video) to Supabase Storage (Protected)
 app.post("/api/upload", async (req, res) => {
-  const authHeader = (req.headers.authorization || "").toString().trim();
-  const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
-
-  let userId = "anonymous";
-  if (supabase) {
-    if (!token || token === "dev-bearer-token") {
-      return res.status(401).json({ error: "Unauthorized: Authorization Bearer token is required." });
-    }
-    try {
-      const { data: userData, error: authError } = await supabase.auth.getUser(token);
-      if (authError || !userData?.user?.id) {
-        return res.status(401).json({
-          error: "Unauthorized: Invalid or expired Supabase access token.",
-          details: authError?.message
-        });
-      }
-      userId = userData.user.id;
-    } catch (err: any) {
-      return res.status(401).json({ error: "Unauthorized: Failed to authenticate Supabase token.", details: err?.message });
-    }
-  } else if (!isProduction && process.env.DEV_MEMORY_STORE === "true") {
-    // Local dev memory store mode
-    userId = token && token !== "dev-bearer-token" ? `dev-${token.slice(0, 8)}` : "dev-user-000";
-  } else {
-    return res.status(503).json({ error: "database_unconfigured" });
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
   }
+  const { user } = authRes.auth;
+  const userId = user.id;
 
   // In production, ensure admin client with service role key is configured for storage
   if (isProduction && !supabaseAdmin) {
@@ -1306,8 +1724,31 @@ app.post("/api/upload", async (req, res) => {
 // ADMINISTRATIVE & MODERATION API ENDPOINTS
 // ==========================================
 
-const adminAuthMiddleware = (req: any, res: any, next: any) => {
+const adminAuthMiddleware = async (req: any, res: any, next: any) => {
   try {
+    const authHeader = (req.headers.authorization || "").toString().trim();
+    const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
+
+    // 1. Check authenticated Supabase user against ADMIN_USER_IDS allowlist
+    if (supabase && token && token !== "dev-bearer-token") {
+      try {
+        const { data: userData, error: authError } = await supabase.auth.getUser(token);
+        if (!authError && userData?.user?.id) {
+          const userId = userData.user.id.toLowerCase();
+          if (ADMIN_USER_IDS.length > 0) {
+            if (ADMIN_USER_IDS.includes(userId)) {
+              return next();
+            } else {
+              return res.status(403).json({ error: "Forbidden: User ID is not authorized as an administrator." });
+            }
+          }
+        }
+      } catch (err) {
+        // Fall through
+      }
+    }
+
+    // 2. Local dev or fallback passcode support if ADMIN_USER_IDS is unpopulated
     let passcode = req.headers["x-admin-passcode"] || (req.query && req.query.passcode) || (req.body && req.body.passcode);
     if (typeof passcode === "string") {
       passcode = passcode.trim();
@@ -1324,11 +1765,15 @@ const adminAuthMiddleware = (req: any, res: any, next: any) => {
       }
     }
 
-    if (!passcode || passcode !== expectedPasscode) {
-      console.warn("Admin Auth: Invalid passcode attempt:", passcode);
-      return res.status(401).json({ error: "Unauthorized. Invalid admin passcode." });
+    if (passcode && passcode === expectedPasscode) {
+      return next();
     }
-    next();
+
+    if (!isProduction && process.env.DEV_MEMORY_STORE === "true" && token === "dev-bearer-token") {
+      return next();
+    }
+
+    return res.status(401).json({ error: "Unauthorized: Valid admin authentication required." });
   } catch (err: any) {
     console.error("Critical error in adminAuthMiddleware:", err);
     return res.status(500).json({ error: "Authentication internal error", details: err?.message });
@@ -1451,10 +1896,15 @@ app.post("/api/admin/clips/:id/restore", async (req, res) => {
   }
 });
 
-// 5. POST Report a clip
+// 5. POST Report a clip (Protected)
 app.post("/api/clips/:id/report", async (req, res) => {
   const clipId = req.params.id;
-  const { reporter, reason } = req.body;
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user, profile } = authRes.auth;
+  const { reason } = req.body;
   if (!reason) {
     return res.status(400).json({ error: "Reason is required to submit a report" });
   }
@@ -1471,7 +1921,7 @@ app.post("/api/clips/:id/report", async (req, res) => {
     const newReport: Report = {
       id: crypto.randomUUID(),
       clipId,
-      reporter: reporter || "Anonymous",
+      reporter: profile.username || user.email || "User",
       reason,
       createdAt: new Date().toISOString()
     };

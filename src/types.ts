@@ -29,7 +29,9 @@ export type Report = {
 };
 
 export type UserProfile = {
+  id?: string;
   username: string;
+  email?: string;
   createdAt: string;
   lastActive: string;
   reactionCount: number;

@@ -7,6 +7,7 @@ import {
   Sparkles, ShieldCheck, ShieldAlert, Database, Copy, CheckCircle, HelpCircle
 } from "lucide-react";
 import { Clip } from "../types";
+import { getAuthToken } from "../utils/supabaseClient";
 
 interface AdminPanelProps {
   key?: string | number | null;
@@ -98,12 +99,17 @@ export default function AdminPanel({ onClose, allClips, onRefreshClips, onSelect
   const [copiedSql, setCopiedSql] = useState(false);
 
   // Secure wrapper for admin fetch requests
-  const adminFetch = (url: string, options: any = {}) => {
+  const adminFetch = async (url: string, options: any = {}) => {
+    let token = "";
+    try {
+      token = await getAuthToken();
+    } catch {}
     const passcode = localStorage.getItem("reax_admin_passcode") || "";
     return fetch(url, {
       ...options,
       headers: {
         ...options.headers,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         "X-Admin-Passcode": passcode
       }
     });

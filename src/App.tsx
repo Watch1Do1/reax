@@ -14,6 +14,7 @@ import OnboardingModal from "./components/OnboardingModal";
 import AdminPanel from "./components/AdminPanel";
 import { Clip, SavedReaction } from "./types";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "./utils/keyUtils";
+import { getAuthToken, fetchMyProfile, syncUserProfile, signOutSupabase } from "./utils/supabaseClient";
 
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([]);
@@ -57,11 +58,33 @@ export default function App() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeTriggerReason, setUpgradeTriggerReason] = useState<"save_reaction" | "post_limit" | "edit_username" | "nav_click" | null>(null);
 
-  const saveUsername = () => {
+  // Sync profile on mount if authenticated
+  useEffect(() => {
+    fetchMyProfile().then(({ profile, isAdmin }) => {
+      if (profile) {
+        setIsLoggedIn(true);
+        localStorage.setItem("reax_is_logged_in", "true");
+        if (profile.username) {
+          setUsername(profile.username);
+          setTempUsername(profile.username);
+          localStorage.setItem("clips_username", profile.username);
+        }
+      }
+    });
+  }, []);
+
+  const saveUsername = async () => {
     const clean = tempUsername.trim().replace(/[^a-zA-Z0-9_]/g, "");
     if (clean) {
       setUsername(clean);
       localStorage.setItem("clips_username", clean);
+      if (isLoggedIn) {
+        try {
+          await syncUserProfile(clean);
+        } catch (e) {
+          console.warn("Could not sync username to backend:", e);
+        }
+      }
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: `Username updated to @${clean}!` } }));
     }
     setIsEditingUsername(false);
@@ -84,7 +107,8 @@ export default function App() {
     setRefreshTrigger(prev => prev + 1);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await signOutSupabase();
     localStorage.removeItem("reax_is_logged_in");
     setIsLoggedIn(false);
     
@@ -165,12 +189,18 @@ export default function App() {
       const isHashAdmin = window.location.hash === "#admin";
       
       if (isPathAdmin || isHashAdmin) {
-        const storedPasscode = localStorage.getItem("reax_admin_passcode");
-        if (storedPasscode) {
+        const storedPasscode = localStorage.getItem("reax_admin_passcode") || "";
+        let token = "";
+        try { token = await getAuthToken(); } catch {}
+
+        if (storedPasscode || token) {
           // Attempt silent background verification
           try {
             const res = await fetch("/api/admin/verify", {
-              headers: { "X-Admin-Passcode": storedPasscode }
+              headers: {
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                "X-Admin-Passcode": storedPasscode
+              }
             });
             if (res.ok) {
               setIsAdminOpen(true);
@@ -265,7 +295,15 @@ export default function App() {
       // Optimistic update
       setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: c.likesCount + 1 } : c));
 
-      const res = await fetch(`/api/clips/${id}/like`, { method: "POST" });
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+
+      const res = await fetch(`/api/clips/${id}/like`, {
+        method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
       if (!res.ok) throw new Error("Failed to register like on server");
       const updatedClip = await res.json();
       
@@ -282,7 +320,15 @@ export default function App() {
       // Optimistic update
       setClips(prev => prev.map(c => c.id === id ? { ...c, laughsCount: (c.laughsCount || 0) + 1 } : c));
 
-      const res = await fetch(`/api/clips/${id}/laugh`, { method: "POST" });
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+
+      const res = await fetch(`/api/clips/${id}/laugh`, {
+        method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
       if (!res.ok) throw new Error("Failed to register laugh on server");
       const updatedClip = await res.json();
       
@@ -297,9 +343,15 @@ export default function App() {
   const handleDeleteClip = async (id: string) => {
     try {
       const authorUsername = (username || localStorage.getItem("clips_username") || "").trim();
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+
       const res = await fetch(`/api/clips/${id}/user-delete`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ username: authorUsername })
       });
 
@@ -348,9 +400,15 @@ export default function App() {
   const handlePostSavedReaction = async (reax: SavedReaction, parentId: string | null = null) => {
     try {
       setLoading(true);
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+
       const postRes = await fetch("/api/clips", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           parentId: parentId,
           mediaUrl: reax.mediaUrl,
