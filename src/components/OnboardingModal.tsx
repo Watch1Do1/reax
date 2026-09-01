@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { motion } from "motion/react";
-import { Sparkles, ShieldCheck, Mail, User, AlertCircle, CheckCircle, KeyRound, ArrowRight } from "lucide-react";
+import { Sparkles, ShieldCheck, Mail, User, AlertCircle, CheckCircle, KeyRound, ArrowRight, ChevronDown, ChevronUp } from "lucide-react";
 import { sendMagicLink, verifyEmailOtp, syncUserProfile, getSupabaseClient } from "../utils/supabaseClient";
 
 interface OnboardingModalProps {
@@ -22,7 +22,8 @@ export default function OnboardingModal({
   const [isSignUp, setIsSignUp] = useState(true);
   const [email, setEmail] = useState("");
   const [otpCode, setOtpCode] = useState("");
-  const [waitingForOtp, setWaitingForOtp] = useState(false);
+  const [linkSent, setLinkSent] = useState(false);
+  const [showCodeInput, setShowCodeInput] = useState(false);
   const [username, setUsername] = useState(() => {
     // Strip prefix ~ if present
     return guestUsername.startsWith("~") ? guestUsername.slice(1) : guestUsername;
@@ -90,7 +91,7 @@ export default function OnboardingModal({
         return;
       }
 
-      setWaitingForOtp(true);
+      setLinkSent(true);
       setError(null);
     } catch (err: any) {
       setError(err?.message || "Failed to send magic link. Try again.");
@@ -200,19 +201,19 @@ export default function OnboardingModal({
           onClick={onClose}
           className="absolute top-4 right-4 text-slate-400 hover:text-white px-3 py-1 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs cursor-pointer transition-colors"
         >
-          Skip
+          {linkSent ? "Done" : "Skip"}
         </button>
 
         {/* Header */}
         <div className="text-center space-y-2 pt-2">
           <div className="mx-auto w-12 h-12 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400">
-            <Sparkles className="w-6 h-6 animate-pulse" />
+            {linkSent ? <Mail className="w-6 h-6 animate-pulse" /> : <Sparkles className="w-6 h-6 animate-pulse" />}
           </div>
           <h2 className="text-xl font-black font-sans tracking-tight text-white uppercase mt-3">
-            {copy.title}
+            {linkSent ? "Check Your Email" : copy.title}
           </h2>
           <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-            {copy.desc}
+            {linkSent ? "We sent a magic sign-in link to your inbox." : copy.desc}
           </p>
         </div>
 
@@ -229,7 +230,7 @@ export default function OnboardingModal({
         ) : (
           <div className="space-y-4">
             {/* Auth Tab Picker */}
-            {!waitingForOtp && (
+            {!linkSent && (
               <div className="grid grid-cols-2 p-1 bg-slate-950 border border-slate-800 rounded-xl">
                 <button
                   type="button"
@@ -264,52 +265,77 @@ export default function OnboardingModal({
               </div>
             )}
 
-            {waitingForOtp ? (
-              /* OTP Verification Form */
-              <form onSubmit={handleVerifyOtp} className="space-y-3">
-                <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-left space-y-1">
-                  <p className="text-xs font-bold text-indigo-300">📧 Magic Link & Code Sent!</p>
-                  <p className="text-[11px] text-slate-400">
-                    We sent a login link and code to <span className="text-white font-mono">{email}</span>. Click the link in your email or enter the 6-digit code below:
+            {linkSent ? (
+              /* Magic Link Confirmation View */
+              <div className="space-y-4">
+                <div className="p-4 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl text-center space-y-2">
+                  <p className="text-sm font-bold text-white leading-relaxed">
+                    We emailed you a sign-in link. Open it on this device. You can close this.
+                  </p>
+                  <p className="text-xs text-slate-400 font-mono">
+                    Sent to <span className="text-indigo-300 font-semibold">{email}</span>
                   </p>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono text-slate-500 uppercase tracking-wider block">Verification Code / OTP</label>
-                  <div className="relative">
-                    <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                    <input
-                      type="text"
-                      required
-                      value={otpCode}
-                      onChange={(e) => setOtpCode(e.target.value.trim())}
-                      placeholder="123456"
-                      maxLength={8}
-                      className="w-full bg-slate-950/80 border border-slate-800/80 focus:border-indigo-500 rounded-xl py-2 pl-10 pr-4 text-sm font-mono tracking-widest text-center text-white outline-none transition-colors"
-                      autoFocus
-                    />
-                  </div>
-                </div>
+                {/* Primary Close Action - Non-blocking */}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all font-mono shadow-md cursor-pointer"
+                >
+                  Close
+                </button>
 
-                <div className="grid grid-cols-2 gap-2 pt-1">
+                {/* Optional Collapsed 6-Digit Code Section */}
+                <div className="pt-2 border-t border-slate-800/80">
                   <button
                     type="button"
-                    onClick={() => setWaitingForOtp(false)}
-                    className="py-2.5 bg-slate-950 hover:bg-slate-850 border border-slate-800 text-slate-400 font-bold text-xs uppercase tracking-wider rounded-xl transition-all font-mono"
-                    disabled={isSubmitting}
+                    onClick={() => setShowCodeInput(!showCodeInput)}
+                    className="w-full flex items-center justify-between text-[11px] font-mono text-slate-400 hover:text-slate-200 transition-colors py-1.5 px-2 rounded-lg hover:bg-slate-800/40 cursor-pointer"
                   >
-                    Back
+                    <span className="flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                      <span>I have a 6-digit code</span>
+                    </span>
+                    {showCodeInput ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                   </button>
+
+                  {showCodeInput && (
+                    <form onSubmit={handleVerifyOtp} className="mt-3 space-y-3 p-3 bg-slate-950/60 border border-slate-800/80 rounded-xl">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-mono text-slate-500 uppercase tracking-wider block">Verification Code</label>
+                        <input
+                          type="text"
+                          value={otpCode}
+                          onChange={(e) => setOtpCode(e.target.value.trim())}
+                          placeholder="123456"
+                          maxLength={8}
+                          className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 rounded-xl py-2 px-3 text-center text-sm font-mono tracking-widest text-white outline-none"
+                          autoFocus
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={isSubmitting || !otpCode.trim()}
+                        className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all font-mono disabled:opacity-50 cursor-pointer"
+                      >
+                        {isSubmitting ? "Verifying..." : "Verify Code"}
+                      </button>
+                    </form>
+                  )}
+                </div>
+
+                {/* Option to re-enter email */}
+                <div className="text-center pt-1">
                   <button
-                    type="submit"
-                    className="py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all font-mono disabled:opacity-50 flex items-center justify-center gap-1.5"
-                    disabled={isSubmitting || !otpCode.trim()}
+                    type="button"
+                    onClick={() => { setLinkSent(false); setOtpCode(""); setError(null); }}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 font-mono transition-colors cursor-pointer"
                   >
-                    <span>{isSubmitting ? "Verifying..." : "Verify Code"}</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
+                    ← Send to a different email
                   </button>
                 </div>
-              </form>
+              </div>
             ) : (
               /* Email + Username Magic Link Form */
               <form onSubmit={handleSendMagicLink} className="space-y-3">
@@ -369,7 +395,7 @@ export default function OnboardingModal({
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all font-mono shadow-md active:scale-98 disabled:opacity-50"
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-widest rounded-xl transition-all font-mono shadow-md active:scale-98 disabled:opacity-50 cursor-pointer"
                 >
                   {isSubmitting ? "Sending Magic Link..." : (isSignUp ? "Send Magic Link & Register" : "Send Magic Link to Sign In")}
                 </button>
@@ -377,7 +403,7 @@ export default function OnboardingModal({
             )}
 
             {/* Quick Guest Continue Option */}
-            {!waitingForOtp && (
+            {!linkSent && (
               <div className="pt-1 text-center">
                 <button
                   type="button"

@@ -14,7 +14,7 @@ import OnboardingModal from "./components/OnboardingModal";
 import AdminPanel from "./components/AdminPanel";
 import { Clip, SavedReaction } from "./types";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "./utils/keyUtils";
-import { getAuthToken, fetchMyProfile, syncUserProfile, signOutSupabase } from "./utils/supabaseClient";
+import { getAuthToken, fetchMyProfile, syncUserProfile, signOutSupabase, handleUrlAuthTokens } from "./utils/supabaseClient";
 
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([]);
@@ -58,19 +58,61 @@ export default function App() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeTriggerReason, setUpgradeTriggerReason] = useState<"save_reaction" | "post_limit" | "edit_username" | "nav_click" | null>(null);
 
-  // Sync profile on mount if authenticated
+  // Sync profile & handle magic link URL tokens on mount
   useEffect(() => {
-    fetchMyProfile().then(({ profile, isAdmin }) => {
-      if (profile) {
+    let isMounted = true;
+
+    async function initAuth() {
+      // 1. Process URL tokens if user arrived via magic link / confirmation email
+      const urlAuth = await handleUrlAuthTokens();
+      if (urlAuth.success) {
         setIsLoggedIn(true);
         localStorage.setItem("reax_is_logged_in", "true");
-        if (profile.username) {
-          setUsername(profile.username);
-          setTempUsername(profile.username);
-          localStorage.setItem("clips_username", profile.username);
+        localStorage.setItem("reax_age_confirmed", "true");
+        setAgeConfirmed(true);
+
+        const metaUsername =
+          urlAuth.user?.user_metadata?.username ||
+          urlAuth.user?.user_metadata?.display_name;
+
+        if (metaUsername) {
+          try {
+            const synced = await syncUserProfile(metaUsername);
+            if (synced?.username && isMounted) {
+              setUsername(synced.username);
+              setTempUsername(synced.username);
+              localStorage.setItem("clips_username", synced.username);
+            }
+          } catch (err) {
+            console.warn("Could not sync metadata username:", err);
+          }
         }
+
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎉 Successfully signed in via magic link!" } }));
       }
-    });
+
+      // 2. Fetch profile from backend
+      try {
+        const { profile } = await fetchMyProfile();
+        if (profile && isMounted) {
+          setIsLoggedIn(true);
+          localStorage.setItem("reax_is_logged_in", "true");
+          if (profile.username) {
+            setUsername(profile.username);
+            setTempUsername(profile.username);
+            localStorage.setItem("clips_username", profile.username);
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch my profile on mount:", err);
+      }
+    }
+
+    initAuth();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const saveUsername = async () => {
