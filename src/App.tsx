@@ -14,7 +14,55 @@ import OnboardingModal from "./components/OnboardingModal";
 import AdminPanel from "./components/AdminPanel";
 import { Clip, SavedReaction } from "./types";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "./utils/keyUtils";
-import { getAuthToken, fetchMyProfile, syncUserProfile, signOutSupabase, handleUrlAuthTokens } from "./utils/supabaseClient";
+import { getAuthToken, fetchMyProfile, syncUserProfile, signOutSupabase, getSupabaseClient } from "./utils/supabaseClient";
+
+// Helper to exchange magic link / OTP / URL tokens on mount without relying on external export
+async function checkAndProcessUrlAuth() {
+  if (typeof window === "undefined") return { success: false, user: null };
+
+  const hash = window.location.hash || "";
+  const search = window.location.search || "";
+  const hasTokens =
+    hash.includes("access_token") ||
+    hash.includes("refresh_token") ||
+    hash.includes("type=signup") ||
+    hash.includes("type=magiclink") ||
+    hash.includes("type=recovery") ||
+    search.includes("type=signup") ||
+    search.includes("type=magiclink") ||
+    search.includes("code=");
+
+  if (!hasTokens) return { success: false, user: null };
+
+  try {
+    const supabase = await getSupabaseClient();
+    if (!supabase) return { success: false, user: null };
+
+    const searchParams = new URLSearchParams(search);
+    const code = searchParams.get("code");
+    if (code) {
+      try {
+        const { data: codeData } = await supabase.auth.exchangeCodeForSession(code);
+        if (codeData?.session?.user) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+          return { success: true, user: codeData.session.user };
+        }
+      } catch (codeErr) {
+        console.warn("Code exchange error:", codeErr);
+      }
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData?.session?.user) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+      return { success: true, user: sessionData.session.user };
+    }
+  } catch (err) {
+    console.warn("Error processing URL auth tokens:", err);
+  }
+
+  return { success: false, user: null };
+}
 
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([]);
@@ -64,7 +112,7 @@ export default function App() {
 
     async function initAuth() {
       // 1. Process URL tokens if user arrived via magic link / confirmation email
-      const urlAuth = await handleUrlAuthTokens();
+      const urlAuth = await checkAndProcessUrlAuth();
       if (urlAuth.success) {
         setIsLoggedIn(true);
         localStorage.setItem("reax_is_logged_in", "true");
