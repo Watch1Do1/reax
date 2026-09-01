@@ -8,6 +8,7 @@ import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/aud
 import { Clip, SavedReaction } from "../types";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { uploadMediaAsset, getAuthToken } from "../utils/supabaseClient";
+import { convertHeicToJpeg, isHeicFile } from "../utils/imageUtils";
 
 // Static preset templates for instant reaction clips
 const PRESETS = [
@@ -548,13 +549,14 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setError(null);
+    const isHeic = isHeicFile(file);
     const isVideo = file.type.startsWith("video/");
-    const isImage = file.type.startsWith("image/");
+    const isImage = file.type.startsWith("image/") || isHeic;
 
     if (!isVideo && !isImage) {
       setError("Please upload a valid image or video file.");
@@ -566,10 +568,28 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       return;
     }
 
-    // 4MB limit enforcement to comply with Vercel's 4.5MB serverless payload limit
+    // 4MB limit enforcement for standard files
     const MAX_SIZE = 4 * 1024 * 1024; // 4MB
-    if (file.size > MAX_SIZE) {
+    if (!isHeic && file.size > MAX_SIZE) {
       setError("File is too large. Maximum size allowed is 4MB (Vercel serverless request limit).");
+      return;
+    }
+
+    // iPhone HEIC / HEIF in-browser canvas conversion
+    if (isHeic) {
+      try {
+        const converted = await convertHeicToJpeg(file);
+        const mediaObj = {
+          data: converted.data,
+          mimeType: converted.mimeType,
+          isVideo: false
+        };
+        stopCamera();
+        onMediaSelected(mediaObj);
+      } catch (err) {
+        console.error("HEIC conversion failed:", err);
+        setError("This iPhone photo couldn't be converted. Try choosing a JPEG.");
+      }
       return;
     }
 
@@ -612,7 +632,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       reader.onload = () => {
         const mediaObj = {
           data: reader.result as string,
-          mimeType: file.type,
+          mimeType: file.type || "image/jpeg",
           isVideo: false
         };
         stopCamera();
@@ -873,7 +893,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       {/* Hidden Mobile Native Capture Inputs */}
                       <input 
                         type="file" 
-                        accept="image/*" 
+                        accept="image/*,.heic,.heif" 
                         capture="user" 
                         className="hidden" 
                         ref={photoInputRef}
@@ -928,7 +948,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                           <span className="text-[9px] text-slate-500 font-mono mt-0.5">Image / Video</span>
                           <input 
                             type="file" 
-                            accept="image/*,video/mp4,video/webm" 
+                            accept="image/*,video/mp4,video/webm,.heic,.heif" 
                             className="hidden" 
                             onChange={handleFileUpload}
                           />
