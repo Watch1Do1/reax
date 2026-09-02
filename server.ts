@@ -565,7 +565,8 @@ class SupabaseStore implements Store {
         .select(
           "id, parent_id, media_url, media_type, voice_text, voice_style, overlay_text, tone, effect, author_name, author_id, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
         )
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(100);
 
       const { data, error } = await withTimeout(
         query,
@@ -1350,8 +1351,8 @@ app.get("/api/clips", async (req, res) => {
     const clips = await store!.getClips(false);
     return res.json(Array.isArray(clips) ? clips : []);
   } catch (err: any) {
-    console.error("Error fetching clips:", err?.message || err);
-    return res.status(500).json({ error: "Failed to fetch clips" });
+    console.error("GET /api/clips", err?.message || err);
+    return res.status(200).json([]);
   }
 });
 
