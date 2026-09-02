@@ -2,10 +2,10 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Heart, Volume2, Plus, ChevronRight, ArrowLeft, Sparkles, 
-  CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2
+  CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2, Mic
 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
-import { speakText } from "../utils/audio";
+import { speakText, playFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "../utils/keyUtils";
 
 interface ThreadViewProps {
@@ -378,20 +378,47 @@ export default function ThreadView({
                   <span>Reply</span>
                 </button>
 
-                {focusedClip.voiceText && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      speakText(focusedClip.voiceText || "", focusedClip.tone);
-                    }}
-                    className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
-                    title={`Play voice: "${focusedClip.voiceText}"`}
-                  >
-                    <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
-                  </button>
-                )}
+                {(() => {
+                  const hasAudioUrl = !!(focusedClip.voiceAudioUrl || (focusedClip.mediaType === "audio" && focusedClip.mediaUrl));
+                  const hasVoiceData = !!focusedClip.voiceAudioData;
+                  const hasValidVoiceText = !!(focusedClip.voiceText && focusedClip.voiceText.trim() !== "" && !focusedClip.voiceText.includes("Voice Reaction"));
+                  const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
+
+                  if (!showAudioButton) return null;
+
+                  return (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (focusedClip.voiceAudioUrl) {
+                          const audio = new Audio(focusedClip.voiceAudioUrl);
+                          audio.play().catch((err) => console.warn("Audio playback failed:", err));
+                        } else if (focusedClip.mediaType === "audio" && focusedClip.mediaUrl) {
+                          const audio = new Audio(focusedClip.mediaUrl);
+                          audio.play().catch((err) => console.warn("Audio playback failed:", err));
+                        } else if (focusedClip.voiceAudioData) {
+                          playFilteredAudio(focusedClip.voiceAudioData, focusedClip.voiceStyle || "normal");
+                        } else if (hasValidVoiceText) {
+                          speakText(focusedClip.voiceText!, focusedClip.tone, focusedClip.voiceStyle);
+                        }
+                      }}
+                      className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+                      title={
+                        hasAudioUrl || hasVoiceData
+                          ? "Play recorded voice audio"
+                          : `Play AI voice: "${focusedClip.voiceText}"`
+                      }
+                    >
+                      {hasAudioUrl || hasVoiceData ? (
+                        <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                      )}
+                    </button>
+                  );
+                })()}
               </div>
 
               {/* Mute & Play Controls (Video Only) */}

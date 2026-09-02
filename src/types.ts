@@ -4,6 +4,7 @@ export type Clip = {
   mediaUrl: string;
   mediaType?: "video" | "image" | "audio" | string;
   voiceText?: string;
+  voiceAudioUrl?: string; // Stored recorded voice audio URL
   voiceAudioData?: string; // Client-side recording preview if present; not stored in DB
   voiceStyle?: "casual" | "sarcastic" | "dramatic" | "announcer" | "oldschool";
   tone: "funny" | "dramatic" | "sarcastic" | "chill" | "chaotic";
@@ -57,6 +58,7 @@ export interface SavedReaction {
   id: string;
   mediaUrl: string;
   voiceText?: string;
+  voiceAudioUrl?: string;
   voiceAudioData?: string;
   voiceStyle?: "casual" | "sarcastic" | "dramatic" | "announcer" | "oldschool";
   tone: "funny" | "dramatic" | "sarcastic" | "chill" | "chaotic";

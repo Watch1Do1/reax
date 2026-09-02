@@ -257,7 +257,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       const newSaved: SavedReaction = {
         id: generateUniqueId("saved"),
         mediaUrl: selectedMedia.data,
-        voiceText: audioMode === "tts" ? voiceText : (audioMode === "record" ? "🎤 Recorded Voice" : ""),
+        voiceText: audioMode === "tts" ? voiceText : "",
         voiceAudioData: audioMode === "record" ? (voiceAudioData || undefined) : undefined,
         voiceStyle: voiceStyle || undefined,
         tone,
@@ -583,7 +583,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         const converted = await convertHeicToJpeg(file);
         const mediaObj = {
           data: converted.data,
-          mimeType: converted.mimeType,
+          mimeType: "image/jpeg",
           isVideo: false
         };
         stopCamera();
@@ -591,6 +591,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       } catch (err) {
         console.error("HEIC conversion failed:", err);
         setError("This iPhone photo couldn't be converted. Try choosing a JPEG.");
+        return;
       }
       return;
     }
@@ -688,10 +689,16 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
       // If the main media is local base64/data URI, upload it to Supabase storage bucket 'media'
       if (selectedMedia && selectedMedia.data.startsWith("data:")) {
+        let uploadMimeType = selectedMedia.mimeType;
+        if (!selectedMedia.isVideo) {
+          if (uploadMimeType.includes("heic") || uploadMimeType.includes("heif") || !uploadMimeType) {
+            uploadMimeType = "image/jpeg";
+          }
+        }
         const uploadResult = await uploadMediaAsset({
           data: selectedMedia.data,
           kind: selectedMedia.isVideo ? "video" : "image",
-          mimeType: selectedMedia.mimeType,
+          mimeType: uploadMimeType,
           filename: `reaction-${Date.now()}`
         });
         finalMediaUrl = uploadResult.url;
@@ -726,26 +733,31 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
       const token = await getAuthToken();
 
-      // Post the new clip payload (voice_text stays short; no base64 dumped into DB)
+      const clipPayload: Record<string, any> = {
+        parentId,
+        mediaUrl: finalMediaUrl,
+        mediaType: finalMediaType,
+        voiceText: audioMode === "tts" ? (voiceText || "").slice(0, 200) : "",
+        voiceAudioUrl: (audioMode === "record" && uploadedVoiceUrl) ? uploadedVoiceUrl : undefined,
+        voiceStyle: voiceStyle || undefined,
+        tone,
+        authorName: username.trim(),
+        effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`,
+        overlayText,
+        originalAuthor: originalAuthorVal,
+        remixedFrom: remixedFromVal
+      };
+
+      console.log("Posting clip JSON payload:", clipPayload);
+
+      // Post the new clip payload (voice_text stays clean caption; voiceAudioUrl persisted separately)
       const postRes = await fetch("/api/clips", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({
-          parentId,
-          mediaUrl: finalMediaUrl,
-          mediaType: finalMediaType,
-          voiceText: audioMode === "tts" ? (voiceText || "").slice(0, 200) : (audioMode === "record" ? "🎤 Voice Reaction" : ""),
-          voiceStyle: voiceStyle, // Store selected voice filter or TTS voice accent style!
-          tone,
-          authorName: username.trim(),
-          effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`, // Encoded styling parameters!
-          overlayText,
-          originalAuthor: originalAuthorVal,
-          remixedFrom: remixedFromVal
-        })
+        body: JSON.stringify(clipPayload)
       });
 
       if (!postRes.ok) {

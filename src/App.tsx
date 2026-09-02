@@ -552,7 +552,7 @@ export default function App() {
       case "audio_hot":
         // Filter: has custom voice recorded audio or speech overlay text
         return [...baseRoots]
-          .filter(c => !!(c.voiceAudioData || c.voiceText))
+          .filter(c => !!(c.voiceAudioData || c.voiceAudioUrl || c.voiceText))
           .sort((a, b) => {
             const countA = getChainCount(a.id);
             const countB = getChainCount(b.id);

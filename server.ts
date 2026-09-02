@@ -80,6 +80,7 @@ export type Clip = {
   mediaUrl: string;
   mediaType?: "video" | "image" | "audio" | string;
   voiceText?: string;
+  voiceAudioUrl?: string;
   voiceAudioData?: string;
   voiceStyle?: "casual" | "sarcastic" | "dramatic" | "announcer" | "oldschool";
   tone: "funny" | "dramatic" | "sarcastic" | "chill" | "chaotic";
@@ -505,6 +506,7 @@ function mapDbToClip(dbRow: any): Clip {
     mediaUrl: safeRow.media_url || "",
     mediaType: safeRow.media_type || undefined,
     voiceText: safeRow.voice_text || undefined,
+    voiceAudioUrl: safeRow.voice_audio_url || undefined,
     voiceStyle: safeRow.voice_style || undefined,
     overlayText: safeRow.overlay_text || undefined,
     tone: safeRow.tone || "chill",
@@ -528,6 +530,7 @@ function mapClipToDb(clip: Clip) {
     media_url: clip.mediaUrl,
     media_type: inferMediaType(clip.mediaUrl, clip.mediaType),
     voice_text: clip.voiceText || null,
+    voice_audio_url: clip.voiceAudioUrl || null,
     voice_style: clip.voiceStyle || null,
     overlay_text: clip.overlayText || null,
     tone: clip.tone,
@@ -560,19 +563,34 @@ class SupabaseStore implements Store {
 
   async getClips(includeDeleted = false): Promise<Clip[]> {
     try {
-      const query = this.client
-        .from("clips")
-        .select(
-          "id, parent_id, media_url, media_type, voice_text, voice_style, overlay_text, tone, effect, author_name, author_id, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
-        )
-        .order("created_at", { ascending: false })
-        .limit(100);
-
-      const { data, error } = await withTimeout(
-        query,
+      // First attempt selecting all columns with select("*")
+      let { data, error } = await withTimeout(
+        this.client
+          .from("clips")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(100),
         4000,
         { data: null, error: { message: "Supabase clips query timed out after 4s" } }
       );
+
+      // If select("*") failed for any reason, fallback to explicit base column query
+      if (error) {
+        console.warn("Supabase select(*) failed, falling back to base columns:", error.message || error);
+        const fallbackRes = await withTimeout(
+          this.client
+            .from("clips")
+            .select(
+              "id, parent_id, media_url, media_type, voice_text, voice_style, overlay_text, tone, effect, author_name, author_id, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
+            )
+            .order("created_at", { ascending: false })
+            .limit(100),
+          4000,
+          { data: null, error: { message: "Supabase clips fallback query timed out after 4s" } }
+        );
+        data = fallbackRes.data;
+        error = fallbackRes.error;
+      }
 
       if (error) {
         console.error("SupabaseStore.getClips query error:", error.message || error);
@@ -601,11 +619,23 @@ class SupabaseStore implements Store {
 
   async insertClip(clip: Clip): Promise<Clip> {
     const dbClip = mapClipToDb(clip);
-    const { data, error } = await this.client
+    let { data, error } = await this.client
       .from("clips")
       .insert([dbClip])
       .select()
       .single();
+
+    // Gracefully handle case where voice_audio_url column does not exist on remote Supabase DB yet
+    if (error && (error.message?.includes("voice_audio_url") || error.details?.includes("voice_audio_url") || error.code === "42703")) {
+      const { voice_audio_url, ...fallbackDbClip } = dbClip;
+      const retryRes = await this.client
+        .from("clips")
+        .insert([fallbackDbClip])
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error) throw error;
     return mapDbToClip(data);
@@ -619,13 +649,27 @@ class SupabaseStore implements Store {
     if (updates.reportCount !== undefined) dbUpdates.report_count = updates.reportCount;
     if (updates.overlayText !== undefined) dbUpdates.overlay_text = updates.overlayText;
     if (updates.voiceText !== undefined) dbUpdates.voice_text = updates.voiceText;
+    if (updates.voiceAudioUrl !== undefined) dbUpdates.voice_audio_url = updates.voiceAudioUrl;
 
-    const { data, error } = await this.client
+    let { data, error } = await this.client
       .from("clips")
       .update(dbUpdates)
       .eq("id", id)
       .select()
       .single();
+
+    // Gracefully handle case where voice_audio_url column does not exist on remote Supabase DB yet
+    if (error && (error.message?.includes("voice_audio_url") || error.details?.includes("voice_audio_url") || error.code === "42703")) {
+      delete dbUpdates.voice_audio_url;
+      const retryRes = await this.client
+        .from("clips")
+        .update(dbUpdates)
+        .eq("id", id)
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error) throw error;
     return data ? mapDbToClip(data) : null;
@@ -960,7 +1004,7 @@ class SupabaseStore implements Store {
         newUsers: 0,
         newThreads: todayClips.filter(c => !c.parentId).length,
         newReactions: todayClips.filter(c => !!c.parentId).length,
-        voiceReactions: todayClips.filter(c => !!(c.voiceText || c.voiceAudioData)).length
+        voiceReactions: todayClips.filter(c => !!(c.voiceText || c.voiceAudioData || c.voiceAudioUrl)).length
       };
     } catch (err) {
       return {
@@ -1233,6 +1277,7 @@ CREATE TABLE IF NOT EXISTS public.clips (
   media_url TEXT NOT NULL,
   media_type TEXT,
   voice_text TEXT,
+  voice_audio_url TEXT,
   voice_style TEXT,
   overlay_text TEXT,
   tone TEXT NOT NULL,
@@ -1247,6 +1292,9 @@ CREATE TABLE IF NOT EXISTS public.clips (
   deleted BOOLEAN DEFAULT false,
   report_count INTEGER DEFAULT 0
 );
+
+-- Ensure voice_audio_url column exists on existing clips table
+ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS voice_audio_url TEXT;
 
 -- Unique Likes Table
 CREATE TABLE IF NOT EXISTS public.likes (
@@ -1364,9 +1412,18 @@ app.post("/api/clips", async (req, res) => {
   }
   const { user, profile } = authRes.auth;
 
-  const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, tone, effect, overlayText, originalAuthor, remixedFrom, voiceAudioData } = req.body;
+  const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, voiceAudioUrl, tone, effect, overlayText, originalAuthor, remixedFrom, voiceAudioData } = req.body;
   if (!mediaUrl || !tone) {
     return res.status(400).json({ error: "Missing required fields: mediaUrl and tone are required." });
+  }
+
+  // Validate voiceAudioUrl if provided
+  if (voiceAudioUrl !== undefined && voiceAudioUrl !== null) {
+    if (typeof voiceAudioUrl !== "string" || voiceAudioUrl.startsWith("data:") || voiceAudioUrl.startsWith("blob:") || voiceAudioUrl.length > 2048) {
+      return res.status(400).json({
+        error: "Invalid voiceAudioUrl. Audio must be uploaded to storage first and cannot be a base64/data URI."
+      });
+    }
   }
 
   // Reject bodies that include voiceAudioData longer than 100 chars (legacy preview only)
@@ -1449,7 +1506,8 @@ app.post("/api/clips", async (req, res) => {
       parentId: parentId || null,
       mediaUrl,
       mediaType: mediaType || inferMediaType(mediaUrl, mediaType),
-      voiceText,
+      voiceText: voiceText || undefined,
+      voiceAudioUrl: typeof voiceAudioUrl === "string" && voiceAudioUrl ? voiceAudioUrl : undefined,
       voiceStyle,
       tone,
       authorName: profile.username,
@@ -1473,7 +1531,7 @@ app.post("/api/clips", async (req, res) => {
       lastActive: new Date().toISOString()
     });
     await store!.incrementFunnel("posted_reaction");
-    if (voiceText) {
+    if (voiceText || voiceAudioUrl) {
       await store!.incrementFunnel("posted_voice_reaction");
     }
 
@@ -1818,8 +1876,8 @@ app.get("/api/admin/stats", async (req, res) => {
     const totalRootThreads = clips.filter(c => c.parentId === null).length;
     const totalReplies = clips.filter(c => c.parentId !== null).length;
 
-    const voiceReactions = clips.filter(c => !!(c.voiceText || c.voiceAudioData)).length;
-    const silentReactions = clips.filter(c => !(c.voiceText || c.voiceAudioData)).length;
+    const voiceReactions = clips.filter(c => !!(c.voiceText || c.voiceAudioData || c.voiceAudioUrl)).length;
+    const silentReactions = clips.filter(c => !(c.voiceText || c.voiceAudioData || c.voiceAudioUrl)).length;
     const videoReactions = clips.filter(c => c.mediaUrl && (c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-"))).length;
     const imageReactions = clips.filter(c => !c.mediaUrl || !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-"))).length;
 
@@ -1832,7 +1890,7 @@ app.get("/api/admin/stats", async (req, res) => {
 
     const videoClipsCount = clips.filter(c => c.mediaUrl && (c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-"))).length;
     const imageClipsCount = clips.filter(c => !c.mediaUrl || !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-"))).length;
-    const voiceClipsCount = clips.filter(c => !!c.voiceAudioData).length;
+    const voiceClipsCount = clips.filter(c => !!(c.voiceAudioData || c.voiceAudioUrl)).length;
 
     const storageUsedMB = parseFloat(((videoClipsCount * 1.5) + (imageClipsCount * 0.2) + (voiceClipsCount * 0.15)).toFixed(2));
     const storageLimitMB = 5000;

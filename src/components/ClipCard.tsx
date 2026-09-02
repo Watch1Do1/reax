@@ -133,6 +133,7 @@ export default function ClipCard({
           id: generateUniqueId("saved"),
           mediaUrl: clip.mediaUrl,
           voiceText: clip.voiceText,
+          voiceAudioUrl: clip.voiceAudioUrl,
           voiceAudioData: clip.voiceAudioData,
           voiceStyle: clip.voiceStyle,
           tone: clip.tone,
@@ -310,7 +311,7 @@ export default function ClipCard({
 
         {/* Tone tag pills & Top Reaction Badge */}
         <div className="flex items-center gap-1.5">
-          {clip.voiceAudioData && (
+          {(clip.voiceAudioUrl || clip.voiceAudioData || clip.mediaType === "audio") && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[8.5px] font-mono font-black tracking-wide bg-gradient-to-r from-emerald-500/15 to-teal-500/15 text-emerald-300 border border-emerald-500/30 shadow-md">
               🎤 VOICE
             </span>
@@ -434,28 +435,47 @@ export default function ClipCard({
             <span>Reply</span>
           </button>
 
-          {(clip.voiceText || clip.voiceAudioData) && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (clip.voiceAudioData) {
-                  playFilteredAudio(clip.voiceAudioData, clip.voiceStyle || "normal");
-                } else {
-                  speakText(clip.voiceText || "", clip.tone, clip.voiceStyle);
+          {(() => {
+            const hasAudioUrl = !!(clip.voiceAudioUrl || (clip.mediaType === "audio" && clip.mediaUrl));
+            const hasVoiceData = !!clip.voiceAudioData;
+            const hasValidVoiceText = !!(clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction"));
+            const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
+
+            if (!showAudioButton) return null;
+
+            return (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (clip.voiceAudioUrl) {
+                    const audio = new Audio(clip.voiceAudioUrl);
+                    audio.play().catch((err) => console.warn("Audio playback failed:", err));
+                  } else if (clip.mediaType === "audio" && clip.mediaUrl) {
+                    const audio = new Audio(clip.mediaUrl);
+                    audio.play().catch((err) => console.warn("Audio playback failed:", err));
+                  } else if (clip.voiceAudioData) {
+                    playFilteredAudio(clip.voiceAudioData, clip.voiceStyle || "normal");
+                  } else if (hasValidVoiceText) {
+                    speakText(clip.voiceText!, clip.tone, clip.voiceStyle);
+                  }
+                }}
+                className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+                title={
+                  hasAudioUrl || hasVoiceData
+                    ? "Play recorded voice audio"
+                    : `Play AI voice: "${clip.voiceText}"`
                 }
-              }}
-              className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
-              title={clip.voiceAudioData ? "Play recorded voice audio" : `Play AI voice: "${clip.voiceText}"`}
-            >
-              {clip.voiceAudioData ? (
-                <Mic className="w-3.5 h-3.5 text-emerald-400" />
-              ) : (
-                <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
-              )}
-            </button>
-          )}
+              >
+                {hasAudioUrl || hasVoiceData ? (
+                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                )}
+              </button>
+            );
+          })()}
         </div>
 
         {/* Play/Pause & Mute/Unmute Overlay controls (Video Only) */}
