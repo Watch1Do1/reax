@@ -1,6 +1,7 @@
 {
   "functions": {
     "api/index.ts": {
+      "includeFiles": "dist/**",
       "maxDuration": 30
     }
   },
