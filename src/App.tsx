@@ -428,9 +428,13 @@ export default function App() {
 
   // Open Respond modal for a specific clip with an optional preselected tone
   const handleRespondToClip = (parentClip: Clip, tone: Clip["tone"] | null = null) => {
-    setReplyParent(parentClip);
-    setRespondTone(tone);
-    setIsRespondModalOpen(true);
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      setFastReaxTarget({ parentClip, tone: tone || parentClip.tone || "funny" });
+    } else {
+      setReplyParent(parentClip);
+      setRespondTone(tone);
+      setIsRespondModalOpen(true);
+    }
   };
 
   // Fast tap-to-reax pipeline handler

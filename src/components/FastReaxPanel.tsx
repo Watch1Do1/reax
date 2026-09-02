@@ -53,12 +53,13 @@ interface FastReaxPanelProps {
 
 export default function FastReaxPanel({ 
   parentClip, 
-  tone, 
+  tone: initialTone, 
   username, 
   onClose, 
   onSuccess, 
   onOpenFullCustomize 
 }: FastReaxPanelProps) {
+  const [activeTone, setActiveTone] = useState<Clip["tone"]>(initialTone || "funny");
   const [step, setStep] = useState<"generating" | "preview" | "posting" | "success">("generating");
   const [fastPost, setFastPost] = useState(() => localStorage.getItem("reax_fast_post") === "true");
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export default function FastReaxPanel({
   const [visualEffect, setVisualEffect] = useState("zoom");
 
   // Get matching preset backdrop
-  const presetMedia = TONE_PRESETS[tone];
+  const presetMedia = TONE_PRESETS[activeTone] || TONE_PRESETS.funny;
 
   // Sync fast post preference with storage
   const toggleFastPost = () => {
@@ -78,9 +79,10 @@ export default function FastReaxPanel({
     localStorage.setItem("reax_fast_post", nextVal ? "true" : "false");
   };
 
-  // Run AI generation on load
+  // Run AI generation on load or tone switch
   useEffect(() => {
     let active = true;
+    setStep("generating");
 
     async function runGeneration() {
       try {
@@ -91,7 +93,7 @@ export default function FastReaxPanel({
         const res = await fetch("/api/ai/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tone, imageContext })
+          body: JSON.stringify({ tone: activeTone, imageContext })
         });
 
         if (!res.ok) throw new Error("AI Generation failed");
@@ -99,8 +101,8 @@ export default function FastReaxPanel({
 
         if (!active) return;
 
-        const generatedVoice = data.voiceLine || `Whoa, ${tone} perspective incoming!`;
-        const generatedOverlay = data.overlayText || tone.toUpperCase();
+        const generatedVoice = data.voiceLine || `Whoa, ${activeTone} perspective incoming!`;
+        const generatedOverlay = data.overlayText || activeTone.toUpperCase();
         const generatedEffect = data.effect || "zoom";
 
         setVoiceText(generatedVoice);
@@ -108,7 +110,7 @@ export default function FastReaxPanel({
         setVisualEffect(generatedEffect);
 
         // Speak reaction audio instantly for zero friction
-        speakText(generatedVoice, tone);
+        speakText(generatedVoice, activeTone);
 
         // Check if Fast Post is enabled to skip the preview screen entirely
         if (fastPost) {
@@ -121,15 +123,15 @@ export default function FastReaxPanel({
       } catch (err) {
         console.error("Fast Reax generation error:", err);
         if (active) {
-          const fallbackVoice = tone === "funny" ? "LOL, that is too funny!" : "That is absolutely intense!";
+          const fallbackVoice = activeTone === "funny" ? "LOL, that is too funny!" : "That is absolutely intense!";
           setVoiceText(fallbackVoice);
-          setOverlayText(tone.toUpperCase());
+          setOverlayText(activeTone.toUpperCase());
           setVisualEffect("zoom");
-          speakText(fallbackVoice, tone);
+          speakText(fallbackVoice, activeTone);
 
           if (fastPost) {
             setStep("posting");
-            await publishClip(fallbackVoice, tone.toUpperCase(), "zoom");
+            await publishClip(fallbackVoice, activeTone.toUpperCase(), "zoom");
           } else {
             setStep("preview");
           }
@@ -142,7 +144,7 @@ export default function FastReaxPanel({
     return () => {
       active = false;
     };
-  }, [tone]);
+  }, [activeTone]);
 
   // Handle actual server posting
   const publishClip = async (voice: string, overlay: string, effect: string) => {
@@ -164,14 +166,14 @@ export default function FastReaxPanel({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
         body: JSON.stringify({
           parentId: parentClip.id,
           mediaUrl: finalMediaUrl,
           mediaType: presetMedia.isVideo ? "video" : "image",
           voiceText: voice,
-          tone,
+          tone: activeTone,
           authorName: username.trim(),
           effect,
           overlayText: overlay
@@ -193,7 +195,7 @@ export default function FastReaxPanel({
       console.error(err);
       setError("Failed to quick-post reaction. Opening customization mode...");
       setTimeout(() => {
-        onOpenFullCustomize(parentClip, tone);
+        onOpenFullCustomize(parentClip, activeTone);
       }, 1500);
     }
   };
@@ -214,6 +216,37 @@ export default function FastReaxPanel({
           <X className="w-4 h-4" />
         </button>
 
+        {/* Tone Selector Bar */}
+        <div className="w-full mb-3 pr-6">
+          <div className="flex items-center justify-between gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
+            {[
+              { id: "funny" as const, emoji: "🎭", label: "Funny" },
+              { id: "dramatic" as const, emoji: "🎬", label: "Drama" },
+              { id: "sarcastic" as const, emoji: "🙄", label: "Sarcasm" },
+              { id: "chill" as const, emoji: "🌊", label: "Chill" },
+              { id: "chaotic" as const, emoji: "⚡", label: "Chaos" }
+            ].map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => {
+                  if (activeTone !== t.id) {
+                    setActiveTone(t.id);
+                  }
+                }}
+                className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 rounded-lg text-[8px] font-mono font-bold transition-all cursor-pointer ${
+                  activeTone === t.id
+                    ? "bg-indigo-600 text-white shadow-md"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+                }`}
+              >
+                <span>{t.emoji}</span>
+                <span className="truncate">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* 1. GENERATING / THINKING STATE */}
         {step === "generating" && (
           <div className="py-8 space-y-5 flex flex-col items-center w-full">
@@ -226,7 +259,7 @@ export default function FastReaxPanel({
             
             <div className="space-y-1.5">
               <h4 className="text-sm font-sans font-black text-white uppercase tracking-wider">
-                Generating Quick {tone} Reax
+                Generating Quick {activeTone} Reax
               </h4>
               <p className="text-[11px] text-slate-400 font-mono">
                 Designing custom captions & voice response...
@@ -271,7 +304,7 @@ export default function FastReaxPanel({
                 POSTED INSTANTLY!
               </h4>
               <p className="text-[10px] text-slate-500 font-mono">
-                Cascade thread updated with your {tone} response.
+                Cascade thread updated with your {activeTone} response.
               </p>
             </div>
           </div>
@@ -279,12 +312,12 @@ export default function FastReaxPanel({
 
         {/* 4. PREVIEW STATE (Wait for user confirmation if Fast Post is disabled) */}
         {step === "preview" && (
-          <div className="w-full space-y-4 pt-2">
+          <div className="w-full space-y-4 pt-1">
             
             {/* Header description */}
-            <div className="text-left flex items-center gap-1.5">
+            <div className="text-left flex items-center justify-between">
               <span className="text-[9px] font-mono font-black text-indigo-400 uppercase bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded">
-                ⚡ PREVIEW QUICK REAX
+                ⚡ PREVIEW QUICK REAX ({activeTone.toUpperCase()})
               </span>
             </div>
 
@@ -316,7 +349,7 @@ export default function FastReaxPanel({
 
               {/* Voice button */}
               <button 
-                onClick={() => speakText(voiceText, tone)}
+                onClick={() => speakText(voiceText, activeTone)}
                 className="absolute bottom-2 left-2 p-1 bg-black/60 backdrop-blur text-indigo-400 hover:text-indigo-300 border border-slate-800/50 rounded-lg text-xs flex items-center gap-1 font-mono transition-all z-10"
               >
                 <Volume2 className="w-3.5 h-3.5" />
@@ -347,11 +380,11 @@ export default function FastReaxPanel({
               <button
                 onClick={() => {
                   onClose();
-                  onOpenFullCustomize(parentClip, tone);
+                  onOpenFullCustomize(parentClip, activeTone);
                 }}
                 className="w-full flex items-center justify-center gap-1.5 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold text-[10px] rounded-xl transition-all uppercase tracking-wide font-mono"
               >
-                <Sliders className="w-3.5 h-3.5 text-indigo-400" /> Customize / Record Self ✏️
+                <Sliders className="w-3.5 h-3.5 text-indigo-400" /> Customize (photo / voice) ✏️
               </button>
             </div>
 

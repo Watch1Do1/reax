@@ -56,6 +56,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
   
+  const [showMoreEffects, setShowMoreEffects] = useState(false);
+  
   // Saved Reactions library state
   const [savedReactions, setSavedReactions] = useState<SavedReaction[]>([]);
 
@@ -121,7 +123,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       setRecordingAudio(true);
       setAudioRecorderProgress(0);
 
-      const duration = 5000; // max 5 seconds
+      const duration = 6000; // max 6 seconds
       const intervalMs = 100;
       let elapsed = 0;
 
@@ -1350,7 +1352,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                         {audioMode === "record" && (
                           <div className="bg-emerald-950/20 border border-emerald-500/20 rounded-xl p-3 space-y-2.5 text-center">
                             <span className="block text-[9px] font-mono font-bold text-emerald-400 uppercase tracking-widest">
-                              🎤 RECORD MEME SOUND (MAX 5 SECONDS)
+                              🎤 RECORD MEME SOUND (MAX 6 SECONDS)
                             </span>
                             
                             <div className="flex items-center justify-center gap-3">
@@ -1572,11 +1574,23 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
                   {/* Visual Kinetic Effect selector */}
                   <div className="space-y-1.5">
-                    <label className="block text-[10px] font-bold text-slate-400 font-mono tracking-wider">
-                      KINETIC VISUAL EFFECT:
-                    </label>
-                    <div className="grid grid-cols-6 gap-1">
-                      {["zoom", "shake", "glitch", "pulse", "bounce", "pan"].map((eff) => (
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold text-slate-400 font-mono tracking-wider">
+                        KINETIC VISUAL EFFECT:
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowMoreEffects(!showMoreEffects)}
+                        className="text-[9px] font-mono text-indigo-400 hover:text-indigo-300 font-bold uppercase transition-colors cursor-pointer"
+                      >
+                        {showMoreEffects ? "Fewer" : "+ More"}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1">
+                      {(showMoreEffects || ["pulse", "bounce", "pan"].includes(visualEffect)
+                        ? ["zoom", "shake", "glitch", "pulse", "bounce", "pan"]
+                        : ["zoom", "shake", "glitch"]
+                      ).map((eff) => (
                         <button
                           key={eff}
                           type="button"
