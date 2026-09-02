@@ -559,24 +559,32 @@ class SupabaseStore implements Store {
   }
 
   async getClips(includeDeleted = false): Promise<Clip[]> {
-    let query = this.client
-      .from("clips")
-      .select("*")
-      .order("created_at", { ascending: false });
+    try {
+      const query = this.client
+        .from("clips")
+        .select(
+          "id, parent_id, media_url, media_type, voice_text, voice_style, overlay_text, tone, effect, author_name, author_id, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
+        )
+        .order("created_at", { ascending: false });
 
-    const { data, error } = await withTimeout(
-      query,
-      4000,
-      { data: null, error: { message: "Supabase clips query timed out" } }
-    );
+      const { data, error } = await withTimeout(
+        query,
+        4000,
+        { data: null, error: { message: "Supabase clips query timed out after 4s" } }
+      );
 
-    if (error) {
-      throw error;
+      if (error) {
+        console.error("SupabaseStore.getClips query error:", error.message || error);
+        return [];
+      }
+
+      const clips = (data || []).map(mapDbToClip);
+      if (includeDeleted) return clips;
+      return clips.filter((c: Clip) => !c.deleted);
+    } catch (err: any) {
+      console.error("SupabaseStore.getClips error:", err?.message || err);
+      return [];
     }
-
-    const clips = (data || []).map(mapDbToClip);
-    if (includeDeleted) return clips;
-    return clips.filter((c: Clip) => !c.deleted);
   }
 
   async getClip(id: string): Promise<Clip | null> {
@@ -1144,10 +1152,18 @@ app.use("/api", (req, res, next) => {
 
 // API: Public Supabase configuration for client authentication
 app.get("/api/auth-config", (req, res) => {
-  res.json({
-    supabaseUrl: SUPABASE_URL || null,
-    supabaseAnonKey: SUPABASE_ANON_KEY || null
-  });
+  try {
+    return res.json({
+      supabaseUrl: SUPABASE_URL || null,
+      supabaseAnonKey: SUPABASE_ANON_KEY || null
+    });
+  } catch (err: any) {
+    console.error("Error in GET /api/auth-config:", err?.message || err);
+    return res.json({
+      supabaseUrl: null,
+      supabaseAnonKey: null
+    });
+  }
 });
 
 // API: Get DB configuration and connectivity status
@@ -1332,10 +1348,10 @@ app.post("/api/me", async (req, res) => {
 app.get("/api/clips", async (req, res) => {
   try {
     const clips = await store!.getClips(false);
-    res.json(clips);
+    return res.json(Array.isArray(clips) ? clips : []);
   } catch (err: any) {
-    console.error("Error fetching clips:", err);
-    res.status(500).json({ error: "Failed to fetch clips" });
+    console.error("Error fetching clips:", err?.message || err);
+    return res.status(500).json({ error: "Failed to fetch clips" });
   }
 });
 
