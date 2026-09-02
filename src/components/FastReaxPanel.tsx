@@ -109,9 +109,6 @@ export default function FastReaxPanel({
         setOverlayText(generatedOverlay);
         setVisualEffect(generatedEffect);
 
-        // Speak reaction audio instantly for zero friction
-        speakText(generatedVoice, activeTone);
-
         // Check if Fast Post is enabled to skip the preview screen entirely
         if (fastPost) {
           setStep("posting");
@@ -127,7 +124,6 @@ export default function FastReaxPanel({
           setVoiceText(fallbackVoice);
           setOverlayText(activeTone.toUpperCase());
           setVisualEffect("zoom");
-          speakText(fallbackVoice, activeTone);
 
           if (fastPost) {
             setStep("posting");
@@ -421,6 +417,3 @@ export default function FastReaxPanel({
         )}
 
       </motion.div>
-    </div>
-  );
-}

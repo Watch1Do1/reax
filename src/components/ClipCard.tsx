@@ -32,7 +32,7 @@ export default function ClipCard({
   isNestedReply = false, 
   isTopReply = false 
 }: ClipCardProps) {
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -204,42 +204,69 @@ export default function ClipCard({
     ? [...replies].sort((a, b) => b.likesCount - a.likesCount)[0].id
     : null;
 
-  // Handle play/pause toggle
+  // Handle play/pause toggle (video only)
   const togglePlay = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     if (!videoRef.current) return;
     if (isPlaying) {
       videoRef.current.pause();
+      setIsPlaying(false);
     } else {
-      videoRef.current.play().catch(err => console.log("Video play interrupted", err));
+      videoRef.current
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch(err => console.log("Video play interrupted", err));
     }
-    setIsPlaying(!isPlaying);
   };
 
-  // Handle mute/unmute toggle
+  // Handle mute/unmute toggle (video only)
   const toggleMute = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     if (!videoRef.current) return;
-    videoRef.current.muted = !isMuted;
-    setIsMuted(!isMuted);
+    const nextMuted = !isMuted;
+    videoRef.current.muted = nextMuted;
+    setIsMuted(nextMuted);
   };
 
-  // Re-sync video playback when state changes or is mounted
-  useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.muted = isMuted;
-      if (isPlaying) {
-        videoRef.current.play().catch(() => {
-          // Fallback if browser blocks autoplay
-          setIsPlaying(false);
-        });
-      } else {
-        videoRef.current.pause();
-      }
-    }
-  }, [isPlaying, isMuted]);
-
   const isVideo = clip.mediaUrl.endsWith(".mp4") || clip.mediaUrl.endsWith(".webm") || clip.mediaUrl.includes("mixkit-") || clip.mediaUrl.includes("uploads/clip-");
+
+  // Autoplay video only when the card is mostly on screen (IntersectionObserver). Pause when scrolled off. Never autoplay sound.
+  useEffect(() => {
+    if (!isVideo) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.muted = isMuted;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!videoRef.current) return;
+          if (entry.isIntersecting) {
+            // Mostly on screen (> 50% visible)
+            videoRef.current.muted = isMuted;
+            videoRef.current
+              .play()
+              .then(() => setIsPlaying(true))
+              .catch(() => setIsPlaying(false));
+          } else {
+            // Scrolled off
+            videoRef.current.pause();
+            setIsPlaying(false);
+          }
+        });
+      },
+      { threshold: 0.6 }
+    );
+
+    observer.observe(video);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [isVideo, clip.mediaUrl, isMuted]);
 
   return (
     <div className={`flex flex-col w-full ${isNestedReply ? "pl-6 mt-3.5 border-l border-slate-800/20" : "bg-slate-900/35 backdrop-blur-md border border-slate-800/20 rounded-2xl p-4 md:p-5 shadow-xl glass-panel-hover"}`}>
@@ -355,16 +382,16 @@ export default function ClipCard({
                   <video 
                     ref={videoRef}
                     src={clip.mediaUrl} 
-                    className="w-full h-full object-cover"
-                    autoPlay 
+                    className="w-full h-full object-cover pointer-events-none"
                     loop 
                     muted={isMuted}
                     playsInline
+                    preload="metadata"
                   />
                 ) : (
                   <img 
                     src={clip.mediaUrl} 
-                    className="w-full h-full object-cover" 
+                    className="w-full h-full object-cover pointer-events-none" 
                     alt={`Reaction clip by ${clip.authorName}`}
                     referrerPolicy="no-referrer"
                   />
@@ -391,32 +418,27 @@ export default function ClipCard({
           );
         })()}
 
-        {/* Play/Pause & Mute/Unmute Overlay controls */}
-        {isVideo && (
-          <div className="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 group-hover/media:opacity-100 transition-opacity bg-black/60 backdrop-blur px-2.5 py-1 rounded-lg z-20">
-            <button 
-              onClick={togglePlay}
-              className="p-1 hover:text-white text-slate-300 transition-colors"
-              title={isPlaying ? "Pause Loop" : "Play Loop"}
-            >
-              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            </button>
-            <div className="w-[1px] h-3 bg-slate-700" />
-            <button 
-              onClick={toggleMute}
-              className="p-1 hover:text-white text-slate-300 transition-colors"
-              title={isMuted ? "Unmute Audio" : "Mute Audio"}
-            >
-              {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume1 className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-        )}
+        {/* Media Overlay Controls: Bottom-Left (Reply + Voice), Bottom-Right (Play/Mute for Video) */}
+        <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5 z-20">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRespond(clip);
+            }}
+            className="flex items-center gap-1.5 bg-black/75 hover:bg-black/90 text-white hover:text-indigo-300 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-xs font-semibold shadow-lg transition-all active:scale-95 cursor-pointer"
+            title="Reply to this reaction"
+          >
+            <CornerDownRight className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Reply</span>
+          </button>
 
-        {/* Minimal Subtitle / Audio badge overlay - hidden until hover/tap */}
-        {(clip.voiceText || clip.voiceAudioData) && (
-          <div className="absolute bottom-3 left-3 flex items-center gap-1.5 bg-black/75 backdrop-blur px-2.5 py-1 rounded-lg border border-slate-800/80 max-w-[85%] opacity-100 sm:opacity-0 group-hover/media:opacity-100 transition-opacity duration-250 z-20 shadow-lg">
-            <button 
+          {(clip.voiceText || clip.voiceAudioData) && (
+            <button
+              type="button"
               onClick={(e) => {
+                e.preventDefault();
                 e.stopPropagation();
                 if (clip.voiceAudioData) {
                   playFilteredAudio(clip.voiceAudioData, clip.voiceStyle || "normal");
@@ -424,18 +446,38 @@ export default function ClipCard({
                   speakText(clip.voiceText || "", clip.tone, clip.voiceStyle);
                 }
               }}
-              className="p-1 hover:scale-110 active:scale-95 text-slate-200 transition-all flex-shrink-0 bg-slate-900 border border-slate-800 rounded-md"
-              title={clip.voiceAudioData ? "Play recorded voice track with filter" : "Play AI speech text"}
+              className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+              title={clip.voiceAudioData ? "Play recorded voice audio" : `Play AI voice: "${clip.voiceText}"`}
             >
               {clip.voiceAudioData ? (
-                <Mic className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                <Mic className="w-3.5 h-3.5 text-emerald-400" />
               ) : (
                 <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
               )}
             </button>
-            <span className="text-[10px] text-slate-200 font-medium truncate font-sans pr-1">
-              {clip.voiceAudioData ? `🎤 Voice (${clip.voiceStyle || "normal"})` : `"${clip.voiceText}"`}
-            </span>
+          )}
+        </div>
+
+        {/* Play/Pause & Mute/Unmute Overlay controls (Video Only) */}
+        {isVideo && (
+          <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1 bg-black/75 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 z-20 shadow-lg">
+            <button 
+              type="button"
+              onClick={togglePlay}
+              className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
+              title={isPlaying ? "Pause Loop" : "Play Loop"}
+            >
+              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+            </button>
+            <div className="w-[1px] h-3.5 bg-white/20" />
+            <button 
+              type="button"
+              onClick={toggleMute}
+              className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
+              title={isMuted ? "Unmute Audio" : "Mute Audio"}
+            >
+              {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume1 className="w-3.5 h-3.5" />}
+            </button>
           </div>
         )}
       </div>

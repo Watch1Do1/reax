@@ -186,22 +186,31 @@ export default function ThreadView({
 
   const navPath = getNavigationPath();
 
-  // Sound & play handlers for focused card
+  // Sound & play handlers for focused card (video only)
   const togglePlay = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
     if (videoRef.current) {
       if (isPlaying) {
         videoRef.current.pause();
+        setIsPlaying(false);
       } else {
-        videoRef.current.play();
+        videoRef.current
+          .play()
+          .then(() => setIsPlaying(true))
+          .catch((err) => console.log("Video play interrupted", err));
       }
-      setIsPlaying(!isPlaying);
     }
   };
 
   const toggleMute = (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
-    setIsMuted(!isMuted);
+    if (videoRef.current) {
+      const nextMuted = !isMuted;
+      videoRef.current.muted = nextMuted;
+      setIsMuted(nextMuted);
+    }
   };
 
   if (!focusedClip) return null;
@@ -315,7 +324,7 @@ export default function ThreadView({
               </div>
             </div>
 
-            {/* Focused Card Media - Minimalist by default, controls on hover */}
+            {/* Focused Card Media */}
             <div className="relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-900 shadow-md">
               <div className={`w-full h-full overflow-hidden flex items-center justify-center ${
                 focusedClip.effect === "zoom" ? "animate-zoom" :
@@ -329,63 +338,82 @@ export default function ThreadView({
                   <video 
                     ref={videoRef}
                     src={focusedClip.mediaUrl} 
-                    className="w-full h-full object-cover"
-                    autoPlay 
+                    className="w-full h-full object-cover pointer-events-none"
                     loop 
                     muted={isMuted}
                     playsInline
+                    preload="metadata"
                   />
                 ) : (
                   <img 
                     src={focusedClip.mediaUrl} 
-                    className="w-full h-full object-cover" 
+                    className="w-full h-full object-cover pointer-events-none" 
                     alt=""
+                    referrerPolicy="no-referrer"
                   />
                 )}
               </div>
 
               {focusedClip.overlayText && (
-                <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent flex items-center justify-center p-3">
+                <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent flex items-center justify-center p-3 pointer-events-none">
                   <h2 className="font-sans font-black text-lg md:text-xl text-white text-center tracking-wider drop-shadow-[0_1.5px_3.5px_rgba(0,0,0,0.85)] uppercase">
                     {focusedClip.overlayText}
                   </h2>
                 </div>
               )}
 
-              {/* Mute & Play Controls - Only visible on hover */}
-              {isVideo && (
-                <div className="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 group-hover/media-focused:opacity-100 transition-opacity bg-black/60 backdrop-blur px-2 py-0.5 rounded-lg border border-slate-800/60 z-10">
-                  <button 
-                    onClick={togglePlay}
-                    className="p-1 hover:text-white text-slate-300 transition-colors"
-                  >
-                    {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                  </button>
-                  <div className="w-[1px] h-3.5 bg-slate-700" />
-                  <button 
-                    onClick={toggleMute}
-                    className="p-1 hover:text-white text-slate-300 transition-colors"
-                  >
-                    {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume1 className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              )}
+              {/* Compact Overlay Controls: Bottom-Left (Reply + Voice), Bottom-Right (Play/Mute for Video) */}
+              <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5 z-20">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onRespond(focusedClip);
+                  }}
+                  className="flex items-center gap-1.5 bg-black/75 hover:bg-black/90 text-white hover:text-indigo-300 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-xs font-semibold shadow-lg transition-all active:scale-95 cursor-pointer"
+                  title="Reply to this branch"
+                >
+                  <Plus className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Reply</span>
+                </button>
 
-              {/* Focused Caption - Only visible on hover */}
-              {focusedClip.voiceText && (
-                <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-black/60 backdrop-blur px-2 py-1 rounded-lg border border-slate-800/60 max-w-[70%] opacity-0 group-hover/media-focused:opacity-100 transition-opacity duration-200 z-10">
-                  <button 
+                {focusedClip.voiceText && (
+                  <button
+                    type="button"
                     onClick={(e) => {
+                      e.preventDefault();
                       e.stopPropagation();
                       speakText(focusedClip.voiceText || "", focusedClip.tone);
                     }}
-                    className="p-0.5 text-slate-300 hover:text-indigo-400 transition-colors"
+                    className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+                    title={`Play voice: "${focusedClip.voiceText}"`}
                   >
-                    <Volume2 className="w-3 h-3 text-indigo-400" />
+                    <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
                   </button>
-                  <span className="text-[9px] text-slate-200 italic truncate font-sans">
-                    "{focusedClip.voiceText}"
-                  </span>
+                )}
+              </div>
+
+              {/* Mute & Play Controls (Video Only) */}
+              {isVideo && (
+                <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1 bg-black/75 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 z-20 shadow-lg">
+                  <button 
+                    type="button"
+                    onClick={togglePlay}
+                    className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
+                    title={isPlaying ? "Pause Loop" : "Play Loop"}
+                  >
+                    {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  </button>
+                  <div className="w-[1px] h-3.5 bg-white/20" />
+                  <button 
+                    type="button"
+                    onClick={toggleMute}
+                    className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
+                    title={isMuted ? "Unmute Audio" : "Mute Audio"}
+                  >
+                    {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume1 className="w-3.5 h-3.5" />}
+                  </button>
                 </div>
               )}
             </div>
