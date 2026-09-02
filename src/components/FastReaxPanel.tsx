@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { motion } from "motion/react";
 import { 
   Sparkles, RefreshCw, Send, Sliders, X, Check, Eye, Play, Volume2 
 } from "lucide-react";
@@ -198,16 +197,14 @@ export default function FastReaxPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95, y: 15 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className="w-full max-w-sm bg-slate-900 border border-indigo-500/35 rounded-3xl overflow-hidden shadow-2xl p-5 relative text-center flex flex-col items-center"
+      <div 
+        className="w-full max-w-sm bg-slate-900 border border-indigo-500/35 rounded-3xl overflow-hidden shadow-2xl p-5 relative text-center flex flex-col items-center animate-in fade-in zoom-in-95 duration-200"
       >
         {/* Cancel button in top corner */}
         <button 
+          type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 p-1 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors"
+          className="absolute top-4 right-4 p-1 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
         </button>
@@ -264,11 +261,8 @@ export default function FastReaxPanel({
 
             {/* Simulated progress slider/glow */}
             <div className="w-full h-1 bg-slate-950 rounded-full overflow-hidden max-w-[180px]">
-              <motion.div 
-                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500"
-                initial={{ width: "0%" }}
-                animate={{ width: "100%" }}
-                transition={{ duration: 1.5, ease: "easeInOut" }}
+              <div 
+                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 animate-pulse w-full transition-all duration-500"
               />
             </div>
           </div>
@@ -345,8 +339,9 @@ export default function FastReaxPanel({
 
               {/* Voice button */}
               <button 
+                type="button"
                 onClick={() => speakText(voiceText, activeTone)}
-                className="absolute bottom-2 left-2 p-1 bg-black/60 backdrop-blur text-indigo-400 hover:text-indigo-300 border border-slate-800/50 rounded-lg text-xs flex items-center gap-1 font-mono transition-all z-10"
+                className="absolute bottom-2 left-2 p-1 bg-black/60 backdrop-blur text-indigo-400 hover:text-indigo-300 border border-slate-800/50 rounded-lg text-xs flex items-center gap-1 font-mono transition-all z-10 cursor-pointer"
               >
                 <Volume2 className="w-3.5 h-3.5" />
                 <span className="text-[8px] font-bold">REPLAY AUDIO</span>
@@ -364,21 +359,23 @@ export default function FastReaxPanel({
             {/* Action Buttons */}
             <div className="space-y-2">
               <button
+                type="button"
                 onClick={() => {
                   setStep("posting");
                   publishClip(voiceText, overlayText, visualEffect);
                 }}
-                className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-xs rounded-xl transition-all shadow-xl active:scale-95 uppercase tracking-wider"
+                className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-xs rounded-xl transition-all shadow-xl active:scale-95 uppercase tracking-wider cursor-pointer"
               >
                 <Send className="w-4 h-4" /> Publish Loop Now ⚡
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   onClose();
                   onOpenFullCustomize(parentClip, activeTone);
                 }}
-                className="w-full flex items-center justify-center gap-1.5 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold text-[10px] rounded-xl transition-all uppercase tracking-wide font-mono"
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold text-[10px] rounded-xl transition-all uppercase tracking-wide font-mono cursor-pointer"
               >
                 <Sliders className="w-3.5 h-3.5 text-indigo-400" /> Customize (photo / voice) ✏️
               </button>
@@ -416,4 +413,7 @@ export default function FastReaxPanel({
           </div>
         )}
 
-      </motion.div>
+      </div>
+    </div>
+  );
+}
