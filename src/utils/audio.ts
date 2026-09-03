@@ -2,11 +2,19 @@ import { Clip } from "../types";
 
 let activeSourceNode: AudioBufferSourceNode | null = null;
 let activeAudioCtx: AudioContext | null = null;
+let activeAudioElement: HTMLAudioElement | null = null;
 
 /**
- * Stop any currently playing filtered audio and clean up the AudioContext.
+ * Stop any currently playing audio (both Web Audio API DSP and HTML5 Audio) and clean up.
  */
 export function stopAllFilteredAudio() {
+  if (activeAudioElement) {
+    try {
+      activeAudioElement.pause();
+      activeAudioElement.currentTime = 0;
+    } catch (e) {}
+    activeAudioElement = null;
+  }
   if (activeSourceNode) {
     try {
       activeSourceNode.stop();
@@ -37,31 +45,56 @@ function makeDistortionCurve(amount: number) {
 }
 
 /**
- * Play a recorded voice or audio track with custom Web Audio API DSP filters.
+ * Play a recorded voice or audio track with custom Web Audio API DSP filters or clean HTML5 playback.
  */
-export async function playFilteredAudio(base64Audio: string, filterType: string) {
+export async function playFilteredAudio(audioSource: string, filterType: string): Promise<void> {
   stopAllFilteredAudio();
 
-  if (!base64Audio) return;
+  if (!audioSource) return;
+
+  // For standard/normal voice or unlisted filters, prefer high-fidelity native HTML5 Audio
+  const isSpecialDspFilter = ["radio", "megaphone", "robot", "deep", "chipmunk"].includes(filterType);
+
+  if (!isSpecialDspFilter) {
+    try {
+      const audio = new Audio(audioSource);
+      activeAudioElement = audio;
+      await audio.play();
+      return;
+    } catch (html5Err) {
+      console.warn("Direct HTML5 audio play failed, trying Web Audio API:", html5Err);
+    }
+  }
 
   try {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioContextClass) {
-      console.warn("Web Audio API not supported. Falling back to default audio.");
-      const audio = new Audio(base64Audio);
-      audio.play().catch(err => console.error(err));
+      const audio = new Audio(audioSource);
+      activeAudioElement = audio;
+      await audio.play();
       return;
     }
 
     const audioCtx = new AudioContextClass();
     activeAudioCtx = audioCtx;
 
-    // Convert base64 data URL to ArrayBuffer
-    const response = await fetch(base64Audio);
+    if (audioCtx.state === "suspended") {
+      await audioCtx.resume();
+    }
+
+    // Convert data URL or fetch remote URL to ArrayBuffer
+    const response = await fetch(audioSource);
     const arrayBuffer = await response.arrayBuffer();
 
-    // Decode audio data asynchronously
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    // Decode audio data asynchronously with legacy compatibility
+    let audioBuffer: AudioBuffer;
+    try {
+      audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    } catch (decodeErr) {
+      audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+        audioCtx.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+      });
+    }
 
     // Create Buffer Source Node
     const source = audioCtx.createBufferSource();
@@ -167,13 +200,16 @@ export async function playFilteredAudio(base64Audio: string, filterType: string)
 
     // Connect final output to AudioContext speakers destination
     lastNode.connect(audioCtx.destination);
-    source.start();
+    source.start(0);
   } catch (error) {
-    console.error("Failed filtered audio playback:", error);
+    console.error("Failed filtered audio playback, attempting raw HTML5 audio fallback:", error);
     try {
-      const audio = new Audio(base64Audio);
-      audio.play().catch(e => console.error(e));
-    } catch (e) {}
+      const audio = new Audio(audioSource);
+      activeAudioElement = audio;
+      await audio.play();
+    } catch (e) {
+      console.error("HTML5 fallback failed as well:", e);
+    }
   }
 }
 

@@ -500,13 +500,34 @@ function mapDbToClip(dbRow: any): Clip {
       // Keep fallback
     }
   }
+
+  let voiceAudioUrl = safeRow.voice_audio_url || undefined;
+  let voiceText = safeRow.voice_text || undefined;
+
+  // Handle fallback where voiceAudioUrl was stored/encoded inside voice_text column
+  if (typeof voiceText === "string") {
+    if (voiceText.startsWith("http://") || voiceText.startsWith("https://") || voiceText.startsWith("data:audio") || voiceText.includes("/storage/v1/object/public/")) {
+      if (!voiceAudioUrl) voiceAudioUrl = voiceText;
+      voiceText = undefined;
+    } else if (voiceText.startsWith("audio_url:")) {
+      const parts = voiceText.split("|||");
+      if (!voiceAudioUrl) voiceAudioUrl = parts[0].replace(/^audio_url:/, "");
+      voiceText = parts[1] || undefined;
+    }
+  }
+
+  // Clean prefix if present
+  if (voiceAudioUrl && typeof voiceAudioUrl === "string" && voiceAudioUrl.startsWith("audio_url:")) {
+    voiceAudioUrl = voiceAudioUrl.replace(/^audio_url:/, "");
+  }
+
   return {
     id: safeRow.id || crypto.randomUUID(),
     parentId: safeRow.parent_id || null,
     mediaUrl: safeRow.media_url || "",
     mediaType: safeRow.media_type || undefined,
-    voiceText: safeRow.voice_text || undefined,
-    voiceAudioUrl: safeRow.voice_audio_url || undefined,
+    voiceText: voiceText,
+    voiceAudioUrl: voiceAudioUrl,
     voiceStyle: safeRow.voice_style || undefined,
     overlayText: safeRow.overlay_text || undefined,
     tone: safeRow.tone || "chill",
@@ -524,13 +545,23 @@ function mapDbToClip(dbRow: any): Clip {
 }
 
 function mapClipToDb(clip: Clip) {
+  let voiceTextVal = clip.voiceText || null;
+  // If voiceAudioUrl is present, also encode it into voice_text as a fail-safe fallback
+  // for Supabase database instances that do not yet have the voice_audio_url column created
+  if (clip.voiceAudioUrl) {
+    if (clip.voiceText && clip.voiceText.trim() !== "") {
+      voiceTextVal = `audio_url:${clip.voiceAudioUrl}|||${clip.voiceText}`;
+    } else {
+      voiceTextVal = clip.voiceAudioUrl;
+    }
+  }
+
   const payload: Record<string, any> = {
     id: clip.id,
     parent_id: isValidUuid(clip.parentId) ? clip.parentId : null,
     media_url: clip.mediaUrl,
     media_type: inferMediaType(clip.mediaUrl, clip.mediaType),
-    voice_text: clip.voiceText || null,
-    voice_audio_url: clip.voiceAudioUrl || null,
+    voice_text: voiceTextVal,
     voice_style: clip.voiceStyle || null,
     overlay_text: clip.overlayText || null,
     tone: clip.tone,
@@ -649,27 +680,18 @@ class SupabaseStore implements Store {
     if (updates.reportCount !== undefined) dbUpdates.report_count = updates.reportCount;
     if (updates.overlayText !== undefined) dbUpdates.overlay_text = updates.overlayText;
     if (updates.voiceText !== undefined) dbUpdates.voice_text = updates.voiceText;
-    if (updates.voiceAudioUrl !== undefined) dbUpdates.voice_audio_url = updates.voiceAudioUrl;
+    if (updates.voiceAudioUrl !== undefined) {
+      if (updates.voiceAudioUrl) {
+        dbUpdates.voice_text = updates.voiceText ? `audio_url:${updates.voiceAudioUrl}|||${updates.voiceText}` : updates.voiceAudioUrl;
+      }
+    }
 
-    let { data, error } = await this.client
+    const { data, error } = await this.client
       .from("clips")
       .update(dbUpdates)
       .eq("id", id)
       .select()
       .single();
-
-    // Gracefully handle case where voice_audio_url column does not exist on remote Supabase DB yet
-    if (error && (error.message?.includes("voice_audio_url") || error.details?.includes("voice_audio_url") || error.code === "42703")) {
-      delete dbUpdates.voice_audio_url;
-      const retryRes = await this.client
-        .from("clips")
-        .update(dbUpdates)
-        .eq("id", id)
-        .select()
-        .single();
-      data = retryRes.data;
-      error = retryRes.error;
-    }
 
     if (error) throw error;
     return data ? mapDbToClip(data) : null;
@@ -1675,14 +1697,22 @@ app.post("/api/upload", async (req, res) => {
 
     // Validate type and size constraints: audio webm/mp4 2MB, image jpeg/png/webp 4MB, video mp4/webm 12MB
     if (kind === "audio") {
-      const isAudio = contentType === "audio/webm" || contentType === "audio/mp4" || contentType.includes("webm") || contentType.includes("mp4");
+      const isAudio = contentType.startsWith("audio/") || contentType.includes("webm") || contentType.includes("mp4") || contentType.includes("ogg") || contentType.includes("wav") || contentType.includes("m4a") || contentType.includes("aac");
       if (!isAudio) {
-        return res.status(400).json({ error: "Invalid audio contentType. Supported formats: audio/webm, audio/mp4." });
+        return res.status(400).json({ error: "Invalid audio contentType. Supported formats: audio/webm, audio/mp4, audio/ogg, audio/wav, audio/m4a." });
       }
-      if (sizeInBytes > 2 * 1024 * 1024) {
-        return res.status(413).json({ error: "Audio exceeds maximum allowed size of 2MB." });
+      if (sizeInBytes > 8 * 1024 * 1024) {
+        return res.status(413).json({ error: "Audio exceeds maximum allowed size of 8MB." });
       }
-      ext = contentType.includes("mp4") ? "mp4" : "webm";
+      if (contentType.includes("mp4") || contentType.includes("m4a") || contentType.includes("aac")) {
+        ext = "mp4";
+      } else if (contentType.includes("ogg")) {
+        ext = "ogg";
+      } else if (contentType.includes("wav")) {
+        ext = "wav";
+      } else {
+        ext = "webm";
+      }
     } else if (kind === "image") {
       const isImage = contentType === "image/jpeg" || contentType === "image/jpg" || contentType === "image/png" || contentType === "image/webp";
       if (!isImage) {

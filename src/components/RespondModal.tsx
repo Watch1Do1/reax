@@ -675,15 +675,22 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       // If user recorded voice, upload voice note to Supabase Storage
       if (audioMode === "record" && voiceAudioData && voiceAudioData.startsWith("data:")) {
         try {
+          let audioMime = "audio/webm";
+          const mimeMatch = voiceAudioData.match(/^data:([^;]+);base64,/);
+          if (mimeMatch && mimeMatch[1]) {
+            audioMime = mimeMatch[1].toLowerCase();
+          }
+
           const voiceUploadResult = await uploadMediaAsset({
             data: voiceAudioData,
             kind: "audio",
-            mimeType: "audio/webm",
+            mimeType: audioMime,
             filename: `voice-note-${Date.now()}`
           });
           uploadedVoiceUrl = voiceUploadResult.url;
-        } catch (voiceUploadErr) {
-          console.warn("Could not upload separate voice note:", voiceUploadErr);
+        } catch (voiceUploadErr: any) {
+          console.error("Failed to upload voice note:", voiceUploadErr);
+          throw new Error(voiceUploadErr.message || "Failed to upload your voice recording. Please try again.");
         }
       }
 
@@ -737,7 +744,9 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         parentId,
         mediaUrl: finalMediaUrl,
         mediaType: finalMediaType,
-        voiceText: audioMode === "tts" ? (voiceText || "").slice(0, 200) : "",
+        voiceText: audioMode === "tts" 
+          ? (voiceText || "").slice(0, 200) 
+          : (uploadedVoiceUrl ? `audio_url:${uploadedVoiceUrl}` : ""),
         voiceAudioUrl: (audioMode === "record" && uploadedVoiceUrl) ? uploadedVoiceUrl : undefined,
         voiceStyle: voiceStyle || undefined,
         tone,

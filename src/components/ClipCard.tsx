@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag, Trash2 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
-import { speakText, playFilteredAudio } from "../utils/audio";
+import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 
 interface ClipCardProps {
@@ -205,6 +205,51 @@ export default function ClipCard({
     ? [...replies].sort((a, b) => b.likesCount - a.likesCount)[0].id
     : null;
 
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+
+  // Handle recorded voice audio or speech playback
+  const handlePlayAudio = (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    stopAllFilteredAudio();
+
+    // Resolve audio URL from all possible fields
+    let audioUrl = clip.voiceAudioUrl;
+    if (!audioUrl && clip.voiceText) {
+      if (clip.voiceText.startsWith("audio_url:")) {
+        audioUrl = clip.voiceText.split("|||")[0].replace(/^audio_url:/, "");
+      } else if (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4"))) {
+        audioUrl = clip.voiceText;
+      }
+    }
+    if (!audioUrl && clip.mediaType === "audio") {
+      audioUrl = clip.mediaUrl;
+    }
+
+    if (audioUrl) {
+      setIsAudioPlaying(true);
+      playFilteredAudio(audioUrl, clip.voiceStyle || "normal")
+        .catch((err) => {
+          console.warn("Direct audio playback failed:", err);
+          setIsAudioPlaying(false);
+        })
+        .finally(() => {
+          setTimeout(() => setIsAudioPlaying(false), 4500);
+        });
+    } else if (clip.voiceAudioData) {
+      setIsAudioPlaying(true);
+      playFilteredAudio(clip.voiceAudioData, clip.voiceStyle || "normal")
+        .catch(() => setIsAudioPlaying(false))
+        .finally(() => setTimeout(() => setIsAudioPlaying(false), 4500));
+    } else if (clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction") && !clip.voiceText.startsWith("audio_url:")) {
+      setIsAudioPlaying(true);
+      speakText(clip.voiceText, clip.tone, clip.voiceStyle);
+      setTimeout(() => setIsAudioPlaying(false), 2500);
+    }
+  };
+
   // Handle play/pause toggle (video only)
   const togglePlay = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -341,7 +386,26 @@ export default function ClipCard({
       </div>
 
       {/* Looping Media Box with Kinetic Transform suggestion */}
-      <div className="relative aspect-video rounded-xl bg-slate-950 overflow-hidden flex items-center justify-center group/media border border-slate-950/40">
+      <div 
+        onClick={(e) => {
+          const hasAudio = !!(
+            clip.voiceAudioUrl || 
+            clip.voiceAudioData || 
+            (clip.mediaType === "audio" && clip.mediaUrl) || 
+            (clip.voiceText && (
+              clip.voiceText.startsWith("audio_url:") || 
+              (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4"))) || 
+              (clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction"))
+            ))
+          );
+          if (!isVideo && hasAudio) {
+            handlePlayAudio(e);
+          }
+        }}
+        className={`relative aspect-video rounded-xl bg-slate-950 overflow-hidden flex items-center justify-center group/media border border-slate-950/40 ${
+          !isVideo && (clip.voiceAudioUrl || clip.voiceAudioData || clip.voiceText || (clip.mediaType === "audio" && clip.mediaUrl)) ? "cursor-pointer" : ""
+        }`}
+      >
         
         {/* Kinetic animations depending on the tone of the reaction */}
         {(() => {
@@ -419,6 +483,14 @@ export default function ClipCard({
           );
         })()}
 
+        {/* Playing audio visual wave badge */}
+        {isAudioPlaying && (
+          <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[10px] font-mono font-bold shadow-lg animate-pulse backdrop-blur-md">
+            <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+            <span>PLAYING AUDIO</span>
+          </div>
+        )}
+
         {/* Media Overlay Controls: Bottom-Left (Reply + Voice), Bottom-Right (Play/Mute for Video) */}
         <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5 z-20">
           <button
@@ -436,9 +508,16 @@ export default function ClipCard({
           </button>
 
           {(() => {
-            const hasAudioUrl = !!(clip.voiceAudioUrl || (clip.mediaType === "audio" && clip.mediaUrl));
+            const hasAudioUrl = !!(
+              clip.voiceAudioUrl || 
+              (clip.voiceText && (
+                clip.voiceText.startsWith("audio_url:") || 
+                (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4")))
+              )) || 
+              (clip.mediaType === "audio" && clip.mediaUrl)
+            );
             const hasVoiceData = !!clip.voiceAudioData;
-            const hasValidVoiceText = !!(clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction"));
+            const hasValidVoiceText = !!(clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction") && !clip.voiceText.startsWith("audio_url:"));
             const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
 
             if (!showAudioButton) return null;
@@ -446,22 +525,12 @@ export default function ClipCard({
             return (
               <button
                 type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  if (clip.voiceAudioUrl) {
-                    const audio = new Audio(clip.voiceAudioUrl);
-                    audio.play().catch((err) => console.warn("Audio playback failed:", err));
-                  } else if (clip.mediaType === "audio" && clip.mediaUrl) {
-                    const audio = new Audio(clip.mediaUrl);
-                    audio.play().catch((err) => console.warn("Audio playback failed:", err));
-                  } else if (clip.voiceAudioData) {
-                    playFilteredAudio(clip.voiceAudioData, clip.voiceStyle || "normal");
-                  } else if (hasValidVoiceText) {
-                    speakText(clip.voiceText!, clip.tone, clip.voiceStyle);
-                  }
-                }}
-                className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+                onClick={handlePlayAudio}
+                className={`flex items-center gap-1 backdrop-blur-md px-2 py-1.5 rounded-lg border shadow-lg transition-all active:scale-95 cursor-pointer ${
+                  isAudioPlaying
+                    ? "bg-emerald-600 text-white border-emerald-400 shadow-emerald-500/30 animate-pulse"
+                    : "bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white border-white/10"
+                }`}
                 title={
                   hasAudioUrl || hasVoiceData
                     ? "Play recorded voice audio"
@@ -469,10 +538,13 @@ export default function ClipCard({
                 }
               >
                 {hasAudioUrl || hasVoiceData ? (
-                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                  <Mic className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-emerald-400"}`} />
                 ) : (
-                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <Volume2 className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-indigo-400"}`} />
                 )}
+                <span className="text-[10px] font-mono font-bold">
+                  {isAudioPlaying ? "Playing..." : "Voice"}
+                </span>
               </button>
             );
           })()}

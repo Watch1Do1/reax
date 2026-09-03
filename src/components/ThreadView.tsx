@@ -5,7 +5,7 @@ import {
   CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2, Mic
 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
-import { speakText, playFilteredAudio } from "../utils/audio";
+import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "../utils/keyUtils";
 
 interface ThreadViewProps {
@@ -134,6 +134,72 @@ export default function ThreadView({
       window.dispatchEvent(new Event("reax_saved_changed"));
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [currentlyPlayingClipId, setCurrentlyPlayingClipId] = useState<string | null>(null);
+
+  const handlePlayClipAudio = (clipToPlay?: Clip, e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    const target = clipToPlay || focusedClip;
+    if (!target) return;
+
+    stopAllFilteredAudio();
+
+    // Resolve audio URL from all possible fields (voiceAudioUrl, encoded in voiceText, or mediaUrl)
+    let audioUrl = target.voiceAudioUrl;
+    if (!audioUrl && target.voiceText) {
+      if (target.voiceText.startsWith("audio_url:")) {
+        audioUrl = target.voiceText.split("|||")[0].replace(/^audio_url:/, "");
+      } else if (target.voiceText.startsWith("http") && (target.voiceText.includes("/storage/") || target.voiceText.includes(".webm") || target.voiceText.includes(".mp4"))) {
+        audioUrl = target.voiceText;
+      }
+    }
+    if (!audioUrl && target.mediaType === "audio") {
+      audioUrl = target.mediaUrl;
+    }
+
+    if (audioUrl) {
+      setIsAudioPlaying(true);
+      setCurrentlyPlayingClipId(target.id);
+      playFilteredAudio(audioUrl, target.voiceStyle || "normal")
+        .catch((err) => {
+          console.warn("Playback error in ThreadView:", err);
+          setIsAudioPlaying(false);
+          setCurrentlyPlayingClipId(null);
+        })
+        .finally(() => {
+          setTimeout(() => {
+            setIsAudioPlaying(false);
+            setCurrentlyPlayingClipId(null);
+          }, 4500);
+        });
+    } else if (target.voiceAudioData) {
+      setIsAudioPlaying(true);
+      setCurrentlyPlayingClipId(target.id);
+      playFilteredAudio(target.voiceAudioData, target.voiceStyle || "normal")
+        .catch(() => {
+          setIsAudioPlaying(false);
+          setCurrentlyPlayingClipId(null);
+        })
+        .finally(() => {
+          setTimeout(() => {
+            setIsAudioPlaying(false);
+            setCurrentlyPlayingClipId(null);
+          }, 4500);
+        });
+    } else if (target.voiceText && target.voiceText.trim() !== "" && !target.voiceText.includes("Voice Reaction") && !target.voiceText.startsWith("audio_url:")) {
+      setIsAudioPlaying(true);
+      setCurrentlyPlayingClipId(target.id);
+      speakText(target.voiceText, target.tone, target.voiceStyle);
+      setTimeout(() => {
+        setIsAudioPlaying(false);
+        setCurrentlyPlayingClipId(null);
+      }, 2500);
     }
   };
 
@@ -325,7 +391,26 @@ export default function ThreadView({
             </div>
 
             {/* Focused Card Media */}
-            <div className="relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-900 shadow-md">
+            <div 
+              onClick={(e) => {
+                const hasAudio = !!(
+                  focusedClip.voiceAudioUrl || 
+                  focusedClip.voiceAudioData || 
+                  (focusedClip.mediaType === "audio" && focusedClip.mediaUrl) || 
+                  (focusedClip.voiceText && (
+                    focusedClip.voiceText.startsWith("audio_url:") || 
+                    (focusedClip.voiceText.startsWith("http") && (focusedClip.voiceText.includes("/storage/") || focusedClip.voiceText.includes(".webm") || focusedClip.voiceText.includes(".mp4"))) ||
+                    (focusedClip.voiceText.trim() !== "" && !focusedClip.voiceText.includes("Voice Reaction"))
+                  ))
+                );
+                if (!isVideo && hasAudio) {
+                  handlePlayClipAudio(focusedClip, e);
+                }
+              }}
+              className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-900 shadow-md ${
+                !isVideo ? "cursor-pointer" : ""
+              }`}
+            >
               <div className={`w-full h-full overflow-hidden flex items-center justify-center ${
                 focusedClip.effect === "zoom" ? "animate-zoom" :
                 focusedClip.effect === "pan" ? "animate-pan" :
@@ -338,7 +423,7 @@ export default function ThreadView({
                   <video 
                     ref={videoRef}
                     src={focusedClip.mediaUrl} 
-                    className="w-full h-full object-cover pointer-events-none"
+                    className="w-full h-full object-cover pointer-events-none" 
                     loop 
                     muted={isMuted}
                     playsInline
@@ -362,6 +447,14 @@ export default function ThreadView({
                 </div>
               )}
 
+              {/* Playing audio visual wave badge */}
+              {isAudioPlaying && (
+                <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[10px] font-mono font-bold shadow-lg animate-pulse backdrop-blur-md">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                  <span>PLAYING AUDIO</span>
+                </div>
+              )}
+
               {/* Compact Overlay Controls: Bottom-Left (Reply + Voice), Bottom-Right (Play/Mute for Video) */}
               <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5 z-20">
                 <button
@@ -379,9 +472,16 @@ export default function ThreadView({
                 </button>
 
                 {(() => {
-                  const hasAudioUrl = !!(focusedClip.voiceAudioUrl || (focusedClip.mediaType === "audio" && focusedClip.mediaUrl));
+                  const hasAudioUrl = !!(
+                    focusedClip.voiceAudioUrl || 
+                    (focusedClip.voiceText && (
+                      focusedClip.voiceText.startsWith("audio_url:") || 
+                      (focusedClip.voiceText.startsWith("http") && (focusedClip.voiceText.includes("/storage/") || focusedClip.voiceText.includes(".webm") || focusedClip.voiceText.includes(".mp4")))
+                    )) || 
+                    (focusedClip.mediaType === "audio" && focusedClip.mediaUrl)
+                  );
                   const hasVoiceData = !!focusedClip.voiceAudioData;
-                  const hasValidVoiceText = !!(focusedClip.voiceText && focusedClip.voiceText.trim() !== "" && !focusedClip.voiceText.includes("Voice Reaction"));
+                  const hasValidVoiceText = !!(focusedClip.voiceText && focusedClip.voiceText.trim() !== "" && !focusedClip.voiceText.includes("Voice Reaction") && !focusedClip.voiceText.startsWith("audio_url:"));
                   const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
 
                   if (!showAudioButton) return null;
@@ -389,22 +489,12 @@ export default function ThreadView({
                   return (
                     <button
                       type="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        if (focusedClip.voiceAudioUrl) {
-                          const audio = new Audio(focusedClip.voiceAudioUrl);
-                          audio.play().catch((err) => console.warn("Audio playback failed:", err));
-                        } else if (focusedClip.mediaType === "audio" && focusedClip.mediaUrl) {
-                          const audio = new Audio(focusedClip.mediaUrl);
-                          audio.play().catch((err) => console.warn("Audio playback failed:", err));
-                        } else if (focusedClip.voiceAudioData) {
-                          playFilteredAudio(focusedClip.voiceAudioData, focusedClip.voiceStyle || "normal");
-                        } else if (hasValidVoiceText) {
-                          speakText(focusedClip.voiceText!, focusedClip.tone, focusedClip.voiceStyle);
-                        }
-                      }}
-                      className="flex items-center gap-1 bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white backdrop-blur-md p-1.5 rounded-lg border border-white/10 shadow-lg transition-all active:scale-95 cursor-pointer"
+                      onClick={(e) => handlePlayClipAudio(focusedClip, e)}
+                      className={`flex items-center gap-1 backdrop-blur-md px-2 py-1.5 rounded-lg border shadow-lg transition-all active:scale-95 cursor-pointer ${
+                        isAudioPlaying
+                          ? "bg-emerald-600 text-white border-emerald-400 shadow-emerald-500/30 animate-pulse"
+                          : "bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white border-white/10"
+                      }`}
                       title={
                         hasAudioUrl || hasVoiceData
                           ? "Play recorded voice audio"
@@ -412,10 +502,13 @@ export default function ThreadView({
                       }
                     >
                       {hasAudioUrl || hasVoiceData ? (
-                        <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                        <Mic className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-emerald-400"}`} />
                       ) : (
-                        <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                        <Volume2 className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-indigo-400"}`} />
                       )}
+                      <span className="text-[10px] font-mono font-bold">
+                        {isAudioPlaying ? "Playing..." : "Voice"}
+                      </span>
                     </button>
                   );
                 })()}
@@ -638,10 +731,26 @@ export default function ThreadView({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   {sortedReplies.slice(0, 3).map((reply) => {
                     const isVideo = reply.mediaUrl.endsWith(".mp4") || reply.mediaUrl.endsWith(".webm") || reply.mediaUrl.includes("mixkit-");
+                    const hasAudio = !!(
+                      reply.voiceAudioUrl || 
+                      reply.voiceAudioData || 
+                      (reply.voiceText && (
+                        reply.voiceText.startsWith("audio_url:") || 
+                        (reply.voiceText.startsWith("http") && (reply.voiceText.includes("/storage/") || reply.voiceText.includes(".webm") || reply.voiceText.includes(".mp4"))) || 
+                        (reply.voiceText.trim() !== "" && !reply.voiceText.includes("Voice Reaction"))
+                      ))
+                    );
+                    const isCurrentPlaying = currentlyPlayingClipId === reply.id;
+
                     return (
                       <div
                         key={`top-${reply.id}`}
-                        onClick={() => setFocusedClipId(reply.id)}
+                        onClick={() => {
+                          setFocusedClipId(reply.id);
+                          if (hasAudio) {
+                            handlePlayClipAudio(reply);
+                          }
+                        }}
                         className="bg-slate-900/90 border border-slate-800/80 hover:border-rose-500/50 rounded-xl p-2.5 cursor-pointer flex flex-row sm:flex-col gap-2.5 items-center sm:items-stretch group hover:bg-slate-900 transition-all active:scale-[0.98] shadow-sm hover:shadow-[0_0_10px_rgba(244,63,94,0.15)]"
                       >
                         <div className="w-14 sm:w-full aspect-video rounded-lg bg-slate-950 overflow-hidden relative border border-slate-800 flex-shrink-0">
@@ -655,9 +764,29 @@ export default function ThreadView({
                           </div>
                         </div>
                         <div className="flex-1 min-w-0 sm:mt-1">
-                          <p className="text-[10px] font-bold text-slate-200 truncate">@{reply.authorName}</p>
+                          <div className="flex items-center justify-between gap-1">
+                            <p className="text-[10px] font-bold text-slate-200 truncate">@{reply.authorName}</p>
+                            {hasAudio && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handlePlayClipAudio(reply, e);
+                                }}
+                                className={`px-1 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-0.5 border transition-all ${
+                                  isCurrentPlaying
+                                    ? "bg-emerald-600 text-white border-emerald-400 animate-pulse"
+                                    : "bg-slate-800 hover:bg-slate-700 text-emerald-400 border-slate-700"
+                                }`}
+                                title="Play voice recording"
+                              >
+                                <Mic className="w-2.5 h-2.5" />
+                                <span>{isCurrentPlaying ? "Playing" : "Voice"}</span>
+                              </button>
+                            )}
+                          </div>
                           <p className="text-[9px] text-slate-400 italic line-clamp-1 mt-0.5 leading-none">
-                            "{reply.overlayText || reply.voiceText || "Visual reaction"}"
+                            "{reply.overlayText || (reply.voiceText && !reply.voiceText.startsWith("audio_url:") ? reply.voiceText : "Visual reaction")}"
                           </p>
                           <p className="text-[8px] font-mono text-rose-400 mt-1 flex items-center gap-0.5">
                             ❤️ {reply.likesCount}
@@ -673,69 +802,107 @@ export default function ThreadView({
             {sortedReplies.length > 0 ? (
               <div className="space-y-4">
                 {/* 1. 🔥 LEADING PATHWAY (Best Reply) */}
-                {sortedReplies[0] && (
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-mono font-black text-rose-400 uppercase tracking-wider block px-1">
-                      👑 LEADING PATHWAY (Best Reply)
-                    </span>
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      onClick={() => setFocusedClipId(sortedReplies[0].id)}
-                      className="bg-gradient-to-r from-rose-950/20 to-indigo-950/25 border border-rose-500/40 hover:border-rose-400 rounded-2xl p-4 flex flex-col sm:flex-row gap-4 cursor-pointer group hover:from-rose-950/30 transition-all duration-300 relative overflow-hidden shadow-md"
-                    >
-                      {/* High momentum background glow */}
-                      <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-xl pointer-events-none" />
-                      
-                      <div className="w-full sm:w-28 aspect-video sm:aspect-square rounded-xl bg-slate-900 overflow-hidden flex-shrink-0 relative border border-rose-500/20">
-                        {sortedReplies[0].mediaUrl.endsWith(".mp4") || sortedReplies[0].mediaUrl.endsWith(".webm") || sortedReplies[0].mediaUrl.includes("mixkit-") ? (
-                          <video src={sortedReplies[0].mediaUrl} className="w-full h-full object-cover" muted playsInline />
-                        ) : (
-                          <img src={sortedReplies[0].mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
-                        )}
-                        {sortedReplies[0].overlayText && (
-                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-1.5 text-center">
-                            <span className="text-[9px] font-sans font-black text-white uppercase tracking-wider line-clamp-2">
-                              {sortedReplies[0].overlayText}
-                            </span>
-                          </div>
-                        )}
-                      </div>
+                {sortedReplies[0] && (() => {
+                  const leadingReply = sortedReplies[0];
+                  const hasLeadingAudio = !!(
+                    leadingReply.voiceAudioUrl || 
+                    leadingReply.voiceAudioData || 
+                    (leadingReply.voiceText && (
+                      leadingReply.voiceText.startsWith("audio_url:") || 
+                      (leadingReply.voiceText.startsWith("http") && (leadingReply.voiceText.includes("/storage/") || leadingReply.voiceText.includes(".webm") || leadingReply.voiceText.includes(".mp4"))) || 
+                      (leadingReply.voiceText.trim() !== "" && !leadingReply.voiceText.includes("Voice Reaction"))
+                    ))
+                  );
+                  const isLeadingPlaying = currentlyPlayingClipId === leadingReply.id;
 
-                      <div className="flex-1 flex flex-col justify-between">
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs text-white font-black">@{sortedReplies[0].authorName}</span>
-                            <span className="px-2 py-0.5 rounded text-[8px] font-mono bg-rose-500/25 text-rose-300 border border-rose-500/30 uppercase tracking-wider">
-                              {sortedReplies[0].tone}
-                            </span>
-                          </div>
-                          {sortedReplies[0].voiceText && (
-                            <p className="text-xs text-slate-300 italic font-sans leading-tight mt-1">
-                              "{sortedReplies[0].voiceText}"
-                            </p>
+                  return (
+                    <div className="space-y-2">
+                      <span className="text-[9px] font-mono font-black text-rose-400 uppercase tracking-wider block px-1">
+                        👑 LEADING PATHWAY (Best Reply)
+                      </span>
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        onClick={() => {
+                          setFocusedClipId(leadingReply.id);
+                          if (hasLeadingAudio) {
+                            handlePlayClipAudio(leadingReply);
+                          }
+                        }}
+                        className="bg-gradient-to-r from-rose-950/20 to-indigo-950/25 border border-rose-500/40 hover:border-rose-400 rounded-2xl p-4 flex flex-col sm:flex-row gap-4 cursor-pointer group hover:from-rose-950/30 transition-all duration-300 relative overflow-hidden shadow-md"
+                      >
+                        {/* High momentum background glow */}
+                        <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-xl pointer-events-none" />
+                        
+                        <div className="w-full sm:w-28 aspect-video sm:aspect-square rounded-xl bg-slate-900 overflow-hidden flex-shrink-0 relative border border-rose-500/20">
+                          {leadingReply.mediaUrl.endsWith(".mp4") || leadingReply.mediaUrl.endsWith(".webm") || leadingReply.mediaUrl.includes("mixkit-") ? (
+                            <video src={leadingReply.mediaUrl} className="w-full h-full object-cover" muted playsInline />
+                          ) : (
+                            <img src={leadingReply.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                          )}
+                          {leadingReply.overlayText && (
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-1.5 text-center">
+                              <span className="text-[9px] font-sans font-black text-white uppercase tracking-wider line-clamp-2">
+                                {leadingReply.overlayText}
+                              </span>
+                            </div>
                           )}
                         </div>
 
-                        <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-3 border-t border-slate-900 mt-2">
-                          <div className="flex items-center gap-3">
-                            <span className="flex items-center gap-1 font-bold text-amber-400">
-                              <span>😂</span>
-                              {sortedReplies[0].laughsCount ?? 0}
-                            </span>
-                            <span className="flex items-center gap-1 text-slate-400">
-                              <Heart className="w-3.5 h-3.5 fill-rose-500/20 text-rose-400" />
-                              {sortedReplies[0].likesCount}
+                        <div className="flex-1 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-white font-black">@{leadingReply.authorName}</span>
+                                {hasLeadingAudio && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handlePlayClipAudio(leadingReply, e);
+                                    }}
+                                    className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-1 border transition-all ${
+                                      isLeadingPlaying
+                                        ? "bg-emerald-600 text-white border-emerald-400 animate-pulse"
+                                        : "bg-slate-900/90 hover:bg-slate-800 text-emerald-400 border-slate-700"
+                                    }`}
+                                  >
+                                    <Mic className="w-2.5 h-2.5" />
+                                    <span>{isLeadingPlaying ? "Playing..." : "Play Voice"}</span>
+                                  </button>
+                                )}
+                              </div>
+                              <span className="px-2 py-0.5 rounded text-[8px] font-mono bg-rose-500/25 text-rose-300 border border-rose-500/30 uppercase tracking-wider">
+                                {leadingReply.tone}
+                              </span>
+                            </div>
+                            {leadingReply.voiceText && !leadingReply.voiceText.startsWith("audio_url:") && (
+                              <p className="text-xs text-slate-300 italic font-sans leading-tight mt-1">
+                                "{leadingReply.voiceText}"
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-3 border-t border-slate-900 mt-2">
+                            <div className="flex items-center gap-3">
+                              <span className="flex items-center gap-1 font-bold text-amber-400">
+                                <span>😂</span>
+                                {leadingReply.laughsCount ?? 0}
+                              </span>
+                              <span className="flex items-center gap-1 text-slate-400">
+                                <Heart className="w-3.5 h-3.5 fill-rose-500/20 text-rose-400" />
+                                {leadingReply.likesCount}
+                              </span>
+                            </div>
+                            <span className="text-indigo-400 group-hover:translate-x-1 transition-transform flex items-center gap-0.5 font-black">
+                              <span>EXPLORE CASCADE ➔</span>
                             </span>
                           </div>
-                          <span className="text-indigo-400 group-hover:translate-x-1 transition-transform flex items-center gap-0.5 font-black">
-                            <span>EXPLORE CASCADE ➔</span>
-                          </span>
                         </div>
-                      </div>
-                    </motion.div>
-                  </div>
-                )}
+                      </motion.div>
+                    </div>
+                  );
+                })()}
 
                 {/* 2. ✨ ALTERNATIVE PATHWAYS (Other Replies) */}
                 {sortedReplies.length > 1 && (
@@ -747,6 +914,17 @@ export default function ThreadView({
                       <AnimatePresence mode="popLayout">
                         {sortedReplies.slice(1).map((reply, index) => {
                           const childRepliesCount = getChainCount(reply.id);
+                          const hasAltAudio = !!(
+                            reply.voiceAudioUrl || 
+                            reply.voiceAudioData || 
+                            (reply.voiceText && (
+                              reply.voiceText.startsWith("audio_url:") || 
+                              (reply.voiceText.startsWith("http") && (reply.voiceText.includes("/storage/") || reply.voiceText.includes(".webm") || reply.voiceText.includes(".mp4"))) || 
+                              (reply.voiceText.trim() !== "" && !reply.voiceText.includes("Voice Reaction"))
+                            ))
+                          );
+                          const isAltPlaying = currentlyPlayingClipId === reply.id;
+
                           return (
                             <motion.div
                               key={`alt-${reply.id}`}
@@ -754,7 +932,12 @@ export default function ThreadView({
                               animate={{ opacity: 1, y: 0 }}
                               exit={{ opacity: 0, scale: 0.95 }}
                               transition={{ duration: 0.25, delay: index * 0.05 }}
-                              onClick={() => setFocusedClipId(reply.id)}
+                              onClick={() => {
+                                setFocusedClipId(reply.id);
+                                if (hasAltAudio) {
+                                  handlePlayClipAudio(reply);
+                                }
+                              }}
                               className="bg-slate-950/40 border border-slate-800/80 hover:border-indigo-500/40 rounded-xl p-3 flex flex-col justify-between cursor-pointer group hover:bg-slate-900/20 active:scale-[0.98] transition-all duration-300 relative overflow-hidden"
                             >
                               <div className="flex items-start gap-2.5 mb-2.5">
@@ -772,15 +955,34 @@ export default function ThreadView({
                                     </div>
                                   )}
                                 </div>
-                                <div className="space-y-0.5 overflow-hidden">
-                                  <span className="block text-[10px] text-slate-300 font-bold truncate">@{reply.authorName}</span>
+                                <div className="space-y-0.5 overflow-hidden flex-1">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="block text-[10px] text-slate-300 font-bold truncate">@{reply.authorName}</span>
+                                    {hasAltAudio && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handlePlayClipAudio(reply, e);
+                                        }}
+                                        className={`px-1 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-0.5 border transition-all ${
+                                          isAltPlaying
+                                            ? "bg-emerald-600 text-white border-emerald-400 animate-pulse"
+                                            : "bg-slate-900 hover:bg-slate-800 text-emerald-400 border-slate-700"
+                                        }`}
+                                      >
+                                        <Mic className="w-2.5 h-2.5" />
+                                        <span>{isAltPlaying ? "Playing" : "Voice"}</span>
+                                      </button>
+                                    )}
+                                  </div>
                                   <span className="block text-[9px] font-mono text-indigo-400 font-bold uppercase">
                                     {reply.tone}
                                   </span>
                                 </div>
                               </div>
 
-                              {reply.voiceText && (
+                              {reply.voiceText && !reply.voiceText.startsWith("audio_url:") && (
                                 <p className="text-[10px] text-slate-400 italic line-clamp-1 mb-2 font-sans">
                                   "{reply.voiceText}"
                                 </p>
