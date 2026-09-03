@@ -439,13 +439,31 @@ export default function ThreadView({
                 )}
               </div>
 
-              {focusedClip.overlayText && (
-                <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-transparent flex items-center justify-center p-3 pointer-events-none">
-                  <h2 className="font-sans font-black text-lg md:text-xl text-white text-center tracking-wider drop-shadow-[0_1.5px_3.5px_rgba(0,0,0,0.85)] uppercase">
-                    {focusedClip.overlayText}
-                  </h2>
-                </div>
-              )}
+              {(() => {
+                const [, , , textStylePosition = "bottom"] = (focusedClip.effect || "zoom").split("|");
+                const positionClasses: Record<string, string> = {
+                  "top-left": "absolute top-3 left-3 flex justify-start items-start text-left max-w-[80%] z-10 pointer-events-none",
+                  "top": "absolute top-3 inset-x-0 flex justify-center items-start text-center px-4 z-10 pointer-events-none",
+                  "top-right": "absolute top-3 right-3 flex justify-end items-start text-right max-w-[80%] z-10 pointer-events-none",
+                  "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
+                  "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
+                  "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
+                  "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
+                  "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
+                  "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
+                  "none": "hidden",
+                };
+
+                return focusedClip.overlayText && textStylePosition !== "none" ? (
+                  <div className={positionClasses[textStylePosition] || positionClasses.bottom || positionClasses.center}>
+                    <h2 className={`font-sans font-black text-base sm:text-lg md:text-xl text-white ${
+                      textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
+                    } tracking-wider drop-shadow-[0_1.5px_3.5px_rgba(0,0,0,0.85)] uppercase line-clamp-2 break-words leading-tight max-w-full`}>
+                      {focusedClip.overlayText}
+                    </h2>
+                  </div>
+                ) : null;
+              })()}
 
               {/* Playing audio visual wave badge */}
               {isAudioPlaying && (

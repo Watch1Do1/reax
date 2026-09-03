@@ -409,14 +409,14 @@ export default function ClipCard({
         
         {/* Kinetic animations depending on the tone of the reaction */}
         {(() => {
-          const [kineticEffectName, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "center"] = (clip.effect || "zoom").split("|");
+          const [kineticEffectName, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "bottom"] = (clip.effect || "zoom").split("|");
           
           const stylePresetClasses: Record<string, string> = {
-            classic: "font-sans font-black text-xl md:text-2xl uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
-            bold: "font-sans font-extrabold text-2xl md:text-3xl uppercase tracking-tighter drop-shadow-md",
-            comic: "font-serif italic font-black text-xl md:text-2xl lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
-            glitch: "font-mono font-black text-lg md:text-xl uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
-            cinema: "font-serif font-light text-base md:text-lg uppercase tracking-[0.25em] text-neutral-100",
+            classic: "font-sans font-black text-sm sm:text-base md:text-lg uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
+            bold: "font-sans font-extrabold text-base sm:text-lg md:text-xl uppercase tracking-tighter drop-shadow-md",
+            comic: "font-serif italic font-black text-sm sm:text-base md:text-lg lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
+            glitch: "font-mono font-black text-xs sm:text-sm md:text-base uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
+            cinema: "font-serif font-light text-xs sm:text-sm md:text-base uppercase tracking-[0.25em] text-neutral-100",
           };
 
           const textColorClasses: Record<string, string> = {
@@ -427,10 +427,16 @@ export default function ClipCard({
           };
 
           const positionClasses: Record<string, string> = {
-            top: "absolute top-4 inset-x-0 flex justify-center px-4 z-10 pointer-events-none",
-            center: "absolute inset-0 flex items-center justify-center px-4 z-10 pointer-events-none",
-            bottom: "absolute bottom-4 inset-x-0 flex justify-center px-4 z-10 pointer-events-none",
-            none: "hidden",
+            "top-left": "absolute top-3 left-3 flex justify-start items-start text-left max-w-[80%] z-10 pointer-events-none",
+            "top": "absolute top-3 inset-x-0 flex justify-center items-start text-center px-4 z-10 pointer-events-none",
+            "top-right": "absolute top-3 right-3 flex justify-end items-start text-right max-w-[80%] z-10 pointer-events-none",
+            "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
+            "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
+            "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
+            "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
+            "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
+            "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
+            "none": "hidden",
           };
 
           return (
@@ -473,8 +479,10 @@ export default function ClipCard({
 
               {/* Optional Big overlay text */}
               {clip.overlayText && textStylePosition !== "none" && (
-                <div className={positionClasses[textStylePosition] || positionClasses.center}>
-                  <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} text-center`}>
+                <div className={positionClasses[textStylePosition] || positionClasses.bottom || positionClasses.center}>
+                  <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} ${
+                    textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
+                  } line-clamp-2 break-words leading-tight max-w-full`}>
                     {clip.overlayText}
                   </h2>
                 </div>

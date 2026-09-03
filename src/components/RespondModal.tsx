@@ -162,7 +162,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const [visualEffect, setVisualEffect] = useState("zoom");
   const [textStyle, setTextStyle] = useState("classic");
   const [textColor, setTextColor] = useState("white");
-  const [textPosition, setTextPosition] = useState("center");
+  const [textPosition, setTextPosition] = useState("bottom");
   const [previewMuted, setPreviewMuted] = useState(true);
   
   // Camera & Video Capture
@@ -302,7 +302,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         setAudioMode("none");
       }
       setOverlayText(remixData.overlayText || "");
-      const [parsedEffect = "zoom", parsedStyle = "classic", parsedColor = "white", parsedPosition = "center"] = (remixData.effect || "zoom").split("|");
+      const [parsedEffect = "zoom", parsedStyle = "classic", parsedColor = "white", parsedPosition = "bottom"] = (remixData.effect || "zoom").split("|");
       setVisualEffect(parsedEffect);
       setTextStyle(parsedStyle);
       setTextColor(parsedColor);
@@ -1189,11 +1189,11 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                   {/* Optional Big overlay text with active styles */}
                   {(() => {
                     const stylePresetClasses: Record<string, string> = {
-                      classic: "font-sans font-black text-xl md:text-2xl uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
-                      bold: "font-sans font-extrabold text-2xl md:text-3xl uppercase tracking-tighter drop-shadow-md",
-                      comic: "font-serif italic font-black text-xl md:text-2xl lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
-                      glitch: "font-mono font-black text-lg md:text-xl uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
-                      cinema: "font-serif font-light text-base md:text-lg uppercase tracking-[0.25em] text-neutral-100",
+                      classic: "font-sans font-black text-sm sm:text-base md:text-lg uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
+                      bold: "font-sans font-extrabold text-base sm:text-lg md:text-xl uppercase tracking-tighter drop-shadow-md",
+                      comic: "font-serif italic font-black text-sm sm:text-base md:text-lg lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
+                      glitch: "font-mono font-black text-xs sm:text-sm md:text-base uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
+                      cinema: "font-serif font-light text-xs sm:text-sm md:text-base uppercase tracking-[0.25em] text-neutral-100",
                     };
 
                     const textColorClasses: Record<string, string> = {
@@ -1204,15 +1204,23 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     };
 
                     const positionClasses: Record<string, string> = {
-                      top: "absolute top-4 inset-x-0 flex justify-center px-4 z-10 pointer-events-none",
-                      center: "absolute inset-0 flex items-center justify-center px-4 z-10 pointer-events-none",
-                      bottom: "absolute bottom-4 inset-x-0 flex justify-center px-4 z-10 pointer-events-none",
-                      none: "hidden",
+                      "top-left": "absolute top-3 left-3 flex justify-start items-start text-left max-w-[80%] z-10 pointer-events-none",
+                      "top": "absolute top-3 inset-x-0 flex justify-center items-start text-center px-4 z-10 pointer-events-none",
+                      "top-right": "absolute top-3 right-3 flex justify-end items-start text-right max-w-[80%] z-10 pointer-events-none",
+                      "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
+                      "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
+                      "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
+                      "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
+                      "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
+                      "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
+                      "none": "hidden",
                     };
 
                     return overlayText && textPosition !== "none" ? (
-                      <div className={positionClasses[textPosition] || positionClasses.center}>
-                        <h2 className={`${stylePresetClasses[textStyle] || stylePresetClasses.classic} ${textColorClasses[textColor] || textColorClasses.white} text-center`}>
+                      <div className={positionClasses[textPosition] || positionClasses.bottom || positionClasses.center}>
+                        <h2 className={`${stylePresetClasses[textStyle] || stylePresetClasses.classic} ${textColorClasses[textColor] || textColorClasses.white} ${
+                          textPosition.includes("left") ? "text-left" : textPosition.includes("right") ? "text-right" : "text-center"
+                        } line-clamp-2 break-words leading-tight max-w-full`}>
                           {overlayText}
                         </h2>
                       </div>
@@ -1250,7 +1258,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                         <label className="block text-[10px] font-bold text-slate-400 font-mono tracking-wider">
                           MEME OVERLAY TEXT:
                         </label>
-                        <span className="text-[8px] text-slate-500 font-mono">{overlayText.length}/15</span>
+                        <span className="text-[8px] text-slate-500 font-mono">{overlayText.length}/48</span>
                       </div>
                       <input 
                         type="text" 
@@ -1258,63 +1266,103 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                         onChange={(e) => setOverlayText(e.target.value)}
                         className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-indigo-500 rounded-xl text-xs text-white focus:outline-none"
                         placeholder="e.g. MIND BLOWN"
-                        maxLength={15}
+                        maxLength={48}
                       />
                     </div>
 
                     {/* Visual Customization: Style, Color, Position */}
-                    <div className="grid grid-cols-3 gap-2.5 pt-2 pb-0.5 border-t border-slate-800/40">
-                      
-                      {/* Text Style Preset Dropdown/Selector */}
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-bold text-slate-400 font-mono tracking-wider uppercase">
-                          Style Preset:
-                        </label>
-                        <select
-                          value={textStyle}
-                          onChange={(e) => setTextStyle(e.target.value)}
-                          className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 text-[10px] font-semibold text-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
-                        >
-                          <option value="classic">Classic Meme</option>
-                          <option value="bold">Heavy Impact</option>
-                          <option value="comic">Comic Playful</option>
-                          <option value="glitch">Glitch Cyber</option>
-                          <option value="cinema">Cinema Minimal</option>
-                        </select>
+                    <div className="pt-2 pb-0.5 border-t border-slate-800/40 space-y-3">
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {/* Text Style Preset Dropdown/Selector */}
+                        <div className="space-y-1">
+                          <label className="block text-[9px] font-bold text-slate-400 font-mono tracking-wider uppercase">
+                            Style Preset:
+                          </label>
+                          <select
+                            value={textStyle}
+                            onChange={(e) => setTextStyle(e.target.value)}
+                            className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 text-[10px] font-semibold text-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
+                          >
+                            <option value="classic">Classic Meme</option>
+                            <option value="bold">Heavy Impact</option>
+                            <option value="comic">Comic Playful</option>
+                            <option value="glitch">Glitch Cyber</option>
+                            <option value="cinema">Cinema Minimal</option>
+                          </select>
+                        </div>
+
+                        {/* Text Color Dropdown/Selector */}
+                        <div className="space-y-1">
+                          <label className="block text-[9px] font-bold text-slate-400 font-mono tracking-wider uppercase">
+                            Text Color:
+                          </label>
+                          <select
+                            value={textColor}
+                            onChange={(e) => setTextColor(e.target.value)}
+                            className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 text-[10px] font-semibold text-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
+                          >
+                            <option value="white">⚪ White</option>
+                            <option value="yellow">💛 Yellow</option>
+                            <option value="red">❤️ Rose Red</option>
+                            <option value="cyan">🩵 Neon Cyan</option>
+                          </select>
+                        </div>
                       </div>
 
-                      {/* Text Color Dropdown/Selector */}
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-bold text-slate-400 font-mono tracking-wider uppercase">
-                          Text Color:
-                        </label>
-                        <select
-                          value={textColor}
-                          onChange={(e) => setTextColor(e.target.value)}
-                          className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 text-[10px] font-semibold text-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
-                        >
-                          <option value="white">⚪ White</option>
-                          <option value="yellow">💛 Yellow</option>
-                          <option value="red">❤️ Rose Red</option>
-                          <option value="cyan">🩵 Neon Cyan</option>
-                        </select>
-                      </div>
-
-                      {/* Text Position Dropdown/Selector */}
-                      <div className="space-y-1">
-                        <label className="block text-[9px] font-bold text-slate-400 font-mono tracking-wider uppercase">
-                          Placement:
-                        </label>
-                        <select
-                          value={textPosition}
-                          onChange={(e) => setTextPosition(e.target.value)}
-                          className="w-full px-2 py-1.5 bg-slate-900 border border-slate-800 hover:border-slate-700 text-[10px] font-semibold text-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 cursor-pointer transition-colors"
-                        >
-                          <option value="top">Top Header</option>
-                          <option value="center">Center Focus</option>
-                          <option value="bottom">Bottom Footer</option>
-                          <option value="none">🙈 No Text</option>
-                        </select>
+                      {/* Position Pad: 3x3 + Off */}
+                      <div className="space-y-1.5 bg-slate-900/50 border border-slate-800/80 rounded-xl p-2.5">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-[9px] font-bold text-slate-400 font-mono tracking-wider uppercase">
+                            Position Pad:
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setTextPosition(textPosition === "none" ? "bottom" : "none")}
+                            className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold transition-all border cursor-pointer ${
+                              textPosition === "none"
+                                ? "bg-rose-500/20 text-rose-300 border-rose-500/40 shadow-sm"
+                                : "bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:border-slate-700"
+                            }`}
+                            title="Turn overlay text off"
+                          >
+                            {textPosition === "none" ? "✕ Off" : "Off"}
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="grid grid-cols-3 gap-1 w-28 p-1 bg-slate-950 border border-slate-800 rounded-lg">
+                            {[
+                              { id: "top-left", label: "↖", title: "Top-Left" },
+                              { id: "top", label: "↑", title: "Top" },
+                              { id: "top-right", label: "↗", title: "Top-Right" },
+                              { id: "left", label: "←", title: "Left" },
+                              { id: "center", label: "•", title: "Center" },
+                              { id: "right", label: "→", title: "Right" },
+                              { id: "bottom-left", label: "↙", title: "Bottom-Left" },
+                              { id: "bottom", label: "↓", title: "Bottom" },
+                              { id: "bottom-right", label: "↘", title: "Bottom-Right" },
+                            ].map((pos) => (
+                              <button
+                                key={pos.id}
+                                type="button"
+                                onClick={() => setTextPosition(pos.id)}
+                                title={pos.title}
+                                className={`h-6 rounded text-[11px] font-bold flex items-center justify-center transition-all cursor-pointer ${
+                                  textPosition === pos.id
+                                    ? "bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-400"
+                                    : "text-slate-400 hover:text-white hover:bg-slate-800/80 bg-slate-900/60"
+                                }`}
+                              >
+                                {pos.label}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="flex-1 text-[10px] font-mono text-slate-400 space-y-0.5">
+                            <span className="text-slate-500 block text-[9px]">Active Position:</span>
+                            <span className="font-bold text-indigo-300 bg-indigo-950/50 px-2 py-0.5 rounded border border-indigo-800/50 inline-block capitalize">
+                              {textPosition === "none" ? "Off (Hidden)" : textPosition}
+                            </span>
+                          </div>
+                        </div>
                       </div>
 
                     </div>
@@ -1781,15 +1829,19 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       {/* Custom Overlay & TTS Input Overrides */}
                       <div className="grid grid-cols-2 gap-3.5">
                         <div className="space-y-1">
-                          <label className="block text-[10px] font-bold text-slate-400 tracking-wider font-mono">
-                            2. OVERLAY TEXT:
-                          </label>
+                          <div className="flex items-center justify-between">
+                            <label className="block text-[10px] font-bold text-slate-400 tracking-wider font-mono">
+                              2. OVERLAY TEXT:
+                            </label>
+                            <span className="text-[8px] text-slate-500 font-mono">{overlayText.length}/48</span>
+                          </div>
                           <input 
                             type="text" 
                             value={overlayText}
                             onChange={(e) => setOverlayText(e.target.value)}
                             className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-indigo-500 rounded-xl text-xs text-white focus:outline-none"
-                            maxLength={15}
+                            placeholder="e.g. MIND BLOWN"
+                            maxLength={48}
                           />
                         </div>
                         <div className="space-y-1">

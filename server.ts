@@ -1538,7 +1538,7 @@ app.post("/api/clips", async (req, res) => {
       likesCount: 0,
       laughsCount: 0,
       effect: effect || "zoom",
-      overlayText,
+      overlayText: typeof overlayText === "string" ? overlayText.slice(0, 48) : (overlayText || undefined),
       originalAuthor,
       remixedFrom,
       deleted: false,
