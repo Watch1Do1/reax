@@ -1,260 +1,229 @@
-# 🎤 Reax
+Reax
 
-### Audio-first social reactions, memes, and threaded conversations.
+The comment section has never been this fun.
 
-**Reax is an audio-first social reaction platform where comments become memes, voice clips, images, and videos.**
+Reax is a reaction-first social platform where people respond with content instead of comments.
 
-Instead of replying with plain text, users create rich reactions that can grow into threaded conversation chains.
+Post a photo or short video. Add a caption and optional voice.
 
----
+Instead of typing a reply, people respond with their own reaction:
 
-## 🚀 What Is Reax?
+📷 Photo or short video
+✏️ Caption
+🎙️ Optional voice clip
+⚡ Fast one-tap reactions
 
-Most social platforms revolve around:
+The result is a chain of visual and audio responses where the conversation becomes the content.
 
-- Like
-- Comment
-- Share
+Built for reactions, not comments.
 
-Reax is built around:
+Why Reax?
 
-- React
-- Respond
-- Create
-- Participate
+Most social platforms work like this:
 
-Users can record their voice, upload videos or images, add meme captions, and build reaction chains that evolve into entire conversations.
+Post
+ └─ Comment
+ └─ Comment
+ └─ Comment
 
----
 
-## ✨ Core Features
+Reax works like this:
 
-### 🎤 Voice Reactions
+Post
+ └─ Reaction
+      └─ Reaction
+           └─ Reaction
+                └─ Reaction
 
-Record short audio reactions directly within the app.
 
-Examples:
+Instead of scrolling through text, you watch and hear how people respond.
 
-- "BRO WHAT 😂"
-- "Absolutely not."
-- "No way this happened."
+Think:
 
-Voice reactions are a core part of the Reax experience.
+GIF wars
+Meme replies
+Reaction videos
+Visual conversations
 
----
+All in one place.
 
-### 🎬 Video Reactions
+Features
+🎬 Create Reactions
 
-Upload or create short-form reaction videos.
+Create a root post with:
 
-Perfect for:
+Photo
+Short video
+Caption
+Optional voice recording
+⚡ Fast Reax
 
-- Facial reactions
-- Celebrations
-- Dramatic responses
-- Meme content
+Reply in just a few taps:
 
----
+Tap React
+Choose a tone
+Publish
 
-### 🖼️ Image Reactions
+No typing required.
 
-Create reactions using:
-
-- Photos
-- Screenshots
-- Memes
-- Reaction images
-
----
-
-### 💬 Meme Captions
-
-Add custom overlay text to reactions.
-
-Features include:
-
-- Multiple text styles
-- Caption placement options
-- Meme-friendly formatting
-
----
-
-### 🎞️ Motion Effects
-
-Enhance reactions with lightweight visual effects such as:
-
-- Shake
-- Zoom
-- Pulse
-- Bounce
-- Glitch
-
----
-
-### 🧵 Threaded Conversations
+🧵 Reaction Threads
 
 Every reaction can receive reactions.
 
-Example:
+Threads become cascading conversations where the funniest or most creative responses rise naturally.
 
+🎙️ Voice Responses
+
+Add personality with short voice clips.
+
+Sometimes hearing a reaction is better than reading a comment.
+
+📦 Reaction Vault
+
+Save your favorite reactions and reuse them later.
+
+Build your own library of response templates.
+
+👤 Guest Posting
+
+Try Reax without creating an account.
+
+Sign up later to claim your username and profile.
+
+📱 Mobile First
+
+Works directly in the browser on phones, tablets, and desktop.
+
+No app download required.
+
+What Reax Is
+
+✅ A reaction platform
+
+✅ A visual conversation platform
+
+✅ A place for meme chains and reaction battles
+
+✅ A new way to respond to content
+
+What Reax Is Not
+
+❌ A traditional comment section
+
+❌ A chat app
+
+❌ Another TikTok clone
+
+❌ Another photo-sharing app
+
+The goal isn't posting.
+
+The goal is reacting.
+
+Example
 Original Post
 
-→ Video Reaction
+"Just launched my new product."
 
-→ Voice Reaction
+Traditional Comment Section
+Looks cool.
+Love it.
+Too expensive.
+Nice work.
 
-→ Meme Response
+Reax
+😲 "WAIT WHAT?"
+   └─ 😂 "BRO TAKE MY MONEY"
+       └─ 🤔 "How much is it?"
+            └─ 😱 "I need this."
 
-→ Additional Reactions
 
-This creates conversation trees instead of flat comment sections.
+Every response becomes content.
 
----
+Tech Stack
+Frontend
+React
+TypeScript
+Vite
+Tailwind CSS
+Backend
+Express
+TypeScript
+Infrastructure
+Vercel
+Supabase
+Storage
+Supabase Storage
+Image uploads
+Video uploads
+Audio uploads
+Authentication
+Email + Password
+Guest mode support
+Running Locally
+Requirements
+Node.js
+Supabase project
+Install
+Shell
+1
+npm install
+Show more lines
+Environment Variables
+Shell
+env isn’t fully supported. Syntax highlighting is based on Shell.
+1
+SUPABASE_URL=
+2
+SUPABASE_ANON_KEY=
+3
+SUPABASE_SERVICE_ROLE_KEY=
+4
+GEMINI_API_KEY=
+Show more lines
+Start Development Server
+Shell
+1
+npm run dev
+Show more lines
+Vision
 
-### ❤️ Engagement System
+The internet learned how to post.
 
-Users can:
+Reax is about learning how to react.
 
-- Like reactions
-- Follow conversations
-- Browse trending threads
-- Discover popular content
+We believe some of the most entertaining content online isn't the original post.
 
----
+It's the response.
 
-## 🛡️ Community Safety
+Taglines
 
-Reax includes moderation tools designed for early-stage community management.
+Some alternative taglines we've considered:
 
-### Reporting Categories
+The comment section has never been this fun.
+Built for reactions, not comments.
+Turn comments into content.
+See the response. Hear the response.
+Reply with more than words.
+The response is the story.
 
-Users can report content for:
+Reax The comment section has never been this fun. 🚀
 
-- Pornography
-- Copyright Violations
-- Harassment
-- Spam
-- Violence
-- Other
+For GitHub specifically, I'd actually make the hero section extremely concise:
 
-### Moderation Tools
-
-Admins can:
-
-- Review reports
-- Soft delete content
-- Restore deleted content
-- Suspend users
-- Remove suspensions
-- Issue moderation strikes
-
----
-
-## 📊 Founder Dashboard
-
-The platform includes an internal administrative dashboard with:
-
-### Analytics
-
-- Total Users
-- Total Reactions
-- Root Threads
-- Replies
-- Voice Reactions
-- Video Reactions
-- Image Reactions
-
-### Content Management
-
-- Content search
-- User filtering
-- Thread inspection
-- Soft delete and restore
-
-### Moderation Queue
-
-- Report review
-- Content removal
-- User suspension
-
-### User Management
-
-- User activity tracking
-- Strike tracking
-- Suspension management
-
----
-
-## 🏗️ Tech Stack
-
-### Frontend
-
-- React
-- TypeScript
-- Tailwind CSS
-- Motion
-
-### Backend
-
-- Supabase
-
-### Deployment
-
-- Vercel
-
-### Authentication & Data
-
-- Supabase Auth
-- Supabase Database
-- Supabase Storage
-
----
-
-## 🎯 Project Goal
-
-Reax is an experiment in making online reactions more expressive than simple comments.
-
-The core hypothesis is:
-
-> People would rather react with voices, memes, images, and videos than plain text comments.
-
----
-
-## 🔮 Planned Features
-
-Potential future features include:
-
-- Audio voice filters
-- Enhanced meme creation tools
-- Trending algorithms
-- Creator profiles
-- Community discovery
-- Advanced moderation tools
-
----
-
-## 🚧 Current Status
-
-Reax is currently in active development and testing.
-
-Feedback is being collected on:
-
-- User experience
-- Voice reaction workflows
-- Threaded conversations
-- Meme creation speed
-- Community engagement
-
----
-
-## 🤝 Contributing
-
-Feedback, bug reports, and feature suggestions are always welcome.
-
----
-
-## 📄 License
-
-All rights reserved.
-
-© Reax
+Markdown
+1
+# Reax
+2
+ 
+3
+> The comment section has never been this fun.
+4
+ 
+5
+Reax is a reaction-first social platform where people reply with photos, videos, captions, and voice instead of comments.
+6
+ 
+7
+Built for reactions, not comments.
+Show more lines
