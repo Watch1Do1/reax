@@ -1120,138 +1120,124 @@ export default function App() {
               {activeDocsTab === "privacy" ? (
                 <div className="text-slate-300 space-y-4 text-xs md:text-sm leading-relaxed text-left">
                   <h2 className="text-xl font-sans font-black text-white tracking-tight uppercase">📄 Privacy Policy</h2>
-                  <p className="font-mono text-[10px] text-slate-500">Effective Date: June 2026</p>
+                  <p className="font-mono text-[10px] text-slate-500">Effective: September 4, 2026</p>
                   
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">1. Overview</h3>
-                    <p>Reax (“we”, “our”, “us”) respects your privacy. This Privacy Policy explains what information we collect and how we use it.</p>
-                  </div>
+                  <p>Reax (“we”) runs getreax.com. This explains what we collect and why.</p>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">2. Information We Collect</h3>
-                    <p>We may collect:</p>
-                    <ul className="list-disc pl-5 mt-1 space-y-0.5">
-                      <li>Username (if you create one)</li>
-                      <li>Content you create (images, videos, reactions)</li>
-                      <li>Usage data (interactions, clicks, engagement)</li>
-                      <li>Device/browser information (for functionality and performance)</li>
+                    <h3 className="font-bold text-white text-sm mt-3">What we collect</h3>
+                    <ul className="list-disc pl-5 mt-1 space-y-1">
+                      <li>Email and password if you create an account (password is stored as a hash by our auth provider)</li>
+                      <li>Username and profile details you choose</li>
+                      <li>Content you post: photos, short videos, captions, recorded voice</li>
+                      <li>Guest / anonymous session ids if you post without an account</li>
+                      <li>Basic device and log data needed to run the site (browser, errors, abuse signals)</li>
                     </ul>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">3. User Content</h3>
-                    <p>By using Reax, you may upload:</p>
-                    <ul className="list-disc pl-5 mt-1 space-y-0.5">
-                      <li>photos</li>
-                      <li>videos</li>
-                      <li>audio (generated or recorded)</li>
-                    </ul>
-                    <p className="mt-1">This content may be stored, displayed publicly in the app, and visible to other users.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">What is public</h3>
+                    <p>Loops you post are public. Other people can view, reply to, save, and remix them in the app.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">4. How We Use Information</h3>
-                    <p>We use data to operate and improve the app, generate AI-powered reactions, enable interaction between users, and monitor and prevent abuse.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">How we use it</h3>
+                    <p>To operate Reax, show the feed and threads, store media, send confirm-email links, prevent abuse, and improve the product. We do not sell your personal information.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">5. Sharing of Information</h3>
-                    <p>We do not sell your personal data. We may share data with service providers (hosting, AI services), when required by law, or to enforce our Terms of Service.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Processors</h3>
+                    <p>We use hosting and database providers (currently Vercel and Supabase) to store accounts, clips, and media. They process data only to provide those services.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">6. AI-Generated Content</h3>
-                    <p>Reax uses AI to generate text overlays and voice audio based on user inputs and system prompts.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">AI</h3>
+                    <p>Reax does not send your posts to a paid AI API today. Optional on-device text-to-speech may read a caption you typed. If we add server AI later, we will update this policy.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">7. Data Storage</h3>
-                    <p>Content may be stored on remote servers, and some data may be stored locally (e.g., saved reactions). We take reasonable steps to secure your data.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Storage</h3>
+                    <p>Media lives on remote storage. Some preferences (saved reactions) stay in your browser. We do not promise forever storage.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">8. Your Rights</h3>
-                    <p>You may request removal of content or stop using the service at any time.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Your choices</h3>
+                    <p>Delete your own clips in the app. Request account or content removal at the contact below. Stop using the service at any time.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">9. Children’s Privacy</h3>
-                    <p>Reax is not intended for users under 13.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Children</h3>
+                    <p>Not for anyone under 13.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">10. Changes to Policy</h3>
-                    <p>We may update this policy. Continued use means acceptance.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Changes</h3>
+                    <p>We may update this policy. Continued use after a change means you accept the new version.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">11. Contact</h3>
-                    <p>For questions, contact: <span className="text-amber-400 font-mono">support@reax.co</span></p>
+                    <h3 className="font-bold text-white text-sm mt-3">Contact</h3>
+                    <p>
+                      <a href="mailto:team@watch1do1.com" className="text-amber-400 font-mono hover:underline">
+                        team@watch1do1.com
+                      </a>
+                    </p>
                   </div>
                 </div>
               ) : (
                 <div className="text-slate-300 space-y-4 text-xs md:text-sm leading-relaxed text-left">
                   <h2 className="text-xl font-sans font-black text-white tracking-tight uppercase">📄 Terms of Service</h2>
-                  <p className="font-mono text-[10px] text-slate-500">Effective Date: June 2026</p>
+                  <p className="font-mono text-[10px] text-slate-500">Effective: September 4, 2026</p>
+
+                  <p>By using getreax.com you agree to these terms. If you don’t, don’t use Reax.</p>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">1. Acceptance</h3>
-                    <p>By using Reax, you agree to these Terms. If you do not agree, do not use the app.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Your content</h3>
+                    <p>You own what you upload. You must have the right to post it. You must not post illegal, hateful, harassing, sexual-involving-minors, or infringing material.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">2. User Content Responsibility</h3>
-                    <p>You are responsible for content you upload. You agree that you own or have rights to the content, your content does not violate laws or rights, and your content is not abusive, illegal, or harmful.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">License to us</h3>
+                    <p>You give Reax a non-exclusive license to host, display, and distribute your content inside the service so reactions and threads work.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">3. Content Usage License</h3>
-                    <p>By posting on Reax, you grant us a non-exclusive license to display your content, distribute it within the app, and use it to operate and improve the platform.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Remix</h3>
+                    <p>Others may reply with new loops that reference your post. Attribution may show automatically. That is how the product works.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">4. Remixing & Attribution</h3>
-                    <p>Reax allows reuse and remixing of content. Your content may be reused by others and attribution may be displayed automatically. You agree to this behavior by using the app.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Accounts</h3>
+                    <p>You’re responsible for your username and password. We may reclaim names or remove accounts that break these terms. Guest posts are still bound by these rules.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">5. Prohibited Content</h3>
-                    <p>You may NOT upload illegal content, copyrighted material you do not own, harmful or abusive material, or content that violates others’ rights.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Moderation</h3>
+                    <p>We may hide or delete content, including after a report. We may suspend access.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">6. Content Removal</h3>
-                    <p>We may remove content that violates these terms, is reported by users, or poses risk to the platform.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">No warranty</h3>
+                    <p>Reax is provided “as is.” Uptime and permanent storage are not guaranteed.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">7. Account/Usernames</h3>
-                    <p>You are responsible for your username. We may reclaim or remove usernames if needed.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Liability</h3>
+                    <p>We are not responsible for other users’ content or for loss of data beyond what the law requires.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">8. No Guarantees</h3>
-                    <p>Reax is provided “as is.” We do not guarantee uninterrupted access or permanent storage of content.</p>
+                    <h3 className="font-bold text-white text-sm mt-3">Changes</h3>
+                    <p>We may update these terms. Continued use means acceptance.</p>
                   </div>
 
                   <div>
-                    <h3 className="font-bold text-white text-sm mt-3">9. Limitation of Liability</h3>
-                    <p>We are not liable for user-generated content, loss of data, or damages from use of the app.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">10. Termination</h3>
-                    <p>We may restrict or terminate access at any time if terms are violated.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">11. Changes</h3>
-                    <p>We may update these Terms. Continued use = acceptance.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">12. Contact</h3>
-                    <p>For questions, contact: <span className="text-amber-400 font-mono">support@reax.co</span></p>
+                    <h3 className="font-bold text-white text-sm mt-3">Contact</h3>
+                    <p>
+                      <a href="mailto:team@watch1do1.com" className="text-amber-400 font-mono hover:underline">
+                        team@watch1do1.com
+                      </a>
+                    </p>
                   </div>
                 </div>
               )}
