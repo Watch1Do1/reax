@@ -217,7 +217,7 @@ export default function ClipCard({
         }
       }
 
-      // 3. Draw "getREAX.com" at ~11px, 60% white, opposite the caption (if caption is bottom-right, put URL top-right)
+      // 3. Draw "getREAX.com" with dynamic contrast opposite the caption
       const hasCaption = Boolean(clip.overlayText && clip.overlayText.trim() && textStylePosition !== "none");
       const pos = hasCaption ? textStylePosition : "bottom-right";
 
@@ -272,13 +272,51 @@ export default function ClipCard({
         wmY = height - wmPadY;
       }
 
+      // Sample 24x24 patch around watermark location (clamped to canvas bounds)
+      let avg = 0;
+      try {
+        const patchSize = 24;
+        let patchX = Math.round(wmAlign === "right" ? wmX - patchSize : wmX);
+        let patchY = Math.round(wmBaseline === "bottom" ? wmY - patchSize : wmY);
+        patchX = Math.max(0, Math.min(width - Math.min(patchSize, width), patchX));
+        patchY = Math.max(0, Math.min(height - Math.min(patchSize, height), patchY));
+        const patchW = Math.max(1, Math.min(patchSize, width - patchX));
+        const patchH = Math.max(1, Math.min(patchSize, height - patchY));
+
+        const imgData = ctx.getImageData(patchX, patchY, patchW, patchH);
+        const data = imgData.data;
+        let totalLuminance = 0;
+        let pixelCount = 0;
+
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          // avg = 0.299*r + 0.587*g + 0.114*b
+          totalLuminance += 0.299 * r + 0.587 * g + 0.114 * b;
+          pixelCount++;
+        }
+        avg = pixelCount > 0 ? totalLuminance / pixelCount : 0;
+      } catch {
+        avg = 0;
+      }
+
+      // If avg > 140 use fill rgba(20,20,20,0.8) and stroke rgba(255,255,255,0.55)
+      // Else use fill rgba(255,255,255,0.8) and stroke rgba(0,0,0,0.55)
+      const isBright = avg > 140;
+      const fillColor = isBright ? "rgba(20, 20, 20, 0.8)" : "rgba(255, 255, 255, 0.8)";
+      const strokeColor = isBright ? "rgba(255, 255, 255, 0.55)" : "rgba(0, 0, 0, 0.55)";
+      const lineWidth = Math.max(1, Math.round(2 * wmScale));
+
       ctx.save();
       ctx.font = `600 ${wmFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
       ctx.textAlign = wmAlign;
       ctx.textBaseline = wmBaseline;
-      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
-      ctx.shadowColor = "rgba(0, 0, 0, 0.6)";
-      ctx.shadowBlur = Math.round(3 * wmScale);
+      ctx.lineJoin = "round";
+      ctx.lineWidth = lineWidth;
+      ctx.strokeStyle = strokeColor;
+      ctx.fillStyle = fillColor;
+      ctx.strokeText("getREAX.com", wmX, wmY);
       ctx.fillText("getREAX.com", wmX, wmY);
       ctx.restore();
 
