@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { 
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
-  ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User
+  ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User,
+  MoreVertical
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -61,6 +62,7 @@ export default function App() {
 
   // Profile Panel & Onboarding Modal states
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeTriggerReason, setUpgradeTriggerReason] = useState<"save_reaction" | "post_limit" | "edit_username" | "nav_click" | null>(null);
 
@@ -599,345 +601,156 @@ export default function App() {
     <div className="min-h-screen bg-transparent text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-white">
       
       {/* Header Bar */}
-      <header className="sticky top-0 z-30 bg-[#08090c]/75 backdrop-blur-md border-b border-slate-800/30 px-4 py-3.5 shadow-sm">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-[#08090c]/85 backdrop-blur-md border-b border-slate-800/40 px-4 py-3 shadow-sm">
+        <div className="max-w-4xl mx-auto flex items-center justify-between">
           
-          {/* Logo */}
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-rose-600 flex items-center justify-center shadow-lg shadow-indigo-500/10">
-              <Film className="w-5.5 h-5.5 text-white" />
+          {/* Left: Reax Wordmark */}
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-rose-600 flex items-center justify-center shadow-md shadow-indigo-500/15">
+              <Film className="w-4.5 h-4.5 text-white" />
             </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-sans font-black text-xl tracking-tight text-white uppercase">Reax</span>
-              </div>
-              <span className="text-[10px] text-slate-500 font-mono tracking-wider block -mt-0.5 uppercase">VISUAL REACTION CASCADES</span>
-            </div>
+            <span className="font-sans font-black text-xl tracking-tight text-white uppercase">Reax</span>
           </div>
 
-          {/* Core Stats & Navigation actions */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Inline Username Editor & Authentication Controls */}
-            {!isLoggedIn ? (
-              <div className="flex items-center gap-2">
-                {/* Guest Chip with clear solid border */}
-                <button 
-                  onClick={() => {
-                    setUpgradeTriggerReason("edit_username");
-                    setIsUpgradeModalOpen(true);
-                  }}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-900 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white font-mono text-xs rounded-xl transition-all active:scale-95 shadow-sm cursor-pointer"
-                  title="Your guest alias (click to customize)"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                  <span className="font-bold">{username}</span>
-                  <span className="text-[9px] px-1.5 py-0.5 bg-slate-800 border border-slate-600 rounded text-amber-300 font-bold ml-0.5 uppercase tracking-wider">
-                    Guest
-                  </span>
-                </button>
-
-                {/* Always visible Sign in button with desktop secondary text */}
-                <button
-                  onClick={() => {
-                    setUpgradeTriggerReason("nav_click");
-                    setIsUpgradeModalOpen(true);
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 cursor-pointer font-mono border border-indigo-500 hover:border-indigo-400"
-                  title="Sign in or claim your permanent username"
-                >
-                  <LogIn className="w-3.5 h-3.5" />
-                  <span>Sign in</span>
-                  <span className="hidden md:inline text-[10px] text-indigo-200 font-normal border-l border-indigo-400/40 pl-1.5">
-                    Claim @username
-                  </span>
-                </button>
-              </div>
-            ) : isEditingUsername ? (
-              <div className="flex items-center gap-1.5 bg-slate-900 border border-indigo-500/50 rounded-xl px-2.5 py-1.5">
-                <span className="text-[11px] font-mono font-bold text-indigo-400">@</span>
-                <input
-                  type="text"
-                  value={tempUsername}
-                  onChange={(e) => setTempUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
-                  onBlur={saveUsername}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") saveUsername();
-                  }}
-                  className="bg-transparent text-[11px] font-mono text-white outline-none w-24 focus:ring-0"
-                  maxLength={18}
-                  autoFocus
-                />
-                <button onClick={saveUsername} className="text-[10px] font-bold text-emerald-400 font-mono cursor-pointer">SAVE</button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => setIsProfileOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-850 border border-emerald-500/30 hover:border-emerald-500/50 text-emerald-400 font-mono text-xs rounded-xl transition-all active:scale-95 shadow-sm cursor-pointer"
-                  title="View Profile and creations"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                  <span className="font-bold">@{username}</span>
-                  <User className="w-3.5 h-3.5 text-emerald-400 ml-0.5 shrink-0" />
-                </button>
-                <button 
-                  onClick={handleLogout}
-                  className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-900 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-400 font-mono text-xs rounded-xl transition-colors cursor-pointer"
-                  title="Sign Out"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Sign out</span>
-                </button>
-              </div>
-            )}
-
-            <div className="hidden sm:flex items-center gap-4 bg-slate-900/60 border border-slate-800 px-3.5 py-1.5 rounded-xl text-xs font-mono text-slate-400">
-              <span className="flex items-center gap-1.5">
-                <Flame className="w-3.5 h-3.5 text-rose-500" />
-                <strong>{clips.length}</strong> loops
-              </span>
-              <div className="w-[1px] h-3.5 bg-slate-800" />
-              <span>
-                <strong>{totalCommentsCount}</strong> responses
-              </span>
-            </div>
-
-            {/* Refresh */}
+          {/* Right: @username (opens Profile) OR Sign in, and + button */}
+          <div className="flex items-center gap-2">
+            {/* Subtle Refresh icon only */}
             <button 
               onClick={() => setRefreshTrigger(prev => prev + 1)}
-              className="p-2 bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl text-slate-400 hover:text-white transition-all active:scale-95"
-              title="Refresh Loops Feed"
+              className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-900 transition-colors cursor-pointer"
+              title="Refresh feed"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-indigo-400" : ""}`} />
             </button>
 
-            {/* Reaction Vault Trigger */}
-            <button 
-              onClick={() => setIsVaultOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-amber-500/20 hover:border-amber-400 text-amber-400 hover:text-amber-300 font-bold text-xs rounded-xl transition-all shadow-sm active:scale-95 cursor-pointer uppercase tracking-wider font-mono"
-              title="Open My Reaction Templates Vault"
-            >
-              <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" /> My Templates
-            </button>
+            {/* @username (opens Profile) OR Sign in */}
+            {isLoggedIn ? (
+              <button 
+                onClick={() => setIsProfileOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 font-mono text-xs rounded-xl transition-all cursor-pointer"
+                title="View Profile"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span className="font-bold">@{username}</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setUpgradeTriggerReason("nav_click");
+                  setIsUpgradeModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-all cursor-pointer"
+                title="Sign in or claim username"
+              >
+                <LogIn className="w-3.5 h-3.5 text-slate-400" />
+                <span>Sign in</span>
+              </button>
+            )}
 
-             {/* Main Action Call - High-visibility CTA button for starting thread */}
+            {/* + Button to create a root loop */}
             <button
               onClick={handleCreateRootClip}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 cursor-pointer uppercase tracking-wider font-mono border border-indigo-500 hover:border-indigo-400"
+              className="flex items-center justify-center w-8 h-8 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-all shadow-md active:scale-95 cursor-pointer"
+              title="Create a reaction loop"
             >
-              <Plus className="w-3.5 h-3.5" /> Start Reaction
+              <Plus className="w-4 h-4" />
             </button>
+
+            {/* Overflow menu for Vault / Admin / Sign out */}
+            <div className="relative">
+              <button
+                onClick={() => setIsHeaderMenuOpen(!isHeaderMenuOpen)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-900 transition-colors cursor-pointer"
+                title="More options"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              {isHeaderMenuOpen && (
+                <div 
+                  className="absolute right-0 top-full mt-1.5 w-44 bg-slate-900/95 backdrop-blur-md border border-slate-800 rounded-xl shadow-2xl py-1 z-50 text-xs font-sans"
+                  onClick={() => setIsHeaderMenuOpen(false)}
+                >
+                  <button
+                    onClick={() => setIsVaultOpen(true)}
+                    className="w-full px-3 py-2 text-left text-amber-300 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer font-medium"
+                  >
+                    <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                    <span>My Templates</span>
+                  </button>
+                  <button
+                    onClick={() => setIsAdminAuthOpen(true)}
+                    className="w-full px-3 py-2 text-left text-slate-400 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Admin</span>
+                  </button>
+                  {isLoggedIn && (
+                    <button
+                      onClick={handleLogout}
+                      className="w-full px-3 py-2 text-left text-rose-400 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer border-t border-slate-800/50"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>Sign out</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
         </div>
       </header>
 
-      {/* Hero Guidelines Section */}
-      <section className="bg-gradient-to-b from-indigo-950/10 via-slate-950/5 to-transparent py-10 px-4">
-        <div className="max-w-3xl mx-auto text-center space-y-4">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-indigo-500/10 to-rose-500/10 border border-indigo-500/15 rounded-full text-[10px] font-black font-mono text-indigo-300 uppercase tracking-widest shadow-sm">
-            <Sparkles className="w-3 h-3 text-indigo-400 animate-pulse" /> Social Visual Chaining
-          </div>
-          <h1 className="font-sans font-black text-2xl md:text-3xl text-white tracking-tight max-w-2xl mx-auto leading-[1.15] uppercase bg-gradient-to-b from-white via-white to-slate-400 bg-clip-text text-transparent">
-            Create audio memes with photos, <br className="hidden sm:inline" /> short videos, captions, and your own voice.
-          </h1>
-          <p className="text-xs text-slate-400 max-w-lg mx-auto leading-relaxed font-normal">
-            Express yourself with customizable video or picture loops. Record your voice, add visual effects, or use optional AI tools to generate audio speech synthesis when you're stuck!
-          </p>
-
-          <div className="flex justify-center flex-wrap gap-x-6 gap-y-2 pt-2 text-[10px] font-mono text-slate-400 font-semibold">
-            <span className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-800/40 px-2.5 py-1 rounded-full"><CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> Real Voice Recording</span>
-            <span className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-800/40 px-2.5 py-1 rounded-full"><CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> Custom Meme Captions</span>
-            <span className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-800/40 px-2.5 py-1 rounded-full"><CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> Optional AI Assistant</span>
-          </div>
-        </div>
-      </section>
+      {/* One short hero line at most */}
+      <div className="text-center pt-5 pb-1 px-4 max-w-xl mx-auto">
+        <p className="text-xs sm:text-sm text-slate-400 font-medium">
+          Photo & video reaction loops. Tap any tone to respond.
+        </p>
+      </div>
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-8 space-y-6">
-
-        {/* E. Onboarding Welcome Banner (LAUNCH CRITICAL) */}
-        <div className="bg-gradient-to-r from-amber-500/10 via-indigo-950/5 to-slate-950/60 border border-amber-500/5 rounded-2xl p-4 flex items-center gap-3.5 shadow-[0_8px_32px_rgba(0,0,0,0.2)] relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full blur-xl pointer-events-none" />
-          <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400 flex-shrink-0 animate-pulse text-base font-mono border border-amber-500/10">
-            ⚡
-          </div>
-          <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-black text-slate-100 uppercase tracking-wider font-sans">
-              Tap a tone to respond instantly. No comments — only reactions.
-            </h4>
-            <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed font-sans">
-              Click any reaction's 1-Tap button to respond instantly with custom AI audio speech synthesis & motion effects. <span className="text-amber-400 font-bold">Tip: Save reactions to reuse them later!</span>
-            </p>
-          </div>
-        </div>
+      <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-4 space-y-4">
         
         {/* Error notification */}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/10 text-red-200 p-4 rounded-2xl text-xs flex items-center gap-3">
-            <Info className="w-5 h-5 text-red-400 flex-shrink-0" />
+          <div className="bg-red-500/10 border border-red-500/20 text-red-200 p-3 rounded-xl text-xs flex items-center gap-3">
+            <Info className="w-4 h-4 text-red-400 flex-shrink-0" />
             <div className="flex-1">
-              <span className="font-bold">Database Sync Error:</span> {error}
+              <span className="font-bold">Sync Error:</span> {error}
             </div>
             <button 
               onClick={() => setRefreshTrigger(prev => prev + 1)}
-              className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 font-semibold rounded-lg transition-colors"
+              className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 font-semibold rounded-lg transition-colors text-[11px]"
             >
               Retry
             </button>
           </div>
         )}
- 
-        {/* 🔥 ACTIVE CHAINS / ENTRY HOOKS (START HERE) */}
-        {!loading && activeChains.length > 0 && (
-          <div className="bg-gradient-to-br from-indigo-950/20 to-slate-900/60 rounded-3xl p-5 space-y-3.5 shadow-xl relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none" />
-            
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-mono font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5 bg-rose-500/5 px-2 py-0.5 rounded-full border border-rose-500/10">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-                🔥 START HERE: ACTIVE DISCUSSION CHAINS
-              </span>
-              <span className="text-[9px] text-slate-500 font-mono font-black uppercase">
-                Jump In ➔
-              </span>
-            </div>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {activeChains.map(({ clip, totalReplies }, index) => {
-                const isClipVideo = clip.mediaUrl.endsWith(".mp4") || clip.mediaUrl.endsWith(".webm") || clip.mediaUrl.includes("mixkit-");
-                return (
-                  <div 
-                    key={`chain-${clip.id}`}
-                    onClick={() => setSelectedThreadRootId(clip.id)}
-                    className="bg-slate-900/35 backdrop-blur-md border border-slate-800/60 hover:border-indigo-500/40 rounded-2xl p-3 flex flex-col justify-between cursor-pointer group transition-all duration-300 relative overflow-hidden active:scale-95 shadow-xl glass-panel-hover"
-                  >
-                    <div className="absolute top-2.5 right-2.5 z-10">
-                      <span className="px-1.5 py-0.5 rounded text-[8px] font-mono font-black bg-indigo-500/20 text-indigo-300 border border-indigo-500/25 uppercase">
-                        💬 {totalReplies} reaction{totalReplies !== 1 ? "s" : ""}
-                      </span>
-                    </div>
 
-                    {/* Tiny Thumbnail container - video bug patched */}
-                    <div className="aspect-video w-full rounded-xl bg-slate-900 overflow-hidden relative mb-2 flex items-center justify-center border border-slate-950">
-                      {isClipVideo ? (
-                        <video 
-                          src={clip.mediaUrl} 
-                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" 
-                          muted 
-                          playsInline 
-                        />
-                      ) : (
-                        <img 
-                          src={clip.mediaUrl} 
-                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" 
-                          alt=""
-                          referrerPolicy="no-referrer"
-                        />
-                      )}
-                      {clip.overlayText && (
-                        <div className="absolute inset-0 bg-black/45 flex items-center justify-center p-1">
-                          <span className="text-[9px] font-sans font-black text-white text-center uppercase truncate w-full tracking-wider drop-shadow-md">
-                            {clip.overlayText}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-slate-300 block truncate font-bold">
-                        @{clip.authorName}
-                      </span>
-                      <span className="text-[9px] font-mono text-indigo-400 group-hover:text-indigo-300 block uppercase font-black tracking-wide flex items-center gap-0.5">
-                        ENTER CASCADE ➔
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Algo Feed Navigation Tabs */}
+        {/* Minimal Feed Filter */}
         {!loading && clips.length > 0 && (
-          <div className="bg-slate-900/60 border border-slate-800/20 rounded-2xl p-4 space-y-3 shadow-lg">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800/20 pb-3">
-              <div className="space-y-0.5">
-                <span className="block text-[10px] font-mono font-black text-indigo-400 uppercase tracking-widest">
-                  🎛️ FEED DISCOVERY ENGINES
-                </span>
-                <span className="block text-xs font-bold text-slate-200">
-                  Select your curation algorithm
-                </span>
-              </div>
-              
-              {/* Active Tag */}
-              <div className="flex items-center gap-1.5 self-start sm:self-center">
-                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-950 px-2 py-0.5 rounded-md uppercase">
-                  Algo: {feedType.replace("_", " ")}
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
-              {[
-                { id: "trending" as const, label: "🔥 Trending", desc: "Likes & replies velocity with chronological decay" },
-                { id: "latest" as const, label: "🆕 Latest", desc: "Strictly newest root conversations first" },
-                { id: "most_reacted" as const, label: "💬 Most Reacted", desc: "Ranked by highest total reply tree size" },
-                { id: "audio_hot" as const, label: "🎤 Audio Hot", desc: "Only loops containing voice or AI speech accents" },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setFeedType(tab.id)}
-                  className={`flex flex-col items-start p-2.5 rounded-xl border text-left transition-all relative cursor-pointer group active:scale-95 ${
-                    feedType === tab.id
-                      ? "bg-indigo-600/15 border-indigo-500 text-indigo-200"
-                      : "bg-slate-950/45 border-slate-900/60 hover:border-slate-800 hover:bg-slate-900/40 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  <span className="text-xs font-extrabold tracking-tight block">
-                    {tab.label}
-                  </span>
-                  <span className="text-[9px] text-slate-500 block leading-tight mt-0.5 group-hover:text-slate-400 transition-colors">
-                    {tab.desc}
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            {/* Live Formula Inspector Code Block */}
-            <div className="bg-slate-950/80 border border-slate-900 rounded-xl p-2.5 font-mono text-[9px] leading-relaxed text-slate-400">
-              <span className="block text-slate-500 font-bold mb-1 uppercase tracking-wider text-[8px]">
-                ⚙️ ACTIVE ALGORITHM FORMULA CODE BLOCK:
-              </span>
-              {feedType === "trending" && (
-                <div>
-                  <p className="text-indigo-300 font-bold">Trending Score = (Replies * 5) + (Likes * 2) + Recent Activity</p>
-                  <p className="text-slate-500 mt-1">✓ Weighting: Replies represent direct voice/meme interactions and are heavily weighted (+5 pts) over passive likes (+2 pts).</p>
-                  <p className="text-slate-500">✓ Recent Activity: Added dynamic freshness boost (max +20 pts) based on the latest reply in the thread cascade.</p>
-                </div>
-              )}
-              {feedType === "latest" && (
-                <div>
-                  <p className="text-indigo-300 font-bold">query = SELECT * FROM clips WHERE parent_id IS NULL ORDER BY created_at DESC</p>
-                  <p className="text-slate-500 mt-1">✓ Chronological: No bias, no weights, no personalization. Simply tracking direct time elapsed since the loop was initiated.</p>
-                </div>
-              )}
-              {feedType === "most_reacted" && (
-                <div>
-                  <p className="text-indigo-300 font-bold">sort = b.reply_chain_count - a.reply_chain_count</p>
-                  <p className="text-slate-500 mt-1">✓ Chain Size: Tallies the absolute recursive tree depth. Good for finding highly conversational, multi-author cascades of loops.</p>
-                </div>
-              )}
-              {feedType === "audio_hot" && (
-                <div>
-                  <p className="text-indigo-300 font-bold">filter = clips.has_voice_audio || clips.has_tts_overlay</p>
-                  <p className="text-slate-500 mt-1">✓ Voice Priority: Elevates threads that utilized real vocal track recording or our high-quality custom emotional AI speaking styles.</p>
-                </div>
-              )}
-            </div>
+          <div className="flex items-center justify-center gap-3 text-xs font-medium text-slate-500 pb-1">
+            <button 
+              onClick={() => setFeedType("trending")}
+              className={`transition-colors cursor-pointer ${feedType === "trending" ? "text-slate-100 font-bold" : "hover:text-slate-300"}`}
+            >
+              Trending
+            </button>
+            <span className="text-slate-700">•</span>
+            <button 
+              onClick={() => setFeedType("latest")}
+              className={`transition-colors cursor-pointer ${feedType === "latest" ? "text-slate-100 font-bold" : "hover:text-slate-300"}`}
+            >
+              Latest
+            </button>
+            <span className="text-slate-700">•</span>
+            <button 
+              onClick={() => setFeedType("most_reacted")}
+              className={`transition-colors cursor-pointer ${feedType === "most_reacted" ? "text-slate-100 font-bold" : "hover:text-slate-300"}`}
+            >
+              Most Reacted
+            </button>
           </div>
         )}
 

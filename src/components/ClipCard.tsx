@@ -315,10 +315,10 @@ export default function ClipCard({
   }, [isVideo, clip.mediaUrl, isMuted]);
 
   return (
-    <div className={`flex flex-col w-full ${isNestedReply ? "pl-6 mt-3.5 border-l border-slate-800/20" : "bg-slate-900/35 backdrop-blur-md border border-slate-800/20 rounded-2xl p-4 md:p-5 shadow-xl glass-panel-hover"}`}>
+    <div className={`flex flex-col w-full ${isNestedReply ? "pl-3 sm:pl-4 mt-2.5 border-l border-slate-800/40" : "bg-slate-900/40 backdrop-blur-md border border-slate-800/40 rounded-2xl p-2 sm:p-2.5 shadow-lg"}`}>
       
       {/* Top Author Metadata Bar */}
-      <div className="flex justify-between items-center mb-2.5">
+      <div className="flex justify-between items-center mb-2 px-0.5">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-200 font-bold font-mono text-xs flex items-center justify-center flex-shrink-0">
             {clip.authorName[0]?.toUpperCase()}
@@ -499,42 +499,28 @@ export default function ClipCard({
           </div>
         )}
 
-        {/* Media Overlay Controls: Bottom-Left (Reply + Voice), Bottom-Right (Play/Mute for Video) */}
-        <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5 z-20">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onRespond(clip);
-            }}
-            className="flex items-center gap-1.5 bg-black/75 hover:bg-black/90 text-white hover:text-indigo-300 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-xs font-semibold shadow-lg transition-all active:scale-95 cursor-pointer"
-            title="Reply to this reaction"
-          >
-            <CornerDownRight className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Reply</span>
-          </button>
+        {/* Media Overlay Controls: Voice button (if voice present) & Video Play/Mute controls */}
+        {(() => {
+          const hasAudioUrl = !!(
+            clip.voiceAudioUrl || 
+            (clip.voiceText && (
+              clip.voiceText.startsWith("audio_url:") || 
+              (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4")))
+            )) || 
+            (clip.mediaType === "audio" && clip.mediaUrl)
+          );
+          const hasVoiceData = !!clip.voiceAudioData;
+          const hasValidVoiceText = !!(clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction") && !clip.voiceText.startsWith("audio_url:"));
+          const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
 
-          {(() => {
-            const hasAudioUrl = !!(
-              clip.voiceAudioUrl || 
-              (clip.voiceText && (
-                clip.voiceText.startsWith("audio_url:") || 
-                (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4")))
-              )) || 
-              (clip.mediaType === "audio" && clip.mediaUrl)
-            );
-            const hasVoiceData = !!clip.voiceAudioData;
-            const hasValidVoiceText = !!(clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction") && !clip.voiceText.startsWith("audio_url:"));
-            const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
+          if (!showAudioButton) return null;
 
-            if (!showAudioButton) return null;
-
-            return (
+          return (
+            <div className="absolute bottom-2.5 left-2.5 z-20">
               <button
                 type="button"
                 onClick={handlePlayAudio}
-                className={`flex items-center gap-1 backdrop-blur-md px-2 py-1.5 rounded-lg border shadow-lg transition-all active:scale-95 cursor-pointer ${
+                className={`flex items-center gap-1 backdrop-blur-md px-2 py-1 rounded-lg border shadow-lg transition-all active:scale-95 cursor-pointer ${
                   isAudioPlaying
                     ? "bg-emerald-600 text-white border-emerald-400 shadow-emerald-500/30 animate-pulse"
                     : "bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white border-white/10"
@@ -554,9 +540,9 @@ export default function ClipCard({
                   {isAudioPlaying ? "Playing..." : "Voice"}
                 </span>
               </button>
-            );
-          })()}
-        </div>
+            </div>
+          );
+        })()}
 
         {/* Play/Pause & Mute/Unmute Overlay controls (Video Only) */}
         {isVideo && (
@@ -582,19 +568,15 @@ export default function ClipCard({
         )}
       </div>
 
-      {/* ⚡ 1-Tap Quick React Picker (Dominant Action!) */}
-      <div className="mt-3.5 bg-slate-950/40 p-3.5 rounded-xl shadow-inner backdrop-blur-sm">
-        <span className="block text-[10px] font-mono text-amber-400/95 uppercase tracking-widest mb-3 font-black text-center sm:text-left flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-          ⚡ 1-TAP INSTANT REPLY
-        </span>
-        <div className="grid grid-cols-6 gap-2">
+      {/* Under the media: one compact row — 1-tap tones + React */}
+      <div className="flex items-center gap-1.5 mt-2">
+        <div className="grid grid-cols-5 gap-1 flex-1 min-w-0">
           {[
-            { id: "funny" as const, emoji: "🎭", label: "Funny", color: "hover:bg-amber-500/10 text-amber-400 border-slate-800/80 hover:border-amber-500/35 hover:shadow-[0_0_12px_rgba(245,158,11,0.15)]" },
-            { id: "dramatic" as const, emoji: "🎬", label: "Drama", color: "hover:bg-rose-500/10 text-rose-400 border-slate-800/80 hover:border-rose-500/35 hover:shadow-[0_0_12px_rgba(244,63,94,0.15)]" },
-            { id: "sarcastic" as const, emoji: "🙄", label: "Sarcasm", color: "hover:bg-purple-500/10 text-purple-400 border-slate-800/80 hover:border-purple-500/35 hover:shadow-[0_0_12px_rgba(168,85,247,0.15)]" },
-            { id: "chill" as const, emoji: "🌊", label: "Chill", color: "hover:bg-sky-500/10 text-sky-400 border-slate-800/80 hover:border-sky-500/35 hover:shadow-[0_0_12px_rgba(14,165,233,0.15)]" },
-            { id: "chaotic" as const, emoji: "⚡", label: "Chaos", color: "hover:bg-orange-500/10 text-orange-400 border-slate-800/80 hover:border-orange-500/35 hover:shadow-[0_0_12px_rgba(249,115,22,0.15)]" }
+            { id: "funny" as const, emoji: "🎭", label: "Funny", color: "hover:bg-amber-500/15 text-amber-300 border-slate-800/80 hover:border-amber-500/40" },
+            { id: "dramatic" as const, emoji: "🎬", label: "Drama", color: "hover:bg-rose-500/15 text-rose-300 border-slate-800/80 hover:border-rose-500/40" },
+            { id: "sarcastic" as const, emoji: "🙄", label: "Sarcasm", color: "hover:bg-purple-500/15 text-purple-300 border-slate-800/80 hover:border-purple-500/40" },
+            { id: "chill" as const, emoji: "🌊", label: "Chill", color: "hover:bg-sky-500/15 text-sky-300 border-slate-800/80 hover:border-sky-500/40" },
+            { id: "chaotic" as const, emoji: "⚡", label: "Chaos", color: "hover:bg-orange-500/15 text-orange-300 border-slate-800/80 hover:border-orange-500/40" }
           ].map((item) => (
             <button
               key={item.id}
@@ -602,153 +584,73 @@ export default function ClipCard({
                 e.stopPropagation();
                 onRespondWithTone(clip, item.id);
               }}
-              className={`flex flex-col items-center justify-center py-3 px-1.5 bg-slate-900/90 border rounded-xl transition-all hover:scale-[1.04] active:scale-95 ${item.color} group/btn cursor-pointer`}
-              title={`Instantly react with ${item.label} tone`}
+              className={`flex items-center justify-center gap-1 py-1.5 px-1 bg-slate-950/70 border rounded-xl text-xs transition-all active:scale-95 cursor-pointer ${item.color}`}
+              title={`React with ${item.label} tone`}
             >
-              <span className="text-xl filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)] group-hover/btn:scale-110 transition-transform">{item.emoji}</span>
-              <span className="text-[9.5px] font-bold text-slate-300 mt-1.5">{item.label}</span>
+              <span className="text-sm leading-none">{item.emoji}</span>
+              <span className="hidden sm:inline text-[10px] font-medium text-slate-300">{item.label}</span>
             </button>
           ))}
-
-          {/* 6th option: Saved ⭐ */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowSavedFastPick(!showSavedFastPick);
-            }}
-            className={`flex flex-col items-center justify-center py-3 px-1.5 bg-slate-900/90 border rounded-xl transition-all hover:scale-[1.04] active:scale-95 cursor-pointer ${
-              showSavedFastPick 
-                ? "border-amber-400 bg-amber-500/10 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.25)]" 
-                : "border-slate-800 hover:border-amber-400 text-amber-400/85 hover:text-amber-400 hover:shadow-[0_0_12px_rgba(245,158,11,0.15)]"
-            }`}
-            title="Fast pick from your saved reactions"
-          >
-            <span className="text-xl filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">⭐</span>
-            <span className="text-[9.5px] font-bold mt-1.5">Saved</span>
-          </button>
         </div>
 
-        {/* SAVED TRAY */}
-        {showSavedFastPick && (
-          <div className="pt-3.5 mt-3 border-t border-slate-800/50 space-y-2 text-left">
-            <span className="block text-[9px] font-mono font-black text-amber-400 uppercase tracking-widest px-1">
-              ⭐ TAP TO REPLY WITH SAVED REACTION:
-            </span>
-
-            {savedReactions.length === 0 ? (
-              <div className="p-3 bg-slate-950/40 rounded-lg border border-slate-900 text-center py-3">
-                <p className="text-[9px] text-slate-500 font-mono">Your Saved Vault is empty. Save reactions using the ⭐ button below!</p>
-              </div>
-            ) : (
-              <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
-                {savedReactions.map((reax) => {
-                  const isVideo = reax.mediaUrl.endsWith(".mp4") || reax.mediaUrl.endsWith(".webm") || reax.mediaUrl.includes("mixkit-");
-                  return (
-                    <button
-                      key={`card-${clip.id}-reax-${reax.id}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (onRespondWithSaved) {
-                          onRespondWithSaved(clip, reax);
-                          setShowSavedFastPick(false);
-                        }
-                      }}
-                      className="flex-shrink-0 w-24 bg-slate-950/90 border border-slate-800 hover:border-amber-400 rounded-lg overflow-hidden p-1 transition-all group active:scale-95 text-left cursor-pointer"
-                    >
-                      <div className="aspect-video w-full rounded bg-slate-900 overflow-hidden relative mb-1">
-                        {isVideo ? (
-                          <video src={reax.mediaUrl} className="w-full h-full object-cover" muted playsInline />
-                        ) : (
-                          <img src={reax.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
-                        )}
-                      </div>
-                      <p className="text-[7.5px] font-mono font-black text-slate-400 truncate uppercase group-hover:text-amber-400 leading-tight">
-                        {reax.overlayText || "REACTION"}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
+        {/* React Button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRespond(clip);
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer shrink-0 shadow-sm"
+          title="React to this clip"
+        >
+          <CornerDownRight className="w-3.5 h-3.5" />
+          <span>React</span>
+        </button>
       </div>
 
-      {/* 🏷️ Automatic Visual Attribution / Lineage Credit */}
-      {clip.originalAuthor && clip.originalAuthor !== clip.authorName && (
-        <div className="mt-2.5 px-2 py-1.5 rounded-lg bg-slate-950/40 border border-slate-900/80 flex items-center gap-2 text-[10px] font-mono text-slate-400">
-          <div className="w-4 h-4 rounded bg-amber-500/10 flex items-center justify-center text-[9px] text-amber-400 flex-shrink-0 font-bold">
-            {clip.remixedFrom ? "🔁" : "⭐"}
-          </div>
-          <div className="truncate leading-none">
-            {clip.remixedFrom ? (
-              <span>
-                Remixed from <span className="text-indigo-400 font-bold">@{clip.remixedFrom}</span>'s loop (original by <span className="text-amber-400 font-bold">@{clip.originalAuthor}</span>)
-              </span>
-            ) : (
-              <span>
-                Reaction originally created by <span className="text-amber-400 font-bold">@{clip.originalAuthor}</span>
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Bottom Engagement Panel */}
-      <div className="flex items-center justify-between mt-3.5 pt-3 border-t border-slate-800/50">
+      {/* Secondary Row: smaller, secondary (Like, Laugh, Save, Report, Delete, Thread) */}
+      <div className="flex items-center justify-between mt-1.5 pt-1 px-1 text-slate-400 text-xs">
         <div className="flex items-center gap-3">
           {/* Primary Humor Metric: 😂 Laughs */}
           <button 
             onClick={() => onLaugh(clip.id)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 hover:text-amber-200 transition-all group/laugh active:scale-95 cursor-pointer"
+            className="flex items-center gap-1 text-slate-400 hover:text-amber-300 transition-colors cursor-pointer"
             title="Laugh at this clip"
           >
-            <span className="text-sm transition-transform group-hover/laugh:scale-125">😂</span>
-            <span className="text-xs font-mono font-bold">{clip.laughsCount ?? 0}</span>
+            <span className="text-xs">😂</span>
+            <span className="text-[11px] font-mono font-medium">{clip.laughsCount ?? 0}</span>
           </button>
 
           {/* Secondary Metric: ❤️ Likes */}
           <button 
             onClick={() => onLike(clip.id)}
-            className="flex items-center gap-1.5 text-slate-400 hover:text-rose-400 transition-colors group/like cursor-pointer px-1.5 py-1"
+            className="flex items-center gap-1 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
             title="Like this clip"
           >
-            <Heart className="w-4 h-4 transition-transform group-hover/like:scale-125 hover:fill-rose-400" />
-            <span className="text-xs font-semibold">{clip.likesCount ?? 0}</span>
-          </button>
-          
-          {/* React to Thread */}
-          <button 
-            onClick={() => onRespond(clip)}
-            className="flex items-center gap-1.5 text-slate-400 hover:text-indigo-400 transition-colors cursor-pointer px-1.5 py-1"
-            title="Create a video or audio reaction response"
-          >
-            <CornerDownRight className="w-4 h-4" />
-            <span className="text-xs font-semibold">React</span>
+            <Heart className="w-3.5 h-3.5 hover:fill-rose-400" />
+            <span className="text-[11px] font-mono font-medium">{clip.likesCount ?? 0}</span>
           </button>
 
           {/* Save as Template */}
           <button 
             onClick={toggleSave}
-            className={`flex items-center gap-1.5 transition-colors cursor-pointer px-1.5 py-1 ${
-              isSaved ? "text-amber-400 hover:text-amber-500 font-bold" : "text-slate-400 hover:text-amber-400"
+            className={`flex items-center gap-1 transition-colors cursor-pointer ${
+              isSaved ? "text-amber-400" : "text-slate-500 hover:text-amber-300"
             }`}
-            title={isSaved ? "Saved as Template" : "Save as reusable template for later reactions"}
+            title={isSaved ? "Saved as Template" : "Save as reusable template"}
           >
-            <Star className={`w-4 h-4 ${isSaved ? "fill-amber-400 text-amber-400" : ""}`} />
-            <span className="text-xs hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
+            <Star className={`w-3.5 h-3.5 ${isSaved ? "fill-amber-400 text-amber-400" : ""}`} />
+            <span className="text-[10px] hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
           </button>
 
           {/* Report Button */}
           <button 
             onClick={() => setShowReportMenu(!showReportMenu)}
-            className={`flex items-center gap-1.5 transition-colors cursor-pointer px-1.5 py-1 ${
-              isReported ? "text-red-500 font-bold" : "text-slate-500 hover:text-red-400"
+            className={`flex items-center gap-1 transition-colors cursor-pointer ${
+              isReported ? "text-rose-400" : "text-slate-500 hover:text-slate-300"
             }`}
-            title="Report violation (Harassment, Slurs, Threats)"
+            title="Report violation"
           >
-            <Flag className="w-3.5 h-3.5" />
-            <span className="text-xs hidden sm:inline">{isReported ? "Reported" : "Report"}</span>
+            <Flag className="w-3 h-3" />
           </button>
 
           {/* Author Only: Delete Own Reaction */}
@@ -756,11 +658,10 @@ export default function ClipCard({
             <button 
               onClick={handleDelete}
               disabled={isDeleting}
-              className="flex items-center gap-1 text-slate-500 hover:text-red-400 transition-colors cursor-pointer px-1.5 py-1 text-xs"
-              title="Delete your reaction (Only you can delete your reaction)"
+              className="flex items-center gap-1 text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
+              title="Delete your reaction"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span className="text-[11px] hidden sm:inline">Delete</span>
+              <Trash2 className="w-3 h-3" />
             </button>
           )}
         </div>
@@ -769,13 +670,20 @@ export default function ClipCard({
         {!isNestedReply && (
           <button 
             onClick={() => onViewThread(clip.id)}
-            className="flex items-center gap-1 text-slate-500 hover:text-white text-xs font-mono transition-colors cursor-pointer"
+            className="flex items-center gap-1 text-slate-500 hover:text-indigo-300 text-[11px] font-mono transition-colors cursor-pointer"
           >
-            <span>View Thread</span>
-            <ChevronRight className="w-3.5 h-3.5" />
+            <span>Thread</span>
+            <ChevronRight className="w-3 h-3" />
           </button>
         )}
       </div>
+
+      {/* Attribution Lineage if remixed or saved */}
+      {clip.originalAuthor && clip.originalAuthor !== clip.authorName && (
+        <div className="mt-1 px-1 text-[9px] font-mono text-slate-500 truncate">
+          {clip.remixedFrom ? `Remixed from @${clip.remixedFrom}` : `Template by @${clip.originalAuthor}`}
+        </div>
+      )}
 
       {/* Dynamic Report Menu Tray with Guidelines Statement */}
       {showReportMenu && (
