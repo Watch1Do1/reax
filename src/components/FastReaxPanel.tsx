@@ -1,44 +1,26 @@
 import React, { useState, useEffect } from "react";
 import { 
-  Sparkles, RefreshCw, Send, Sliders, X, Check, Eye, Play, Volume2 
+  RefreshCw, Send, Sliders, X, Check, Volume2 
 } from "lucide-react";
 import { Clip } from "../types";
 import { speakText } from "../utils/audio";
-import { getAuthToken, uploadMediaAsset } from "../utils/supabaseClient";
+import { getAuthToken } from "../utils/supabaseClient";
 
-// Map each reaction tone to its perfect high-quality backdrop preset for ultra-fast reaction matching
-const TONE_PRESETS: Record<Clip["tone"], { url: string; mimeType: string; isVideo: boolean; description: string }> = {
-  funny: {
-    url: "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=500",
-    mimeType: "image/jpeg",
-    isVideo: false,
-    description: "Anime surprised face"
-  },
-  dramatic: {
-    url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500",
-    mimeType: "image/jpeg",
-    isVideo: false,
-    description: "Intense dramatic look"
-  },
-  sarcastic: {
-    url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500",
-    mimeType: "image/jpeg",
-    isVideo: false,
-    description: "Amused smirk smirk"
-  },
-  chill: {
-    url: "https://vjs.zencdn.net/v/oceans.mp4",
-    mimeType: "video/mp4",
-    isVideo: true,
-    description: "Chill ocean waves"
-  },
-  chaotic: {
-    url: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=500",
-    mimeType: "image/jpeg",
-    isVideo: false,
-    description: "Vibing hyper-cat"
-  }
-};
+// Tone labels, emojis, and local fallback captions (No Unsplash/Mixkit stock URLs)
+const TONE_OPTIONS: Array<{
+  id: Clip["tone"];
+  emoji: string;
+  label: string;
+  fallbackOverlay: string;
+  fallbackVoice: string;
+  effect: string;
+}> = [
+  { id: "funny", emoji: "🎭", label: "Funny", fallbackOverlay: "LOL NO WAY", fallbackVoice: "LOL, no way!", effect: "bounce" },
+  { id: "dramatic", emoji: "🎬", label: "Drama", fallbackOverlay: "DUN DUN DUN", fallbackVoice: "Wait... what just happened?", effect: "shake" },
+  { id: "sarcastic", emoji: "🙄", label: "Sarcasm", fallbackOverlay: "SURE JAN", fallbackVoice: "Oh brilliant, truly genius.", effect: "pulse" },
+  { id: "chill", emoji: "🌊", label: "Chill", fallbackOverlay: "CHILL VIBES", fallbackVoice: "Just vibing here, no worries.", effect: "zoom" },
+  { id: "chaotic", emoji: "⚡", label: "Chaos", fallbackOverlay: "CHAOS REIGNS", fallbackVoice: "Total chaos! Absolutely wild!", effect: "glitch" }
+];
 
 interface FastReaxPanelProps {
   key?: string;
@@ -58,18 +40,33 @@ export default function FastReaxPanel({
   onSuccess, 
   onOpenFullCustomize 
 }: FastReaxPanelProps) {
+  // If parent has no mediaUrl, open RespondModal instead of posting
+  useEffect(() => {
+    if (!parentClip || !parentClip.mediaUrl) {
+      onOpenFullCustomize(parentClip, initialTone || "funny");
+    }
+  }, [parentClip, onOpenFullCustomize, initialTone]);
+
   const [activeTone, setActiveTone] = useState<Clip["tone"]>(initialTone || "funny");
-  const [step, setStep] = useState<"generating" | "preview" | "posting" | "success">("generating");
   const [fastPost, setFastPost] = useState(() => localStorage.getItem("reax_fast_post") === "true");
+  const [step, setStep] = useState<"preview" | "posting" | "success">("preview");
   const [error, setError] = useState<string | null>(null);
 
-  // AI Response parameters generated on the fly
-  const [voiceText, setVoiceText] = useState("");
-  const [overlayText, setOverlayText] = useState("");
-  const [visualEffect, setVisualEffect] = useState("zoom");
+  // Initial tone configuration fallback values (no Gemini call)
+  const initialConfig = TONE_OPTIONS.find(t => t.id === (initialTone || "funny")) || TONE_OPTIONS[0];
+  const [overlayText, setOverlayText] = useState(initialConfig.fallbackOverlay);
+  const [voiceText, setVoiceText] = useState(initialConfig.fallbackVoice);
+  const [visualEffect, setVisualEffect] = useState(initialConfig.effect);
+  const [useTTS, setUseTTS] = useState(false);
 
-  // Get matching preset backdrop
-  const presetMedia = TONE_PRESETS[activeTone] || TONE_PRESETS.funny;
+  // Early return if parent has no mediaUrl
+  if (!parentClip || !parentClip.mediaUrl) {
+    return null;
+  }
+
+  // Determine media type directly from parentClip
+  const isVideo = parentClip.mediaType === "video" || /\.(mp4|webm|mov|m4v)(\?.*)?$/i.test(parentClip.mediaUrl || "");
+  const computedMediaType = parentClip.mediaType || (isVideo ? "video" : "image");
 
   // Sync fast post preference with storage
   const toggleFastPost = () => {
@@ -78,84 +75,38 @@ export default function FastReaxPanel({
     localStorage.setItem("reax_fast_post", nextVal ? "true" : "false");
   };
 
-  // Run AI generation on load or tone switch
-  useEffect(() => {
-    let active = true;
-    setStep("generating");
-
-    async function runGeneration() {
-      try {
-        const imageContext = presetMedia.isVideo 
-          ? `Preset reaction loop: ${presetMedia.description}`
-          : `Preset template: ${presetMedia.description}`;
-
-        const res = await fetch("/api/ai/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tone: activeTone, imageContext })
-        });
-
-        if (!res.ok) throw new Error("AI Generation failed");
-        const data = await res.json();
-
-        if (!active) return;
-
-        const generatedVoice = data.voiceLine || `Whoa, ${activeTone} perspective incoming!`;
-        const generatedOverlay = data.overlayText || activeTone.toUpperCase();
-        const generatedEffect = data.effect || "zoom";
-
-        setVoiceText(generatedVoice);
-        setOverlayText(generatedOverlay);
-        setVisualEffect(generatedEffect);
-
-        // Check if Fast Post is enabled to skip the preview screen entirely
-        if (fastPost) {
-          setStep("posting");
-          await publishClip(generatedVoice, generatedOverlay, generatedEffect);
-        } else {
-          setStep("preview");
-        }
-
-      } catch (err) {
-        console.error("Fast Reax generation error:", err);
-        if (active) {
-          const fallbackVoice = activeTone === "funny" ? "LOL, that is too funny!" : "That is absolutely intense!";
-          setVoiceText(fallbackVoice);
-          setOverlayText(activeTone.toUpperCase());
-          setVisualEffect("zoom");
-
-          if (fastPost) {
-            setStep("posting");
-            await publishClip(fallbackVoice, activeTone.toUpperCase(), "zoom");
-          } else {
-            setStep("preview");
-          }
-        }
-      }
-    }
-
-    runGeneration();
-
-    return () => {
-      active = false;
-    };
-  }, [activeTone]);
+  // Tone switch: update active tone and fallback overlay/voice
+  const handleSelectTone = (toneId: Clip["tone"]) => {
+    setActiveTone(toneId);
+    const config = TONE_OPTIONS.find(t => t.id === toneId) || TONE_OPTIONS[0];
+    setOverlayText(config.fallbackOverlay);
+    setVoiceText(config.fallbackVoice);
+    setVisualEffect(config.effect);
+  };
 
   // Handle actual server posting
   const publishClip = async (voice: string, overlay: string, effect: string) => {
     try {
-      let finalMediaUrl = presetMedia.url;
-      if (finalMediaUrl.startsWith("data:")) {
-        const uploadResult = await uploadMediaAsset({
-          data: finalMediaUrl,
-          kind: presetMedia.isVideo ? "video" : "image",
-          mimeType: presetMedia.mimeType,
-          filename: `fastreax-${Date.now()}`
-        });
-        finalMediaUrl = uploadResult.url;
-      }
+      setStep("posting");
+      setError(null);
 
       const token = await getAuthToken();
+
+      // Fast Reax POST body: uses parentClip.mediaUrl without re-uploading
+      const postBody: Record<string, any> = {
+        parentId: parentClip.id,
+        mediaUrl: parentClip.mediaUrl,
+        mediaType: computedMediaType,
+        tone: activeTone,
+        overlayText: (overlay || "").trim().slice(0, 48),
+        authorName: username.trim() || "Anonymous",
+        effect: effect || "zoom"
+      };
+
+      // voiceText: only if TTS enabled; do not send "Voice Reaction"
+      if (useTTS && voice && voice.trim() && voice.trim() !== "Voice Reaction") {
+        postBody.voiceText = voice.trim();
+      }
 
       const res = await fetch("/api/clips", {
         method: "POST",
@@ -163,16 +114,7 @@ export default function FastReaxPanel({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({
-          parentId: parentClip.id,
-          mediaUrl: finalMediaUrl,
-          mediaType: presetMedia.isVideo ? "video" : "image",
-          voiceText: voice,
-          tone: activeTone,
-          authorName: username.trim(),
-          effect,
-          overlayText: overlay
-        })
+        body: JSON.stringify(postBody)
       });
 
       if (!res.ok) {
@@ -186,14 +128,22 @@ export default function FastReaxPanel({
         onSuccess();
       }, 1200);
 
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("Failed to quick-post reaction. Opening customization mode...");
+      setError(err.message || "Failed to post quick reaction. Opening customization mode...");
       setTimeout(() => {
         onOpenFullCustomize(parentClip, activeTone);
       }, 1500);
     }
   };
+
+  // If fastPost is enabled, immediately publish on open
+  useEffect(() => {
+    if (fastPost && parentClip && parentClip.mediaUrl) {
+      const config = TONE_OPTIONS.find(t => t.id === activeTone) || TONE_OPTIONS[0];
+      publishClip(config.fallbackVoice, config.fallbackOverlay, config.effect);
+    }
+  }, []); // run on initial mount
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
@@ -212,21 +162,11 @@ export default function FastReaxPanel({
         {/* Tone Selector Bar */}
         <div className="w-full mb-3 pr-6">
           <div className="flex items-center justify-between gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
-            {[
-              { id: "funny" as const, emoji: "🎭", label: "Funny" },
-              { id: "dramatic" as const, emoji: "🎬", label: "Drama" },
-              { id: "sarcastic" as const, emoji: "🙄", label: "Sarcasm" },
-              { id: "chill" as const, emoji: "🌊", label: "Chill" },
-              { id: "chaotic" as const, emoji: "⚡", label: "Chaos" }
-            ].map((t) => (
+            {TONE_OPTIONS.map((t) => (
               <button
                 key={t.id}
                 type="button"
-                onClick={() => {
-                  if (activeTone !== t.id) {
-                    setActiveTone(t.id);
-                  }
-                }}
+                onClick={() => handleSelectTone(t.id)}
                 className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1 py-1 px-1 rounded-lg text-[8px] font-mono font-bold transition-all cursor-pointer ${
                   activeTone === t.id
                     ? "bg-indigo-600 text-white shadow-md"
@@ -240,35 +180,7 @@ export default function FastReaxPanel({
           </div>
         </div>
 
-        {/* 1. GENERATING / THINKING STATE */}
-        {step === "generating" && (
-          <div className="py-8 space-y-5 flex flex-col items-center w-full">
-            <div className="relative">
-              <div className="w-14 h-14 bg-indigo-500/10 rounded-full flex items-center justify-center text-indigo-400 border border-indigo-500/30">
-                <RefreshCw className="w-6 h-6 animate-spin" />
-              </div>
-              <span className="absolute -bottom-1.5 -right-1.5 text-lg">⚡</span>
-            </div>
-            
-            <div className="space-y-1.5">
-              <h4 className="text-sm font-sans font-black text-white uppercase tracking-wider">
-                Generating Quick {activeTone} Reax
-              </h4>
-              <p className="text-[11px] text-slate-400 font-mono">
-                Designing custom captions & voice response...
-              </p>
-            </div>
-
-            {/* Simulated progress slider/glow */}
-            <div className="w-full h-1 bg-slate-950 rounded-full overflow-hidden max-w-[180px]">
-              <div 
-                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 animate-pulse w-full transition-all duration-500"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* 2. POSTING / BACKGROUND TRANSMITTING STATE */}
+        {/* 1. POSTING / TRANSMITTING STATE */}
         {step === "posting" && (
           <div className="py-8 space-y-4 flex flex-col items-center w-full">
             <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin" />
@@ -283,7 +195,7 @@ export default function FastReaxPanel({
           </div>
         )}
 
-        {/* 3. SUCCESS / COMPLETED STATE */}
+        {/* 2. SUCCESS / COMPLETED STATE */}
         {step === "success" && (
           <div className="py-8 space-y-4 flex flex-col items-center w-full">
             <div className="w-12 h-12 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full flex items-center justify-center">
@@ -300,18 +212,21 @@ export default function FastReaxPanel({
           </div>
         )}
 
-        {/* 4. PREVIEW STATE (Wait for user confirmation if Fast Post is disabled) */}
+        {/* 3. PREVIEW STATE */}
         {step === "preview" && (
-          <div className="w-full space-y-4 pt-1">
+          <div className="w-full space-y-3 pt-1">
             
             {/* Header description */}
             <div className="text-left flex items-center justify-between">
               <span className="text-[9px] font-mono font-black text-indigo-400 uppercase bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded">
-                ⚡ PREVIEW QUICK REAX ({activeTone.toUpperCase()})
+                ⚡ FAST REAX ({activeTone.toUpperCase()})
+              </span>
+              <span className="text-[9px] text-slate-500 font-mono">
+                Backdrop: parent loop
               </span>
             </div>
 
-            {/* Loop Preview Canvas with text overlay */}
+            {/* Loop Preview Canvas using parentClip.mediaUrl */}
             <div className="relative aspect-video rounded-2xl overflow-hidden bg-black border border-slate-800 shadow-md">
               <div className={`w-full h-full ${
                 visualEffect === "zoom" ? "animate-zoom" :
@@ -321,47 +236,96 @@ export default function FastReaxPanel({
                 visualEffect === "shake" ? "animate-shake-chaotic" :
                 visualEffect === "glitch" ? "animate-glitch" : "animate-zoom"
               }`}>
-                {presetMedia.isVideo ? (
-                  <video src={presetMedia.url} className="w-full h-full object-cover" autoPlay loop muted playsInline />
+                {isVideo ? (
+                  <video 
+                    src={parentClip.mediaUrl} 
+                    className="w-full h-full object-cover" 
+                    autoPlay 
+                    loop 
+                    muted 
+                    playsInline 
+                  />
                 ) : (
-                  <img src={presetMedia.url} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                  <img 
+                    src={parentClip.mediaUrl} 
+                    className="w-full h-full object-cover" 
+                    alt="" 
+                    referrerPolicy="no-referrer" 
+                  />
                 )}
               </div>
 
-              {/* Generated Text Overlay */}
+              {/* Text Overlay */}
               {overlayText && (
-                <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent flex items-center justify-center p-2">
-                  <h3 className="font-sans font-black text-sm text-white tracking-widest text-center uppercase drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.85)]">
+                <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent flex items-end justify-center pb-3 px-3 pointer-events-none">
+                  <h3 className="font-sans font-black text-sm sm:text-base text-white tracking-widest text-center uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] line-clamp-2 break-words leading-tight max-w-full">
                     {overlayText}
                   </h3>
                 </div>
               )}
-
-              {/* Voice button */}
-              <button 
-                type="button"
-                onClick={() => speakText(voiceText, activeTone)}
-                className="absolute bottom-2 left-2 p-1 bg-black/60 backdrop-blur text-indigo-400 hover:text-indigo-300 border border-slate-800/50 rounded-lg text-xs flex items-center gap-1 font-mono transition-all z-10 cursor-pointer"
-              >
-                <Volume2 className="w-3.5 h-3.5" />
-                <span className="text-[8px] font-bold">REPLAY AUDIO</span>
-              </button>
             </div>
 
-            {/* Subtitle Readout */}
-            <div className="bg-slate-950/40 border border-slate-800 p-2.5 rounded-xl text-left">
-              <span className="text-[8px] text-slate-500 font-mono block uppercase mb-0.5">GENERATED VOICE LINE:</span>
-              <p className="text-[11px] text-slate-200 font-sans italic font-medium leading-tight">
-                "{voiceText}"
-              </p>
+            {/* User-editable Overlay Caption (Max 48 chars) */}
+            <div className="space-y-1 text-left bg-slate-950/50 p-2.5 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-slate-400 font-mono tracking-wider uppercase">
+                  Overlay Caption:
+                </label>
+                <span className="text-[9px] text-slate-500 font-mono">{overlayText.length}/48</span>
+              </div>
+              <input
+                type="text"
+                value={overlayText}
+                onChange={(e) => setOverlayText(e.target.value)}
+                maxLength={48}
+                placeholder="Enter caption..."
+                className="w-full px-3 py-1.5 bg-slate-900 border border-slate-800 focus:border-indigo-500 rounded-lg text-xs text-white focus:outline-none"
+              />
+            </div>
+
+            {/* Optional TTS Audio Toggle */}
+            <div className="flex items-center justify-between bg-slate-950/40 border border-slate-800 p-2.5 rounded-xl text-left">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !useTTS;
+                    setUseTTS(next);
+                    if (next && voiceText) {
+                      speakText(voiceText, activeTone);
+                    }
+                  }}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold flex items-center gap-1.5 cursor-pointer border transition-all ${
+                    useTTS
+                      ? "bg-indigo-600/30 text-indigo-300 border-indigo-500/50 shadow-sm"
+                      : "bg-slate-900 text-slate-400 border-slate-800 hover:text-white"
+                  }`}
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  {useTTS ? "🔊 TTS Voice: ON" : "🔈 TTS Voice: OFF"}
+                </button>
+                {useTTS && (
+                  <button
+                    type="button"
+                    onClick={() => speakText(voiceText, activeTone)}
+                    className="text-[10px] text-indigo-400 hover:text-indigo-300 font-mono underline cursor-pointer"
+                  >
+                    Replay
+                  </button>
+                )}
+              </div>
+              {useTTS && (
+                <span className="text-[9px] text-slate-400 font-mono italic truncate max-w-[130px]">
+                  "{voiceText}"
+                </span>
+              )}
             </div>
 
             {/* Action Buttons */}
-            <div className="space-y-2">
+            <div className="space-y-2 pt-1">
               <button
                 type="button"
                 onClick={() => {
-                  setStep("posting");
                   publishClip(voiceText, overlayText, visualEffect);
                 }}
                 className="w-full flex items-center justify-center gap-2 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-xs rounded-xl transition-all shadow-xl active:scale-95 uppercase tracking-wider cursor-pointer"

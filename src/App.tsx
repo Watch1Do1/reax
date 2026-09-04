@@ -426,20 +426,18 @@ export default function App() {
     }
   };
 
-  // Open Respond modal for a specific clip with an optional preselected tone
+  // Open Respond modal for a specific clip with an optional preselected tone (Capture-first flow)
   const handleRespondToClip = (parentClip: Clip, tone: Clip["tone"] | null = null) => {
-    if (typeof window !== "undefined" && window.innerWidth < 768) {
-      setFastReaxTarget({ parentClip, tone: tone || parentClip.tone || "funny" });
-    } else {
-      setReplyParent(parentClip);
-      setRespondTone(tone);
-      setIsRespondModalOpen(true);
-    }
+    setReplyParent(parentClip);
+    setRespondTone(tone || parentClip.tone || "funny");
+    setIsRespondModalOpen(true);
   };
 
-  // Fast tap-to-reax pipeline handler
+  // Fast tap-to-reax pipeline handler - opens RespondModal directly at capture step
   const handleFastRespond = (parentClip: Clip, tone: Clip["tone"]) => {
-    setFastReaxTarget({ parentClip, tone });
+    setReplyParent(parentClip);
+    setRespondTone(tone);
+    setIsRespondModalOpen(true);
   };
 
   // Open full editor modal as fallback or customization option from fast panel

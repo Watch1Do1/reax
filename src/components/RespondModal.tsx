@@ -10,35 +10,6 @@ import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { uploadMediaAsset, getAuthToken } from "../utils/supabaseClient";
 import { convertHeicToJpeg, isHeicFile } from "../utils/imageUtils";
 
-// Static preset templates for instant reaction clips
-const PRESETS = [
-  {
-    name: "Surprised",
-    url: "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=500",
-    description: "Cute surprised anime figure expression"
-  },
-  {
-    name: "Sarcastic Look",
-    url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500",
-    description: "Amused smirk reaction"
-  },
-  {
-    name: "Intense Eyes",
-    url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500",
-    description: "Dramatic intense glance"
-  },
-  {
-    name: "Vibing Cat",
-    url: "https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=500",
-    description: "Chill cat portrait"
-  },
-  {
-    name: "Calm Waves",
-    url: "https://vjs.zencdn.net/v/oceans.mp4",
-    description: "Chill looping ocean wave"
-  }
-];
-
 interface RespondModalProps {
   key?: string;
   parentId: string | null;
@@ -110,11 +81,14 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         // Stop all tracks to release microphone lock
         stream.getTracks().forEach(track => track.stop());
         
+        if (audioChunksRef.current.length === 0) return;
+
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         const reader = new FileReader();
         reader.onloadend = () => {
           setVoiceAudioData(reader.result as string);
           setAudioMode("record");
+          setStep("preview");
         };
         reader.readAsDataURL(blob);
       };
@@ -154,6 +128,18 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       audioRecorderRef.current.stop();
     }
     setRecordingAudio(false);
+  };
+
+  const cancelAudioRecording = () => {
+    if (audioIntervalRef.current) {
+      clearInterval(audioIntervalRef.current);
+    }
+    if (audioRecorderRef.current && audioRecorderRef.current.state !== "inactive") {
+      audioChunksRef.current = [];
+      audioRecorderRef.current.stop();
+    }
+    setRecordingAudio(false);
+    setAudioRecorderProgress(0);
   };
 
   // AI Suggestions
@@ -645,17 +631,6 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     }
   };
 
-  const selectPreset = (url: string) => {
-    const isVideo = url.endsWith(".mp4");
-    const mediaObj = {
-      data: url,
-      mimeType: isVideo ? "video/mp4" : "image/jpeg",
-      isVideo
-    };
-    stopCamera();
-    onMediaSelected(mediaObj);
-  };
-
   const handleCustomToneChange = (newTone: Clip["tone"]) => {
     setTone(newTone);
     regenerateAILoop(newTone, selectedMedia);
@@ -834,17 +809,54 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 className="space-y-6 py-2 text-left"
               >
                 <div className="text-center space-y-1 mb-4">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-[10px] font-mono mb-1">
+                    <span className="text-slate-400">TONE:</span>
+                    <span className="font-bold uppercase tracking-wider text-indigo-400">⚡ {tone}</span>
+                  </div>
                   <h4 className="font-sans font-black text-base text-white tracking-tight uppercase">
-                    CHOOSE MEDIA BACKGROUND
+                    CAPTURE YOUR REACTION
                   </h4>
                   <p className="text-[11px] text-slate-400 max-w-[320px] mx-auto leading-relaxed">
-                    Upload an image or video, record with your camera, or choose a preset looping template.
+                    Take photo, upload media, record a video, or record voice.
                   </p>
                 </div>
 
                 {/* Mobile / Hardware Selection Grid */}
                 <div className="space-y-3">
-                  {cameraActive ? (
+                  {recordingAudio ? (
+                    <div className="bg-slate-950/70 border border-emerald-500/30 rounded-2xl p-6 text-center space-y-4 shadow-xl">
+                      <div className="flex items-center justify-center gap-2 text-emerald-400 font-mono text-xs font-black uppercase tracking-wider">
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                        <span>Recording Voice (Max 6s)</span>
+                      </div>
+                      <div className="text-3xl font-black font-mono text-white">
+                        {((audioRecorderProgress / 100) * 6).toFixed(1)}s <span className="text-slate-500 text-lg">/ 6.0s</span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-emerald-500 to-rose-500 transition-all duration-100" 
+                          style={{ width: `${audioRecorderProgress}%` }} 
+                        />
+                      </div>
+                      <div className="flex items-center justify-center gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={stopAudioRecording}
+                          className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer shadow-lg shadow-emerald-600/25 flex items-center gap-2"
+                        >
+                          <span className="w-2 h-2 rounded-sm bg-white shrink-0" />
+                          Stop & Preview
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelAudioRecording}
+                          className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : cameraActive ? (
                     <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800 shadow-xl">
                       <video 
                         ref={(el) => {
@@ -930,96 +942,72 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                         ref={videoInputRef}
                         onChange={handleFileUpload}
                       />
+                      <input 
+                        type="file" 
+                        accept="image/*,video/mp4,video/webm,.heic,.heif" 
+                        className="hidden" 
+                        id="modal-upload-file-input"
+                        onChange={handleFileUpload}
+                      />
 
                       <div className="grid grid-cols-2 gap-3">
-                        {/* 1. Take Photo */}
+                        {/* 1. Take photo */}
                         <button
                           type="button"
                           onClick={() => handleCaptureOptionClick("photo")}
-                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
+                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-emerald-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
                         >
-                          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Camera className="w-5.5 h-5.5" />
+                          <div className="w-11 h-11 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 group-hover/opt:scale-110 transition-transform mb-3">
+                            <Camera className="w-6 h-6" />
                           </div>
-                          <span className="text-xs font-black text-white">Take Photo</span>
+                          <span className="text-xs font-black text-white">Take photo</span>
                           <span className="text-[9px] text-slate-500 font-mono mt-0.5">
-                            {isMobileDevice ? "Mobile Camera" : "Webcam Feed"}
+                            {isMobileDevice ? "Mobile Camera" : "Webcam Photo"}
                           </span>
                         </button>
 
-                        {/* 2. Record Clip */}
+                        {/* 2. Upload */}
+                        <label 
+                          htmlFor="modal-upload-file-input"
+                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-indigo-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer text-center"
+                        >
+                          <div className="w-11 h-11 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 group-hover/opt:scale-110 transition-transform mb-3">
+                            <Upload className="w-6 h-6" />
+                          </div>
+                          <span className="text-xs font-black text-white">Upload</span>
+                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">Image / Video / HEIC</span>
+                        </label>
+
+                        {/* 3. Record video */}
                         <button
                           type="button"
                           onClick={() => handleCaptureOptionClick("video")}
-                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
+                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-rose-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
                         >
-                          <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Film className="w-5.5 h-5.5" />
+                          <div className="w-11 h-11 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-400 group-hover/opt:scale-110 transition-transform mb-3">
+                            <Film className="w-6 h-6" />
                           </div>
-                          <span className="text-xs font-black text-white">Record Clip</span>
+                          <span className="text-xs font-black text-white">Record video</span>
                           <span className="text-[9px] text-slate-500 font-mono mt-0.5">
-                            {isMobileDevice ? "3-5s Video" : "Webcam Recorder"}
+                            {isMobileDevice ? "3-5s Clip" : "Webcam Video"}
                           </span>
                         </button>
 
-                        {/* 3. Upload File */}
-                        <label className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer text-center">
-                          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Upload className="w-5.5 h-5.5" />
-                          </div>
-                          <span className="text-xs font-black text-white">Upload File</span>
-                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">Image / Video</span>
-                          <input 
-                            type="file" 
-                            accept="image/*,video/mp4,video/webm,.heic,.heif" 
-                            className="hidden" 
-                            onChange={handleFileUpload}
-                          />
-                        </label>
-
-                        {/* 4. Live Webcam (Inline browser) */}
+                        {/* 4. Record voice */}
                         <button
                           type="button"
-                          onClick={startCamera}
-                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
+                          onClick={startAudioRecording}
+                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
                         >
-                          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Sparkles className="w-5.5 h-5.5" />
+                          <div className="w-11 h-11 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400 group-hover/opt:scale-110 transition-transform mb-3">
+                            <Mic className="w-6 h-6" />
                           </div>
-                          <span className="text-xs font-black text-white">Live Webcam</span>
-                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">Browser Input</span>
+                          <span className="text-xs font-black text-white">Record voice</span>
+                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">6s Voice Note</span>
                         </button>
                       </div>
                     </>
                   )}
-                </div>
-
-                {/* Preset Templates Shortcut */}
-                <div className="space-y-2 border-t border-slate-800/80 pt-4">
-                  <label className="block text-[10px] font-bold text-slate-400 font-mono tracking-wider">
-                    ⚡ OR START INSTANTLY WITH A PRESET LOOP:
-                  </label>
-                  <div className="grid grid-cols-5 gap-1.5 font-sans">
-                    {PRESETS.map((preset) => (
-                      <button
-                        key={`start-preset-${preset.name}`}
-                        type="button"
-                        onClick={() => selectPreset(preset.url)}
-                        className="relative aspect-square rounded-xl bg-black overflow-hidden border border-slate-800 hover:border-indigo-500 transition-all active:scale-95 group/preset cursor-pointer"
-                        title={preset.description}
-                      >
-                        {preset.url.endsWith(".mp4") ? (
-                          <video src={preset.url} className="w-full h-full object-cover pointer-events-none" muted playsInline />
-                        ) : (
-                          <img src={preset.url} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
-                        )}
-                        <div className="absolute inset-0 bg-black/45 group-hover/preset:bg-black/20 transition-colors" />
-                        <span className="absolute bottom-1 inset-x-1 text-[8px] font-black text-white text-center truncate uppercase">
-                          {preset.name}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
                 </div>
               </motion.div>
             )}
@@ -1169,12 +1157,26 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                           {previewMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
                         </button>
                       </div>
-                    ) : (
+                    ) : selectedMedia?.data ? (
                       <img 
-                        src={selectedMedia?.data} 
+                        src={selectedMedia.data} 
                         className="w-full h-full object-cover" 
                         alt="Looping visual clip preview"
                       />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-center p-6 space-y-3 w-full h-full bg-gradient-to-b from-slate-900 to-black">
+                        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+                          <Mic className="w-7 h-7 animate-pulse" />
+                        </div>
+                        <div className="space-y-0.5">
+                          <span className="text-xs font-mono text-amber-300 font-bold uppercase tracking-wider block">
+                            Voice Reaction (6s)
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            Audio note recorded
+                          </span>
+                        </div>
+                      </div>
                     )}
                   </div>
 
@@ -1976,32 +1978,6 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                             </div>
                           </>
                         )}
-                      </div>
-
-                      {/* Presets template tray */}
-                      <div className="space-y-1.5">
-                        <span className="block text-[10px] font-bold text-slate-500 font-mono">
-                          5. PRESET MEME SLIDES:
-                        </span>
-                        <div className="grid grid-cols-5 gap-1">
-                          {PRESETS.map((preset, idx) => (
-                            <button
-                              key={`preset_${idx}_${preset.name}`}
-                              onClick={() => selectPreset(preset.url)}
-                              className="relative aspect-square rounded-lg bg-black overflow-hidden border border-slate-800 hover:border-slate-500 transition-all flex items-center justify-center"
-                              title={preset.description}
-                            >
-                              {preset.url.endsWith(".mp4") ? (
-                                <video src={preset.url} className="w-full h-full object-cover pointer-events-none" muted playsInline loop autoPlay />
-                              ) : (
-                                <img src={preset.url} className="w-full h-full object-cover" alt={preset.name} />
-                              )}
-                              <div className="absolute inset-x-0 bottom-0 bg-black/60 p-0.5 text-[8px] font-mono text-center text-slate-300 truncate">
-                                {preset.name}
-                              </div>
-                            </button>
-                          ))}
-                        </div>
                       </div>
 
                     </div>
