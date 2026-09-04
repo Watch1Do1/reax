@@ -1,192 +1,341 @@
-Reax
+# Reax
 
-The comment section has never been this fun.
+> **Built for reactions, not comments.**
 
-Reax is a reaction-first social platform where people respond with content instead of comments.
+Reax is a reaction-first social app where people reply with content instead of comments.
 
 Post a photo or short video. Add a caption and optional voice.
 
-Instead of typing a reply, people respond with their own reaction:
+Instead of typing a reply, people respond with their own loop:
 
-📷 Photo or short video
-✏️ Caption
-🎙️ Optional voice clip
-⚡ Fast one-tap reactions
+- 📷 Photo or short video
+- ✏️ Caption
+- 🎙️ Optional voice clip
 
-The result is a chain of visual and audio responses where the conversation becomes the content.
+The result is a chain of visual and audio reactions where the conversation becomes the content.
 
-Built for reactions, not comments.
+🌐 **Live Demo:** https://reax-black.vercel.app
 
-Why Reax?
+---
 
-Most social platforms work like this:
+## Why Reax
 
+Typical social apps:
+
+```text
 Post
- └─ Comment
- └─ Comment
- └─ Comment
+├─ Comment
+├─ Comment
+└─ Comment
+```
 
+Reax:
 
-Reax works like this:
-
+```text
 Post
- └─ Reaction
+└─ Reaction
+   └─ Reaction
       └─ Reaction
-           └─ Reaction
-                └─ Reaction
-
+         └─ Reaction
+```
 
 Instead of scrolling through text, you watch and hear how people respond.
 
 Think:
 
-GIF wars
-Meme replies
-Reaction videos
-Visual conversations
+- GIF wars
+- Meme replies
+- Reaction videos
+- Visual conversations
 
-All in one place.
+The unit of conversation is a **loop**, not a paragraph.
 
-Features
-🎬 Create Reactions
+---
+
+## Features
+
+### 🎬 Create Reactions
 
 Create a root post with:
 
-Photo
-Short video
-Caption
-Optional voice recording
-⚡ Fast Reax
+- Photo
+- Short video
+- Caption
+- Optional voice recording
 
-Reply in just a few taps:
+### ⚡ Fast Reax
 
-Tap React
-Choose a tone
-Publish
+Mobile-first quick responses:
 
-No typing required.
+1. Tap React
+2. Choose a tone
+3. Publish
 
-🧵 Reaction Threads
+Designed to make reacting faster than typing.
+
+### 🧵 Reaction Threads
 
 Every reaction can receive reactions.
 
-Threads become cascading conversations where the funniest or most creative responses rise naturally.
+Threads naturally grow into visual conversation chains.
 
-🎙️ Voice Responses
+### 🎙️ Voice Responses
 
-Add personality with short voice clips.
+Attach short voice clips to reactions and let people hear your response, not just read it.
 
-Sometimes hearing a reaction is better than reading a comment.
+### 📦 Reaction Vault
 
-📦 Reaction Vault
+Save reactions and reuse them later.
 
-Save your favorite reactions and reuse them later.
+Build your own collection of go-to responses.
 
-Build your own library of response templates.
+### 👤 Guest Posting
 
-👤 Guest Posting
+No account required to get started.
 
-Try Reax without creating an account.
+Sign up later to claim a permanent username and profile.
 
-Sign up later to claim your username and profile.
+### 📱 Mobile First
 
-📱 Mobile First
-
-Works directly in the browser on phones, tablets, and desktop.
+Runs directly in the browser on phones, tablets, and desktop.
 
 No app download required.
 
-What Reax Is
+---
+
+## What Reax Is
 
 ✅ A reaction platform
 
 ✅ A visual conversation platform
 
-✅ A place for meme chains and reaction battles
+✅ A place for GIF-war style interaction
 
 ✅ A new way to respond to content
 
-What Reax Is Not
+---
+
+## What Reax Is Not
 
 ❌ A traditional comment section
 
 ❌ A chat app
 
-❌ Another TikTok clone
+❌ A TikTok clone
 
-❌ Another photo-sharing app
+❌ A generic photo feed
 
-The goal isn't posting.
+The goal is not posting.
 
 The goal is reacting.
 
-Example
-Original Post
+---
 
-"Just launched my new product."
+## Example
 
-Traditional Comment Section
-Looks cool.
-Love it.
-Too expensive.
+### Traditional Comment Section
+
+```text
+Looks good.
 Nice work.
+Too expensive.
+Love it.
+```
 
-Reax
-😲 "WAIT WHAT?"
+### Reax
+
+```text
+😲 "WAIT WHAT?!"
    └─ 😂 "BRO TAKE MY MONEY"
-       └─ 🤔 "How much is it?"
-            └─ 😱 "I need this."
-
+      └─ 🤔 "How much is it?"
+         └─ 😱 "I NEED THIS"
+```
 
 Every response becomes content.
 
-Tech Stack
-Frontend
-React
-TypeScript
-Vite
-Tailwind CSS
-Backend
-Express
-TypeScript
-Infrastructure
-Vercel
-Supabase
-Storage
-Supabase Storage
-Image uploads
-Video uploads
-Audio uploads
-Authentication
-Email + Password
-Guest mode support
-Running Locally
-Requirements
-Node.js
-Supabase project
-Install
-Shell
-1
+---
+
+## Tech Stack
+
+### Frontend
+
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+
+### Backend
+
+- Express
+- TypeScript
+
+### Infrastructure
+
+- Vercel
+- Supabase
+
+### Storage
+
+- Supabase Storage
+- Image uploads
+- Video uploads
+- Audio uploads
+
+### Authentication
+
+- Email & Password
+- Guest Accounts
+- Anonymous Posting
+
+---
+
+## Local Development
+
+### Requirements
+
+- Node.js
+- Supabase project
+
+### Install
+
+```bash
 npm install
-Show more lines
-Environment Variables
-Shell
-env isn’t fully supported. Syntax highlighting is based on Shell.
-1
+```
+
+### Configure Environment Variables
+
+Copy `.env.example` and configure:
+
+```env
 SUPABASE_URL=
-2
 SUPABASE_ANON_KEY=
-3
 SUPABASE_SERVICE_ROLE_KEY=
-4
+```
+
+Optional:
+
+```env
 GEMINI_API_KEY=
-Show more lines
-Start Development Server
-Shell
-1
+```
+
+For local development only:
+
+```env
+DEV_MEMORY_STORE=true
+```
+
+Do not use `DEV_MEMORY_STORE` in production.
+
+### Run Development Server
+
+```bash
 npm run dev
-Show more lines
-Vision
+```
+
+### Production Build
+
+```bash
+npm run build
+```
+
+---
+
+## Deployment Notes
+
+### Vercel
+
+The serverless entry point expects:
+
+```text
+dist/server.cjs
+```
+
+The deployment bundle must generate this file.
+
+### Supabase
+
+Required:
+
+```text
+clips
+user_profiles
+```
+
+Optional:
+
+```text
+likes
+laughs
+reports
+```
+
+### Storage
+
+Bucket:
+
+```text
+media
+```
+
+Recommended configuration:
+
+- Public read access
+- Authenticated uploads
+
+### Authentication
+
+- Email & Password
+- Guest posting supported
+
+For production email flows:
+
+```text
+Site URL = Vercel domain
+Redirect URL = Vercel domain
+```
+
+Do not use localhost redirect URLs in production.
+
+---
+
+## Product Evolution
+
+### Phase 0
+
+- Environment configuration
+- Production fail-closed behavior
+
+### Phase 1
+
+- Bearer-token authentication
+- Secure write operations
+
+### Phase 2
+
+- Supabase-backed clips schema
+
+### Phase 3
+
+- Storage uploads
+- No base64 media in database rows
+- HEIC → JPEG conversion on-device
+
+### Phase 4
+
+- Email/password identity
+- User profiles
+
+### Phase 5
+
+- Fast Reax mobile workflow
+
+### Phase 6
+
+- Watch and react directly from the feed
+
+---
+
+## Vision
 
 The internet learned how to post.
 
@@ -196,34 +345,16 @@ We believe some of the most entertaining content online isn't the original post.
 
 It's the response.
 
-Taglines
+---
 
-Some alternative taglines we've considered:
+## Tagline
 
-The comment section has never been this fun.
-Built for reactions, not comments.
-Turn comments into content.
-See the response. Hear the response.
-Reply with more than words.
-The response is the story.
+> **The comment section has never been this fun.**
 
-Reax The comment section has never been this fun. 🚀
+---
 
-For GitHub specifically, I'd actually make the hero section extremely concise:
+## License
 
-Markdown
-1
-# Reax
-2
- 
-3
-> The comment section has never been this fun.
-4
- 
-5
-Reax is a reaction-first social platform where people reply with photos, videos, captions, and voice instead of comments.
-6
- 
-7
-Built for reactions, not comments.
-Show more lines
+Private project.
+
+All rights reserved unless a license is added in the future.
