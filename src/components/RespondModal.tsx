@@ -1217,7 +1217,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     };
 
                     return overlayText && textPosition !== "none" ? (
-                      <div className={positionClasses[textPosition] || positionClasses.bottom || positionClasses.center}>
+                      <div className={positionClasses[textPosition] || positionClasses.bottom}>
                         <h2 className={`${stylePresetClasses[textStyle] || stylePresetClasses.classic} ${textColorClasses[textColor] || textColorClasses.white} ${
                           textPosition.includes("left") ? "text-left" : textPosition.includes("right") ? "text-right" : "text-center"
                         } line-clamp-2 break-words leading-tight max-w-full`}>

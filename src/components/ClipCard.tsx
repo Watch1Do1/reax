@@ -479,7 +479,7 @@ export default function ClipCard({
 
               {/* Optional Big overlay text */}
               {clip.overlayText && textStylePosition !== "none" && (
-                <div className={positionClasses[textStylePosition] || positionClasses.bottom || positionClasses.center}>
+                <div className={positionClasses[textStylePosition] || positionClasses.bottom}>
                   <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} ${
                     textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
                   } line-clamp-2 break-words leading-tight max-w-full`}>

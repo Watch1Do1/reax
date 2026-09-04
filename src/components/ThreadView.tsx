@@ -455,7 +455,7 @@ export default function ThreadView({
                 };
 
                 return focusedClip.overlayText && textStylePosition !== "none" ? (
-                  <div className={positionClasses[textStylePosition] || positionClasses.bottom || positionClasses.center}>
+                  <div className={positionClasses[textStylePosition] || positionClasses.bottom}>
                     <h2 className={`font-sans font-black text-base sm:text-lg md:text-xl text-white ${
                       textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
                     } tracking-wider drop-shadow-[0_1.5px_3.5px_rgba(0,0,0,0.85)] uppercase line-clamp-2 break-words leading-tight max-w-full`}>
