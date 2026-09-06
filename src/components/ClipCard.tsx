@@ -1088,7 +1088,13 @@ export default function ClipCard({
             }`}
             title={!logged ? "Sign in to like" : isLiked ? "Remove like" : "Like this clip"}
           >
-            <Heart className={`w-3.5 h-3.5 transition-colors ${isLiked ? "fill-rose-400 text-rose-400" : "hover:fill-rose-400"}`} />
+            <Heart 
+              className={
+                isLiked 
+                  ? "w-3.5 h-3.5 fill-rose-400 text-rose-400" 
+                  : "w-3.5 h-3.5 text-slate-400 hover:text-rose-400"
+              } 
+            />
             <span className="text-[11px] font-mono font-medium">{clip.likesCount ?? 0}</span>
           </button>
 
