@@ -35,26 +35,23 @@ export default function App() {
     return localStorage.getItem("reax_is_logged_in") === "true";
   });
 
-  // Username State with automatic lazy loading from localStorage
+  // Username State: only loaded from storage if user is logged in
   const [username, setUsername] = useState(() => {
-    let stored = localStorage.getItem("clips_username");
     const logged = localStorage.getItem("reax_is_logged_in") === "true";
-    if (stored) {
-      // Clean guest prefixes if they logged in
-      if (logged && stored.startsWith("~")) {
-        stored = stored.substring(1);
-        localStorage.setItem("clips_username", stored);
-      } else if (!logged && !stored.startsWith("~")) {
-        stored = "~" + stored;
-        localStorage.setItem("clips_username", stored);
+    if (!logged) {
+      // Clear out any old auto-generated ~guest username so anonymous users never have one
+      const stored = localStorage.getItem("clips_username");
+      if (stored && stored.startsWith("~")) {
+        localStorage.removeItem("clips_username");
       }
-      return stored;
+      return "";
     }
-    const funnyPrefixes = ["HyperReact", "WaveLooper", "VibeSurfer", "GigaMeme", "LoopMaster", "ChaosPilot", "Dramatist", "SarcasticScribe"];
-    const baseName = funnyPrefixes[Math.floor(Math.random() * funnyPrefixes.length)] + Math.floor(Math.random() * 899 + 100);
-    const generated = logged ? baseName : "~" + baseName;
-    localStorage.setItem("clips_username", generated);
-    return generated;
+    let stored = localStorage.getItem("clips_username") || "";
+    if (stored.startsWith("~")) {
+      stored = stored.substring(1);
+      localStorage.setItem("clips_username", stored);
+    }
+    return stored;
   });
   
   const [isEditingUsername, setIsEditingUsername] = useState(false);
@@ -158,15 +155,10 @@ export default function App() {
   const handleLogout = async () => {
     await signOutSupabase();
     localStorage.removeItem("reax_is_logged_in");
+    localStorage.removeItem("clips_username");
     setIsLoggedIn(false);
-    
-    // Generate new guest name
-    const funnyPrefixes = ["HyperReact", "WaveLooper", "VibeSurfer", "GigaMeme", "LoopMaster", "ChaosPilot", "Dramatist", "SarcasticScribe"];
-    const baseName = funnyPrefixes[Math.floor(Math.random() * funnyPrefixes.length)] + Math.floor(Math.random() * 899 + 100);
-    const guestName = "~" + baseName;
-    localStorage.setItem("clips_username", guestName);
-    setUsername(guestName);
-    setTempUsername(guestName);
+    setUsername("");
+    setTempUsername("");
     
     window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Signed out. You are now browsing as a Guest." } }));
     window.dispatchEvent(new Event("reax_saved_changed"));
@@ -614,17 +606,8 @@ export default function App() {
 
           {/* Right: @username (opens Profile) OR Sign in, and + button */}
           <div className="flex items-center gap-2">
-            {/* Subtle Refresh icon only */}
-            <button 
-              onClick={() => setRefreshTrigger(prev => prev + 1)}
-              className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-900 transition-colors cursor-pointer"
-              title="Refresh feed"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-indigo-400" : ""}`} />
-            </button>
-
-            {/* @username (opens Profile) OR Sign in */}
-            {isLoggedIn ? (
+            {/* If logged in: @username (opens Profile). If guest: Sign in */}
+            {isLoggedIn && username ? (
               <button 
                 onClick={() => setIsProfileOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 font-mono text-xs rounded-xl transition-all cursor-pointer"
@@ -656,7 +639,7 @@ export default function App() {
               <Plus className="w-4 h-4" />
             </button>
 
-            {/* Overflow menu for Vault / Admin / Sign out */}
+            {/* Overflow menu for Vault / Sign out */}
             <div className="relative">
               <button
                 onClick={() => setIsHeaderMenuOpen(!isHeaderMenuOpen)}
@@ -677,13 +660,6 @@ export default function App() {
                   >
                     <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                     <span>My Templates</span>
-                  </button>
-                  <button
-                    onClick={() => setIsAdminAuthOpen(true)}
-                    className="w-full px-3 py-2 text-left text-slate-400 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Admin</span>
                   </button>
                   {isLoggedIn && (
                     <button
