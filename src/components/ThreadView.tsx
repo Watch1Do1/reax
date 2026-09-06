@@ -15,6 +15,8 @@ interface ThreadViewProps {
   onClose: () => void;
   onLaugh: (id: string) => void;
   onLike: (id: string) => void;
+  onUnlike?: (id: string) => void;
+  onUnlaugh?: (id: string) => void;
   onDelete?: (id: string) => void;
   onRespond: (clip: Clip) => void;
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
@@ -27,6 +29,8 @@ export default function ThreadView({
   onClose, 
   onLaugh,
   onLike, 
+  onUnlike,
+  onUnlaugh,
   onDelete,
   onRespond, 
   onRespondWithTone,
@@ -134,6 +138,118 @@ export default function ThreadView({
       window.dispatchEvent(new Event("reax_saved_changed"));
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  // Track liked and laughed state using localStorage keys reax_liked_ids and reax_laughed_ids
+  const getStoredIds = (key: string): string[] => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const logged = localStorage.getItem("reax_is_logged_in") === "true";
+  const [isLiked, setIsLiked] = useState<boolean>(() => {
+    if (!logged || !focusedClipId) return false;
+    return getStoredIds("reax_liked_ids").includes(focusedClipId);
+  });
+  const [isLaughed, setIsLaughed] = useState<boolean>(() => {
+    if (!logged || !focusedClipId) return false;
+    return getStoredIds("reax_laughed_ids").includes(focusedClipId);
+  });
+
+  useEffect(() => {
+    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+    if (!isLogged || !focusedClipId) {
+      setIsLiked(false);
+      setIsLaughed(false);
+      return;
+    }
+    setIsLiked(getStoredIds("reax_liked_ids").includes(focusedClipId));
+    setIsLaughed(getStoredIds("reax_laughed_ids").includes(focusedClipId));
+  }, [focusedClipId]);
+
+  useEffect(() => {
+    const handleLikesSync = () => {
+      const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+      if (!isLogged || !focusedClipId) {
+        setIsLiked(false);
+        setIsLaughed(false);
+        return;
+      }
+      setIsLiked(getStoredIds("reax_liked_ids").includes(focusedClipId));
+      setIsLaughed(getStoredIds("reax_laughed_ids").includes(focusedClipId));
+    };
+    window.addEventListener("reax_likes_changed", handleLikesSync);
+    return () => window.removeEventListener("reax_likes_changed", handleLikesSync);
+  }, [focusedClipId]);
+
+  const handleLikeClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!focusedClip) return;
+    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+    if (!isLogged) {
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
+    const nextLiked = !isLiked;
+    setIsLiked(nextLiked);
+
+    try {
+      let ids = getStoredIds("reax_liked_ids");
+      if (nextLiked) {
+        if (!ids.includes(focusedClip.id)) ids.push(focusedClip.id);
+      } else {
+        ids = ids.filter(id => id !== focusedClip.id);
+      }
+      localStorage.setItem("reax_liked_ids", JSON.stringify(ids));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } catch (err) {
+      console.error("Error updating reax_liked_ids:", err);
+    }
+
+    if (nextLiked) {
+      onLike(focusedClip.id);
+    } else {
+      onUnlike?.(focusedClip.id);
+    }
+  };
+
+  const handleLaughClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!focusedClip) return;
+    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+    if (!isLogged) {
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
+    const nextLaughed = !isLaughed;
+    setIsLaughed(nextLaughed);
+
+    try {
+      let ids = getStoredIds("reax_laughed_ids");
+      if (nextLaughed) {
+        if (!ids.includes(focusedClip.id)) ids.push(focusedClip.id);
+      } else {
+        ids = ids.filter(id => id !== focusedClip.id);
+      }
+      localStorage.setItem("reax_laughed_ids", JSON.stringify(ids));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } catch (err) {
+      console.error("Error updating reax_laughed_ids:", err);
+    }
+
+    if (nextLaughed) {
+      onLaugh(focusedClip.id);
+    } else {
+      onUnlaugh?.(focusedClip.id);
     }
   };
 
@@ -561,9 +677,15 @@ export default function ThreadView({
               <div className="flex items-center gap-3">
                 {/* Primary Humor Metric: 😂 Laughs */}
                 <button 
-                  onClick={() => onLaugh(focusedClip.id)}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 hover:text-amber-200 transition-all group/laugh active:scale-95 cursor-pointer"
-                  title="Laugh at this clip"
+                  onClick={handleLaughClick}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all group/laugh active:scale-95 cursor-pointer ${
+                    !logged 
+                      ? "bg-amber-500/5 border-amber-500/10 text-slate-500 opacity-60" 
+                      : isLaughed
+                        ? "bg-amber-500/20 border-amber-500/40 text-amber-300 font-bold ring-1 ring-amber-500/30"
+                        : "bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/25 text-amber-300 hover:text-amber-200"
+                  }`}
+                  title={!logged ? "Sign in to laugh" : isLaughed ? "Remove laugh" : "Laugh at this clip"}
                 >
                   <span className="text-sm transition-transform group-hover/laugh:scale-125">😂</span>
                   <span className="text-xs font-mono font-bold">{focusedClip.laughsCount ?? 0}</span>
@@ -571,11 +693,17 @@ export default function ThreadView({
 
                 {/* Secondary Metric: ❤️ Likes */}
                 <button 
-                  onClick={() => onLike(focusedClip.id)}
-                  className="flex items-center gap-1.5 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer px-1.5 py-1"
-                  title="Like this clip"
+                  onClick={handleLikeClick}
+                  className={`flex items-center gap-1.5 transition-colors cursor-pointer px-1.5 py-1 ${
+                    !logged 
+                      ? "text-slate-500 opacity-60" 
+                      : isLiked 
+                        ? "text-rose-400 font-bold" 
+                        : "text-slate-400 hover:text-rose-400"
+                  }`}
+                  title={!logged ? "Sign in to like" : isLiked ? "Remove like" : "Like this clip"}
                 >
-                  <Heart className="w-4 h-4 fill-transparent hover:fill-rose-400" />
+                  <Heart className={`w-4 h-4 transition-colors ${isLiked ? "fill-rose-400 text-rose-400" : "fill-transparent hover:fill-rose-400"}`} />
                   <span className="text-xs font-mono font-bold">{focusedClip.likesCount ?? 0}</span>
                 </button>
 

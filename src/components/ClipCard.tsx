@@ -10,6 +10,8 @@ interface ClipCardProps {
   allClips: Clip[];
   onLaugh: (id: string) => void;
   onLike: (id: string) => void;
+  onUnlike?: (id: string) => void;
+  onUnlaugh?: (id: string) => void;
   onDelete?: (id: string) => void;
   onRespond: (clip: Clip) => void;
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
@@ -24,6 +26,8 @@ export default function ClipCard({
   allClips, 
   onLaugh,
   onLike, 
+  onUnlike,
+  onUnlaugh,
   onDelete,
   onRespond, 
   onRespondWithTone, 
@@ -448,6 +452,117 @@ export default function ClipCard({
     window.addEventListener("reax_saved_changed", handleSync);
     return () => window.removeEventListener("reax_saved_changed", handleSync);
   }, [clip.mediaUrl, clip.voiceText, clip.overlayText]);
+
+  // Track liked and laughed state using localStorage keys reax_liked_ids and reax_laughed_ids
+  const getStoredIds = (key: string): string[] => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const [isLiked, setIsLiked] = useState<boolean>(() => {
+    if (!logged) return false;
+    return getStoredIds("reax_liked_ids").includes(clip.id);
+  });
+  const [isLaughed, setIsLaughed] = useState<boolean>(() => {
+    if (!logged) return false;
+    return getStoredIds("reax_laughed_ids").includes(clip.id);
+  });
+
+  useEffect(() => {
+    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+    if (!isLogged) {
+      setIsLiked(false);
+      setIsLaughed(false);
+      return;
+    }
+    setIsLiked(getStoredIds("reax_liked_ids").includes(clip.id));
+    setIsLaughed(getStoredIds("reax_laughed_ids").includes(clip.id));
+  }, [clip.id]);
+
+  useEffect(() => {
+    const handleLikesSync = () => {
+      const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+      if (!isLogged) {
+        setIsLiked(false);
+        setIsLaughed(false);
+        return;
+      }
+      setIsLiked(getStoredIds("reax_liked_ids").includes(clip.id));
+      setIsLaughed(getStoredIds("reax_laughed_ids").includes(clip.id));
+    };
+    window.addEventListener("reax_likes_changed", handleLikesSync);
+    return () => window.removeEventListener("reax_likes_changed", handleLikesSync);
+  }, [clip.id]);
+
+  const handleLikeClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+    if (!isLogged) {
+      // Guests cannot like. Open sign in (same upgrade modal as save)
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
+    const nextLiked = !isLiked;
+    setIsLiked(nextLiked); // Optimistic UI: update icon immediately
+
+    try {
+      let ids = getStoredIds("reax_liked_ids");
+      if (nextLiked) {
+        if (!ids.includes(clip.id)) ids.push(clip.id);
+      } else {
+        ids = ids.filter(id => id !== clip.id);
+      }
+      localStorage.setItem("reax_liked_ids", JSON.stringify(ids));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } catch (err) {
+      console.error("Error updating reax_liked_ids:", err);
+    }
+
+    if (nextLiked) {
+      onLike(clip.id);
+    } else {
+      onUnlike?.(clip.id);
+    }
+  };
+
+  const handleLaughClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
+    if (!isLogged) {
+      // Guests cannot laugh. Open sign in (same upgrade modal as save)
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
+    const nextLaughed = !isLaughed;
+    setIsLaughed(nextLaughed); // Optimistic UI: update icon immediately
+
+    try {
+      let ids = getStoredIds("reax_laughed_ids");
+      if (nextLaughed) {
+        if (!ids.includes(clip.id)) ids.push(clip.id);
+      } else {
+        ids = ids.filter(id => id !== clip.id);
+      }
+      localStorage.setItem("reax_laughed_ids", JSON.stringify(ids));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } catch (err) {
+      console.error("Error updating reax_laughed_ids:", err);
+    }
+
+    if (nextLaughed) {
+      onLaugh(clip.id);
+    } else {
+      onUnlaugh?.(clip.id);
+    }
+  };
 
   const toggleSave = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -947,9 +1062,15 @@ export default function ClipCard({
         <div className="flex items-center gap-3">
           {/* Primary Humor Metric: 😂 Laughs */}
           <button 
-            onClick={() => onLaugh(clip.id)}
-            className="flex items-center gap-1 text-slate-400 hover:text-amber-300 transition-colors cursor-pointer"
-            title="Laugh at this clip"
+            onClick={handleLaughClick}
+            className={`flex items-center gap-1 transition-all cursor-pointer ${
+              !logged 
+                ? "text-slate-500 hover:text-amber-300 opacity-60" 
+                : isLaughed 
+                  ? "text-amber-300 font-bold bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded-md" 
+                  : "text-slate-400 hover:text-amber-300"
+            }`}
+            title={!logged ? "Sign in to laugh" : isLaughed ? "Remove laugh" : "Laugh at this clip"}
           >
             <span className="text-xs">😂</span>
             <span className="text-[11px] font-mono font-medium">{clip.laughsCount ?? 0}</span>
@@ -957,11 +1078,17 @@ export default function ClipCard({
 
           {/* Secondary Metric: ❤️ Likes */}
           <button 
-            onClick={() => onLike(clip.id)}
-            className="flex items-center gap-1 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
-            title="Like this clip"
+            onClick={handleLikeClick}
+            className={`flex items-center gap-1 transition-all cursor-pointer ${
+              !logged 
+                ? "text-slate-500 hover:text-rose-400 opacity-60" 
+                : isLiked 
+                  ? "text-rose-400 font-bold" 
+                  : "text-slate-400 hover:text-rose-400"
+            }`}
+            title={!logged ? "Sign in to like" : isLiked ? "Remove like" : "Like this clip"}
           >
-            <Heart className="w-3.5 h-3.5 hover:fill-rose-400" />
+            <Heart className={`w-3.5 h-3.5 transition-colors ${isLiked ? "fill-rose-400 text-rose-400" : "hover:fill-rose-400"}`} />
             <span className="text-[11px] font-mono font-medium">{clip.likesCount ?? 0}</span>
           </button>
 
@@ -1085,6 +1212,8 @@ export default function ClipCard({
               allClips={allClips} 
               onLaugh={onLaugh}
               onLike={onLike} 
+              onUnlike={onUnlike}
+              onUnlaugh={onUnlaugh}
               onDelete={onDelete}
               onRespond={onRespond} 
               onRespondWithTone={onRespondWithTone}

@@ -156,12 +156,15 @@ export default function App() {
     await signOutSupabase();
     localStorage.removeItem("reax_is_logged_in");
     localStorage.removeItem("clips_username");
+    localStorage.removeItem("reax_liked_ids");
+    localStorage.removeItem("reax_laughed_ids");
     setIsLoggedIn(false);
     setUsername("");
     setTempUsername("");
     
     window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Signed out. You are now browsing as a Guest." } }));
     window.dispatchEvent(new Event("reax_saved_changed"));
+    window.dispatchEvent(new Event("reax_likes_changed"));
     setRefreshTrigger(prev => prev + 1);
   };
 
@@ -342,9 +345,14 @@ export default function App() {
 
   // Handle Like Action
   const handleLike = async (id: string) => {
+    if (localStorage.getItem("reax_is_logged_in") !== "true") {
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
     try {
       // Optimistic update
-      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: c.likesCount + 1 } : c));
+      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: (c.likesCount || 0) + 1 } : c));
 
       let token = "";
       try { token = await getAuthToken(); } catch {}
@@ -352,21 +360,68 @@ export default function App() {
       const res = await fetch(`/api/clips/${id}/like`, {
         method: "POST",
         headers: {
+          "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         }
       });
-      if (!res.ok) throw new Error("Failed to register like on server");
+      if (!res.ok) {
+        if (res.status === 401) {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+        }
+        throw new Error("Failed to register like on server");
+      }
       const updatedClip = await res.json();
       
       // Update with authoritative server state
-      setClips(prev => prev.map(c => c.id === id ? updatedClip : c));
+      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
     } catch (err) {
       console.error("Like error:", err);
     }
   };
 
+  // Handle Unlike Action
+  const handleUnlike = async (id: string) => {
+    if (localStorage.getItem("reax_is_logged_in") !== "true") {
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
+    try {
+      // Optimistic update
+      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: Math.max(0, (c.likesCount || 0) - 1) } : c));
+
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+
+      const res = await fetch(`/api/clips/${id}/unlike`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+        }
+        throw new Error("Failed to register unlike on server");
+      }
+      const updatedClip = await res.json();
+      
+      // Update with authoritative server state
+      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
+    } catch (err) {
+      console.error("Unlike error:", err);
+    }
+  };
+
   // Handle Laugh Action (😂 primary humor metric)
   const handleLaugh = async (id: string) => {
+    if (localStorage.getItem("reax_is_logged_in") !== "true") {
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
     try {
       // Optimistic update
       setClips(prev => prev.map(c => c.id === id ? { ...c, laughsCount: (c.laughsCount || 0) + 1 } : c));
@@ -377,16 +432,58 @@ export default function App() {
       const res = await fetch(`/api/clips/${id}/laugh`, {
         method: "POST",
         headers: {
+          "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         }
       });
-      if (!res.ok) throw new Error("Failed to register laugh on server");
+      if (!res.ok) {
+        if (res.status === 401) {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+        }
+        throw new Error("Failed to register laugh on server");
+      }
       const updatedClip = await res.json();
       
       // Update with authoritative server state
-      setClips(prev => prev.map(c => c.id === id ? updatedClip : c));
+      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
     } catch (err) {
       console.error("Laugh error:", err);
+    }
+  };
+
+  // Handle Unlaugh Action
+  const handleUnlaugh = async (id: string) => {
+    if (localStorage.getItem("reax_is_logged_in") !== "true") {
+      window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+      return;
+    }
+
+    try {
+      // Optimistic update
+      setClips(prev => prev.map(c => c.id === id ? { ...c, laughsCount: Math.max(0, (c.laughsCount || 0) - 1) } : c));
+
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+
+      const res = await fetch(`/api/clips/${id}/unlaugh`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!res.ok) {
+        if (res.status === 401) {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
+        }
+        throw new Error("Failed to register unlaugh on server");
+      }
+      const updatedClip = await res.json();
+      
+      // Update with authoritative server state
+      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
+    } catch (err) {
+      console.error("Unlaugh error:", err);
     }
   };
 
@@ -798,6 +895,8 @@ export default function App() {
                   allClips={clips}
                   onLaugh={handleLaugh}
                   onLike={handleLike}
+                  onUnlike={handleUnlike}
+                  onUnlaugh={handleUnlaugh}
                   onDelete={handleDeleteClip}
                   onRespond={handleRespondToClip}
                   onRespondWithTone={handleFastRespond}
@@ -854,6 +953,8 @@ export default function App() {
             onClose={() => setSelectedThreadRootId(null)}
             onLaugh={handleLaugh}
             onLike={handleLike}
+            onUnlike={handleUnlike}
+            onUnlaugh={handleUnlaugh}
             onDelete={handleDeleteClip}
             onRespond={handleRespondToClip}
             onRespondWithTone={handleFastRespond}
