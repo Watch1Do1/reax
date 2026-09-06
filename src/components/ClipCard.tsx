@@ -372,9 +372,10 @@ export default function ClipCard({
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Author ownership check
+  const logged = localStorage.getItem("reax_is_logged_in") === "true";
   const currentUsername = (localStorage.getItem("clips_username") || "").toLowerCase().replace(/^~/, "");
   const clipAuthor = (clip.authorName || "").toLowerCase().replace(/^~/, "");
-  const isAuthor = Boolean(currentUsername && clipAuthor && currentUsername === clipAuthor);
+  const isAuthor = Boolean(logged && currentUsername && clipAuthor && currentUsername === clipAuthor && clipAuthor !== "guest");
 
   const handleDelete = async () => {
     if (!window.confirm("Are you sure you want to delete your reaction? This cannot be undone.")) return;

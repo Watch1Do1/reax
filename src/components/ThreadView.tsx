@@ -592,9 +592,10 @@ export default function ThreadView({
 
                 {/* Author Only Delete Action */}
                 {(() => {
+                  const logged = localStorage.getItem("reax_is_logged_in") === "true";
                   const currentUsername = (localStorage.getItem("clips_username") || "").toLowerCase().replace(/^~/, "");
                   const author = (focusedClip.authorName || "").toLowerCase().replace(/^~/, "");
-                  if (currentUsername && author && currentUsername === author && onDelete) {
+                  if (logged && currentUsername && author && currentUsername === author && author !== "guest" && onDelete) {
                     return (
                       <button 
                         onClick={() => {

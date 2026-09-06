@@ -41,6 +41,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean } | null>(null);
   const [tone, setTone] = useState<Clip["tone"]>("funny");
   const [voiceStyle, setVoiceStyle] = useState<Clip["voiceStyle"]>("casual");
+  const [guestAuthorName, setGuestAuthorName] = useState("");
   
   // Audio configuration & recording states
   const [audioMode, setAudioMode] = useState<"record" | "tts" | "none">("none");
@@ -240,6 +241,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         ? (isEditedFromRemix ? remixData.authorName : remixData.remixedFrom)
         : undefined;
 
+      const authorNameVal = (username ? username.trim() : (guestAuthorName.trim() || "Guest"));
+
       const newSaved: SavedReaction = {
         id: generateUniqueId("saved"),
         mediaUrl: selectedMedia.data,
@@ -249,7 +252,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         tone,
         effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`,
         overlayText,
-        authorName: username || "Me",
+        authorName: authorNameVal,
         originalAuthor: originalAuthorVal,
         remixedFrom: remixedFromVal,
         savedAt: new Date().toISOString()
@@ -725,7 +728,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         voiceAudioUrl: (audioMode === "record" && uploadedVoiceUrl) ? uploadedVoiceUrl : undefined,
         voiceStyle: voiceStyle || undefined,
         tone,
-        authorName: username.trim(),
+        authorName: (username ? username.trim() : (guestAuthorName.trim() || "Guest")),
         effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`,
         overlayText,
         originalAuthor: originalAuthorVal,
@@ -769,9 +772,15 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           <div>
             <h3 className="font-sans font-black text-sm text-white tracking-tight flex items-center gap-1.5 uppercase">
               <span>🚀 REACT / JUMP IN</span>
-              <span className="text-[9px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-mono px-1.5 py-0.5 rounded">
-                @{username}
-              </span>
+              {username ? (
+                <span className="text-[9px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-mono px-1.5 py-0.5 rounded">
+                  @{username}
+                </span>
+              ) : (
+                <span className="text-[9px] bg-slate-800 border border-slate-700 text-slate-300 font-mono px-1.5 py-0.5 rounded">
+                  {guestAuthorName.trim() ? `@${guestAuthorName.trim()}` : "Guest"}
+                </span>
+              )}
             </h3>
             {parentClip && (
               <p className="text-[10px] text-slate-500 mt-0.5 font-mono uppercase">
@@ -1680,6 +1689,25 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 </div>
 
 
+
+                {/* Guest Attribution (for this clip only) */}
+                {!username && (
+                  <div className="space-y-1.5 pt-1 border-t border-slate-800/40 text-left">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold text-slate-400 font-mono tracking-wider uppercase">
+                        YOUR NAME (OPTIONAL):
+                      </label>
+                      <span className="text-[9px] text-slate-500 font-mono">For this post only</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={guestAuthorName}
+                      onChange={(e) => setGuestAuthorName(e.target.value.slice(0, 24))}
+                      placeholder="Guest"
+                      className="w-full bg-slate-900 border border-slate-800 focus:border-indigo-500 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 outline-none font-sans"
+                    />
+                  </div>
+                )}
 
                 {/* Direct Action Post Button */}
                 <div className="pt-1 flex gap-2">
