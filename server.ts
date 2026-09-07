@@ -252,31 +252,7 @@ class MemoryStore implements Store {
   };
 
   constructor() {
-    this.syncProfiles();
-  }
-
-  private syncProfiles() {
-    const usersMap = new Map<string, UserProfile>();
-    this.clips.forEach(clip => {
-      const existing = usersMap.get(clip.authorName.toLowerCase());
-      if (existing) {
-        existing.reactionCount += 1;
-        if (new Date(clip.createdAt) > new Date(existing.lastActive)) {
-          existing.lastActive = clip.createdAt;
-        }
-      } else {
-        usersMap.set(clip.authorName.toLowerCase(), {
-          id: clip.authorId || `user-${clip.authorName.toLowerCase()}`,
-          username: clip.authorName,
-          createdAt: clip.createdAt,
-          lastActive: clip.createdAt,
-          reactionCount: 1,
-          suspended: false,
-          strikes: 0
-        });
-      }
-    });
-    this.userProfiles = Array.from(usersMap.values());
+    // Real user profiles are added when users authenticate or update their profiles
   }
 
   async getClips(includeDeleted = false): Promise<Clip[]> {
@@ -900,32 +876,9 @@ class SupabaseStore implements Store {
         }));
       }
     } catch (err) {
-      // Fallback: derive user profiles from clips table
+      console.warn("getUsers query failed or table not present:", err);
     }
-
-    const clips = await this.getClips(true);
-    const usersMap = new Map<string, UserProfile>();
-    clips.forEach(clip => {
-      const name = clip.authorName || "Anonymous";
-      const existing = usersMap.get(name.toLowerCase());
-      if (existing) {
-        existing.reactionCount += 1;
-        if (new Date(clip.createdAt) > new Date(existing.lastActive)) {
-          existing.lastActive = clip.createdAt;
-        }
-      } else {
-        usersMap.set(name.toLowerCase(), {
-          id: clip.authorId || undefined,
-          username: name,
-          createdAt: clip.createdAt,
-          lastActive: clip.createdAt,
-          reactionCount: 1,
-          suspended: false,
-          strikes: 0
-        });
-      }
-    });
-    return Array.from(usersMap.values());
+    return [];
   }
 
   async getUserProfile(query: { id?: string; username?: string }): Promise<UserProfile | null> {
@@ -2043,67 +1996,37 @@ app.get("/api/admin/verify", (req, res) => {
   return res.json({ success: true });
 });
 
-// 1. GET Admin Dashboard Stats & Funnels
+// 1. GET Admin Dashboard Stats (Real counts only)
 app.get("/api/admin/stats", async (req, res) => {
   try {
-    const userProfiles = await store!.getUsers();
     const clips = await store!.getClips(true);
-    const funnel = await store!.getFunnel();
-    const today = await store!.getTodayStats();
+    const reports = await store!.getReports();
+    const userProfiles = await store!.getUsers();
 
-    const totalUsers = userProfiles.length;
-    const guestUsers = userProfiles.filter(u => u.username.startsWith("~")).length;
-    const registeredUsers = userProfiles.filter(u => !u.username.startsWith("~")).length;
-    const totalReactions = clips.filter(c => c.parentId !== null).length;
+    const totalClips = clips.length;
     const totalRootThreads = clips.filter(c => c.parentId === null).length;
     const totalReplies = clips.filter(c => c.parentId !== null).length;
+    const openReports = reports.length;
+    const totalUsers = userProfiles.length;
 
     const voiceReactions = clips.filter(c => !!(c.voiceText || c.voiceAudioData || c.voiceAudioUrl)).length;
     const silentReactions = clips.filter(c => !(c.voiceText || c.voiceAudioData || c.voiceAudioUrl)).length;
     const videoReactions = clips.filter(c => c.mediaUrl && (c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-"))).length;
     const imageReactions = clips.filter(c => !c.mediaUrl || !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("mixkit-"))).length;
 
-    const now = Date.now();
-    const oneDayMs = 24 * 60 * 60 * 1000;
-    const sevenDaysMs = 7 * oneDayMs;
-
-    const postsToday = clips.filter(c => (now - new Date(c.createdAt).getTime()) <= oneDayMs).length;
-    const postsThisWeek = clips.filter(c => (now - new Date(c.createdAt).getTime()) <= sevenDaysMs).length;
-
-    const videoClipsCount = clips.filter(c => c.mediaUrl && (c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-"))).length;
-    const imageClipsCount = clips.filter(c => !c.mediaUrl || !(c.mediaUrl.endsWith(".mp4") || c.mediaUrl.endsWith(".webm") || c.mediaUrl.includes("uploads/clip-"))).length;
-    const voiceClipsCount = clips.filter(c => !!(c.voiceAudioData || c.voiceAudioUrl)).length;
-
-    const storageUsedMB = parseFloat(((videoClipsCount * 1.5) + (imageClipsCount * 0.2) + (voiceClipsCount * 0.15)).toFixed(2));
-    const storageLimitMB = 5000;
-
-    const audioAdoptionPercent = clips.length > 0 
-      ? Math.round((voiceReactions / clips.length) * 100)
-      : 0;
-
     res.json({
       overview: {
-        totalUsers,
-        guestUsers,
-        registeredUsers,
-        totalReactions,
+        totalClips,
         totalRootThreads,
-        totalReplies
+        totalReplies,
+        openReports,
+        totalUsers
       },
       breakdown: {
         voiceReactions,
         silentReactions,
         videoReactions,
         imageReactions
-      },
-      today,
-      funnel,
-      founderMetrics: {
-        postsToday,
-        postsThisWeek,
-        storageUsedMB,
-        storageLimitMB,
-        audioAdoptionPercent
       }
     });
   } catch (err: any) {
