@@ -491,6 +491,18 @@ export async function uploadMediaAsset({
 
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
+    if (res.status === 403 && errData.error === "signup_required") {
+      const err = new Error("signup_required");
+      (err as any).signupRequired = true;
+      (err as any).status = 403;
+      (err as any).clipCount = errData.clipCount || 3;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+          detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
+        }));
+      }
+      throw err;
+    }
     throw new Error(errData.error || `Upload failed with HTTP ${res.status}`);
   }
 

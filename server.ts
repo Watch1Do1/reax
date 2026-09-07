@@ -134,6 +134,8 @@ export type TodayStats = {
 export interface Store {
   getClips(includeDeleted?: boolean): Promise<Clip[]>;
   getClip(id: string): Promise<Clip | null>;
+  countClipsByAuthor(authorId: string): Promise<number>;
+  updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number>;
   insertClip(clip: Clip): Promise<Clip>;
   updateClip(id: string, updates: Partial<Clip>): Promise<Clip | null>;
   recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }>;
@@ -262,6 +264,21 @@ class MemoryStore implements Store {
 
   async getClip(id: string): Promise<Clip | null> {
     return this.clips.find(c => c.id === id) || null;
+  }
+
+  async countClipsByAuthor(authorId: string): Promise<number> {
+    return this.clips.filter(c => c.authorId === authorId && !c.deleted).length;
+  }
+
+  async updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number> {
+    let updated = 0;
+    for (const clip of this.clips) {
+      if (clip.authorId === authorId) {
+        clip.authorName = newAuthorName;
+        updated++;
+      }
+    }
+    return updated;
   }
 
   async insertClip(clip: Clip): Promise<Clip> {
@@ -648,6 +665,56 @@ class SupabaseStore implements Store {
 
     if (error) throw error;
     return data ? mapDbToClip(data) : null;
+  }
+
+  async countClipsByAuthor(authorId: string): Promise<number> {
+    try {
+      const { count, error } = await this.client
+        .from("clips")
+        .select("id", { count: "exact", head: true })
+        .eq("author_id", authorId)
+        .eq("deleted", false);
+
+      if (!error && typeof count === "number") {
+        return count;
+      }
+      if (error) {
+        console.warn("SupabaseStore.countClipsByAuthor head query error, falling back:", error.message || error);
+      }
+      const { data, error: selectErr } = await this.client
+        .from("clips")
+        .select("id")
+        .eq("author_id", authorId)
+        .eq("deleted", false);
+
+      if (selectErr) {
+        console.error("SupabaseStore.countClipsByAuthor fallback error:", selectErr.message || selectErr);
+        return 0;
+      }
+      return (data || []).length;
+    } catch (err: any) {
+      console.error("SupabaseStore.countClipsByAuthor error:", err?.message || err);
+      return 0;
+    }
+  }
+
+  async updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number> {
+    try {
+      const { data, error } = await this.client
+        .from("clips")
+        .update({ author_name: newAuthorName })
+        .eq("author_id", authorId)
+        .select("id");
+
+      if (error) {
+        console.warn("SupabaseStore.updateClipsAuthorName error:", error.message || error);
+        return 0;
+      }
+      return data?.length || 0;
+    } catch (err: any) {
+      console.warn("SupabaseStore.updateClipsAuthorName exception:", err?.message || err);
+      return 0;
+    }
   }
 
   async insertClip(clip: Clip): Promise<Clip> {
@@ -1140,6 +1207,7 @@ export interface AuthResult {
   user: {
     id: string;
     email?: string;
+    is_anonymous: boolean;
   };
   profile: UserProfile;
 }
@@ -1163,9 +1231,16 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
         return { ok: false, status: 401, error: "Unauthorized: Invalid or expired Supabase session." };
       }
 
+      const isAnonymous = Boolean(
+        (userData.user as any).is_anonymous ||
+        userData.user.app_metadata?.provider === "anonymous" ||
+        (userData.user.app_metadata?.providers && userData.user.app_metadata.providers.includes("anonymous") && !userData.user.email)
+      );
+
       const user = {
         id: userData.user.id,
-        email: userData.user.email
+        email: userData.user.email,
+        is_anonymous: isAnonymous
       };
 
       // Load profile from store
@@ -1210,10 +1285,17 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
       return { ok: false, status: 403, error: "Your account is suspended due to violations of Community Guidelines." };
     }
 
+    const isAnonymous = Boolean(
+      token === "dev-bearer-token" ||
+      token.startsWith("anon-") ||
+      req.headers["x-guest"] === "true" ||
+      req.headers["x-anonymous"] === "true"
+    );
+
     return {
       ok: true,
       auth: {
-        user: { id: devId, email: profile.email || "dev@reax.local" },
+        user: { id: devId, email: profile.email || "dev@reax.local", is_anonymous: isAnonymous },
         profile
       }
     };
@@ -1426,6 +1508,13 @@ app.post("/api/me", async (req, res) => {
       lastActive: new Date().toISOString()
     });
 
+    // Keep posts on signup: update existing clips author_name for this user
+    try {
+      await store!.updateClipsAuthorName(user.id, cleanUsername);
+    } catch (clipErr) {
+      console.warn("Could not update clips author_name on profile update:", clipErr);
+    }
+
     const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
     return res.json({ profile: updatedProfile, isAdmin });
   } catch (err: any) {
@@ -1452,6 +1541,14 @@ app.post("/api/clips", async (req, res) => {
     return res.status(authRes.status).json({ error: authRes.error });
   }
   const { user, profile } = authRes.auth;
+
+  // Guest quota check: anonymous users are capped at 3 clips
+  if (user.is_anonymous) {
+    const clipCount = await store!.countClipsByAuthor(user.id);
+    if (clipCount >= 3) {
+      return res.status(403).json({ error: "signup_required", clipCount: 3 });
+    }
+  }
 
   const { parentId, mediaUrl, mediaType, voiceText, voiceStyle, voiceAudioUrl, tone, effect, overlayText, originalAuthor, remixedFrom, voiceAudioData } = req.body;
   if (!mediaUrl || !tone) {
@@ -1753,6 +1850,14 @@ app.post("/api/upload", async (req, res) => {
   }
   const { user } = authRes.auth;
   const userId = user.id;
+
+  // Guest quota check: anonymous users are capped at 3 clips
+  if (user.is_anonymous) {
+    const clipCount = await store!.countClipsByAuthor(user.id);
+    if (clipCount >= 3) {
+      return res.status(403).json({ error: "signup_required", clipCount: 3 });
+    }
+  }
 
   // In production, ensure admin client with service role key is configured for storage
   if (isProduction && !supabaseAdmin) {

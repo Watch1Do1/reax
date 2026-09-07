@@ -27,7 +27,7 @@ export default function OnboardingModal({
   guestUsername,
   triggerReason
 }: OnboardingModalProps) {
-  const [tab, setTab] = useState<"signin" | "signup">("signin");
+  const [tab, setTab] = useState<"signin" | "signup">(() => triggerReason === "post_limit" ? "signup" : "signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -39,6 +39,12 @@ export default function OnboardingModal({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [needsEmailConfirm, setNeedsEmailConfirm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  React.useEffect(() => {
+    if (triggerReason === "post_limit") {
+      setTab("signup");
+    }
+  }, [triggerReason, isOpen]);
 
   if (!isOpen) return null;
 
@@ -157,6 +163,9 @@ export default function OnboardingModal({
       }
 
       if (res.needsEmailConfirm) {
+        try {
+          await syncUserProfile(cleanUsername);
+        } catch {}
         setNeedsEmailConfirm(true);
         setError(null);
       } else {
@@ -194,10 +203,16 @@ export default function OnboardingModal({
             </div>
             <div>
               <h2 className="text-base font-bold text-white font-sans">
-                {tab === "signin" ? "Sign In to Reax" : "Create Your Reax Account"}
+                {triggerReason === "post_limit"
+                  ? "Guest Limit Reached (3 Clips)"
+                  : tab === "signin"
+                  ? "Sign In to Reax"
+                  : "Create Your Reax Account"}
               </h2>
               <p className="text-xs text-slate-400 font-mono">
-                {triggerReason === "save_reaction"
+                {triggerReason === "post_limit"
+                  ? "Sign up to keep your 3 clips and unlock unlimited reactions!"
+                  : triggerReason === "save_reaction"
                   ? "Sign in to save custom reactions to your vault"
                   : triggerReason === "edit_username"
                   ? "Claim a permanent @username"
@@ -346,6 +361,12 @@ export default function OnboardingModal({
               {/* Sign Up Form */}
               {tab === "signup" && (
                 <form onSubmit={handleSignUp} className="space-y-3">
+                  {triggerReason === "post_limit" && (
+                    <div className="p-2.5 rounded-xl bg-indigo-950/40 border border-indigo-800/60 text-indigo-300 text-xs font-mono flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 text-indigo-400 shrink-0" />
+                      <span>Your existing 3 clips will be kept and linked to your new username!</span>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-[11px] font-mono text-slate-400 mb-1">Email Address</label>
                     <div className="relative">

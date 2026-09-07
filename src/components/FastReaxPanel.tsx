@@ -119,6 +119,13 @@ export default function FastReaxPanel({
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
+        if (res.status === 403 && errData.error === "signup_required") {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+            detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
+          }));
+          onClose();
+          return;
+        }
         throw new Error(errData.error || "Posting failed");
       }
       
@@ -130,6 +137,13 @@ export default function FastReaxPanel({
 
     } catch (err: any) {
       console.error(err);
+      if (err?.message === "signup_required" || err?.signupRequired || err?.status === 403) {
+        window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+          detail: { reason: "post_limit", clipCount: 3 }
+        }));
+        onClose();
+        return;
+      }
       setError(err.message || "Failed to post quick reaction. Opening customization mode...");
       setTimeout(() => {
         onOpenFullCustomize(parentClip, activeTone);

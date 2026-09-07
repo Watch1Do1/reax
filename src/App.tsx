@@ -572,12 +572,27 @@ export default function App() {
         })
       });
 
-      if (!postRes.ok) throw new Error("Failed to post reaction");
+      if (!postRes.ok) {
+        const errData = await postRes.json().catch(() => ({}));
+        if (postRes.status === 403 && errData.error === "signup_required") {
+          setIsVaultOpen(false);
+          setUpgradeTriggerReason("post_limit");
+          setIsUpgradeModalOpen(true);
+          return;
+        }
+        throw new Error(errData.error || "Failed to post reaction");
+      }
       
       setIsVaultOpen(false);
       setRefreshTrigger(prev => prev + 1);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      if (err?.message === "signup_required" || err?.signupRequired) {
+        setIsVaultOpen(false);
+        setUpgradeTriggerReason("post_limit");
+        setIsUpgradeModalOpen(true);
+        return;
+      }
     } finally {
       setLoading(false);
     }

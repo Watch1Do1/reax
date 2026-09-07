@@ -749,12 +749,26 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
       if (!postRes.ok) {
         const errData = await postRes.json().catch(() => ({}));
+        if (postRes.status === 403 && errData.error === "signup_required") {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+            detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
+          }));
+          onClose();
+          return;
+        }
         throw new Error(errData.error || "Failed to post clip");
       }
       window.dispatchEvent(new Event("reax_clip_posted"));
       onSuccess();
     } catch (err: any) {
       console.error("Submit error:", err);
+      if (err?.message === "signup_required" || err?.signupRequired || err?.status === 403) {
+        window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+          detail: { reason: "post_limit", clipCount: 3 }
+        }));
+        onClose();
+        return;
+      }
       setError(err?.message || "Failed to share your loop. Please try again.");
     } finally {
       setLoading(false);
