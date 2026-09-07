@@ -187,6 +187,25 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     }
   };
 
+  // Permanently Purge Clip (delete storage objects + DB row)
+  const handlePurgeClip = async (clipId: string) => {
+    if (!window.confirm("Are you sure you want to permanently delete this clip forever? This will delete media and voice files from storage and remove the clip record. This cannot be undone.")) {
+      return;
+    }
+    try {
+      const res = await adminFetch(`/api/admin/clips/${clipId}/purge`, { method: "POST" });
+      if (res.ok) {
+        showToast("Clip and storage assets deleted forever.");
+        onRefreshClips();
+        await loadAdminData();
+      } else {
+        throw new Error("Purge API failed");
+      }
+    } catch (err) {
+      showToast("Failed to permanently delete clip.");
+    }
+  };
+
   // Dismiss report
   const handleDismissReport = async (reportId: string) => {
     try {
@@ -585,13 +604,22 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                                     )}
 
                                     {clip && clip.deleted && (
-                                      <button 
-                                        onClick={() => handleRestoreClip(clip.id)}
-                                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[9px] rounded-lg transition-all uppercase cursor-pointer"
-                                        title="Restore clip"
-                                      >
-                                        Restore
-                                      </button>
+                                      <div className="inline-flex items-center gap-1.5">
+                                        <button 
+                                          onClick={() => handleRestoreClip(clip.id)}
+                                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[9px] rounded-lg transition-all uppercase cursor-pointer"
+                                          title="Restore clip"
+                                        >
+                                          Restore
+                                        </button>
+                                        <button 
+                                          onClick={() => handlePurgeClip(clip.id)}
+                                          className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 hover:border-red-600 text-red-300 hover:text-white font-bold text-[9px] rounded-lg transition-all uppercase cursor-pointer"
+                                          title="Delete forever"
+                                        >
+                                          Delete forever
+                                        </button>
+                                      </div>
                                     )}
                                   </td>
 
@@ -774,12 +802,22 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                                     </button>
 
                                     {clip.deleted ? (
-                                      <button 
-                                        onClick={() => handleRestoreClip(clip.id)}
-                                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[9px] rounded-lg transition-all cursor-pointer uppercase"
-                                      >
-                                        Restore
-                                      </button>
+                                      <div className="inline-flex items-center gap-1.5">
+                                        <button 
+                                          onClick={() => handleRestoreClip(clip.id)}
+                                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[9px] rounded-lg transition-all cursor-pointer uppercase"
+                                          title="Restore clip"
+                                        >
+                                          Restore
+                                        </button>
+                                        <button 
+                                          onClick={() => handlePurgeClip(clip.id)}
+                                          className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 hover:border-red-600 text-red-300 hover:text-white font-bold text-[9px] rounded-lg transition-all cursor-pointer uppercase"
+                                          title="Delete forever"
+                                        >
+                                          Delete forever
+                                        </button>
+                                      </div>
                                     ) : (
                                       <button 
                                         onClick={() => handleDeleteClip(clip.id)}

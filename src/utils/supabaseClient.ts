@@ -135,7 +135,13 @@ export async function signUpWithEmail({
 
       const { data: sessionData } = await supabase.auth.getSession();
       const hasActiveSession = Boolean(sessionData?.session);
-      if (hasActiveSession) {
+      const sessionUser = sessionData?.session?.user;
+      const isAnon = sessionUser && (
+        Boolean((sessionUser as any).is_anonymous) ||
+        sessionUser.app_metadata?.provider === "anonymous" ||
+        !sessionUser.email
+      );
+      if (hasActiveSession && !isAnon && sessionUser?.email) {
         localStorage.setItem("reax_is_logged_in", "true");
       }
       return {
@@ -217,7 +223,10 @@ export async function signInWithEmail({
     }
 
     if (typeof window !== "undefined") {
-      localStorage.setItem("reax_is_logged_in", "true");
+      const isAnon = Boolean((data?.user as any)?.is_anonymous || !data?.user?.email || data?.user?.app_metadata?.provider === "anonymous");
+      if (data?.session && data?.user?.email && !isAnon) {
+        localStorage.setItem("reax_is_logged_in", "true");
+      }
     }
 
     return {
@@ -312,7 +321,10 @@ export async function handleUrlAuthTokens(): Promise<{
     if (user) {
       // Strip hash & auth search params from browser URL
       window.history.replaceState({}, document.title, window.location.pathname);
-      localStorage.setItem("reax_is_logged_in", "true");
+      const isAnon = Boolean((user as any)?.is_anonymous || !user.email || user.app_metadata?.provider === "anonymous");
+      if (user.email && !isAnon) {
+        localStorage.setItem("reax_is_logged_in", "true");
+      }
 
       let username =
         user.user_metadata?.username ||
@@ -408,7 +420,32 @@ export async function syncUserProfile(username: string): Promise<UserProfile> {
 /**
  * Fetch authenticated profile from backend (GET /api/me)
  */
-export async function fetchMyProfile(): Promise<{ profile: UserProfile | null; isAdmin: boolean }> {
+export async function fetchMyProfile(): Promise<{
+  profile: UserProfile | null;
+  isAdmin: boolean;
+  isAnonymous: boolean;
+  hasEmail: boolean;
+  email?: string | null;
+}> {
+  let isAnonymous = true;
+  let hasEmail = false;
+  let email: string | null = null;
+
+  try {
+    const supabaseUser = await getCurrentSupabaseUser();
+    if (supabaseUser) {
+      email = supabaseUser.email || null;
+      hasEmail = Boolean(supabaseUser.email && supabaseUser.email.trim().length > 0);
+      isAnonymous = Boolean(
+        (supabaseUser as any).is_anonymous ||
+        supabaseUser.app_metadata?.provider === "anonymous" ||
+        !supabaseUser.email
+      );
+    }
+  } catch (err) {
+    console.warn("Could not read current Supabase user:", err);
+  }
+
   try {
     const token = await getAuthToken();
     const res = await fetch("/api/me", {
@@ -419,9 +456,28 @@ export async function fetchMyProfile(): Promise<{ profile: UserProfile | null; i
 
     if (res.ok) {
       const data = await res.json();
+      if (data.isAnonymous !== undefined) {
+        isAnonymous = Boolean(data.isAnonymous);
+      }
+      if (data.email !== undefined) {
+        email = data.email || null;
+        hasEmail = Boolean(email && email.trim().length > 0);
+      }
+
+      // Logged-in means email account: set reax_is_logged_in true ONLY if session user has email and is_anonymous is not true
+      const isEmailAccount = Boolean(hasEmail && !isAnonymous);
+      if (isEmailAccount) {
+        localStorage.setItem("reax_is_logged_in", "true");
+      } else {
+        localStorage.removeItem("reax_is_logged_in");
+      }
+
       return {
         profile: data.profile || null,
-        isAdmin: Boolean(data.isAdmin)
+        isAdmin: Boolean(data.isAdmin),
+        isAnonymous,
+        hasEmail,
+        email
       };
     }
   } catch (e) {
@@ -432,6 +488,15 @@ export async function fetchMyProfile(): Promise<{ profile: UserProfile | null; i
   try {
     const user = await getCurrentSupabaseUser();
     if (user) {
+      const userHasEmail = Boolean(user.email && user.email.trim().length > 0);
+      const isAnon = Boolean(!userHasEmail || (user as any).is_anonymous || user.app_metadata?.provider === "anonymous");
+      const isEmailAccount = Boolean(userHasEmail && !isAnon);
+      if (isEmailAccount) {
+        localStorage.setItem("reax_is_logged_in", "true");
+      } else {
+        localStorage.removeItem("reax_is_logged_in");
+      }
+
       const metaName = user.user_metadata?.username || user.user_metadata?.display_name || user.email?.split("@")[0];
       if (metaName) {
         return {
@@ -444,13 +509,17 @@ export async function fetchMyProfile(): Promise<{ profile: UserProfile | null; i
             suspended: false,
             strikes: 0
           },
-          isAdmin: false
+          isAdmin: false,
+          isAnonymous: isAnon,
+          hasEmail: userHasEmail,
+          email: user.email || null
         };
       }
     }
   } catch {}
 
-  return { profile: null, isAdmin: false };
+  localStorage.removeItem("reax_is_logged_in");
+  return { profile: null, isAdmin: false, isAnonymous: true, hasEmail: false, email: null };
 }
 
 export interface UploadResult {

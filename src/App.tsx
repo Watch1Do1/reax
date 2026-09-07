@@ -76,13 +76,13 @@ export default function App() {
       // 1. Process URL tokens if user arrived via email confirmation link
       try {
         const urlAuth = await handleUrlAuthTokens();
-        if (urlAuth.success) {
+        if (urlAuth.success && urlAuth.user && urlAuth.user.email && !(urlAuth.user as any).is_anonymous) {
           setIsLoggedIn(true);
           localStorage.setItem("reax_is_logged_in", "true");
           localStorage.setItem("reax_age_confirmed", "true");
           setAgeConfirmed(true);
 
-          if (urlAuth.username && isMounted) {
+          if (urlAuth.username && isMounted && !urlAuth.username.startsWith("user_")) {
             setUsername(urlAuth.username);
             setTempUsername(urlAuth.username);
             localStorage.setItem("clips_username", urlAuth.username);
@@ -96,15 +96,29 @@ export default function App() {
 
       // 2. Fetch profile from backend
       try {
-        const { profile } = await fetchMyProfile();
-        if (profile && isMounted) {
+        const { profile, isAnonymous, hasEmail } = await fetchMyProfile();
+        const isEmailAccount = Boolean(hasEmail && !isAnonymous);
+
+        if (isEmailAccount && profile && isMounted) {
           setIsLoggedIn(true);
           localStorage.setItem("reax_is_logged_in", "true");
-          if (profile.username) {
-            setUsername(profile.username);
-            setTempUsername(profile.username);
-            localStorage.setItem("clips_username", profile.username);
+          const uname = profile.username || "";
+          if (uname && !uname.startsWith("user_")) {
+            setUsername(uname);
+            setTempUsername(uname);
+            localStorage.setItem("clips_username", uname);
+          } else {
+            setUsername("");
+            setTempUsername("");
+            localStorage.removeItem("clips_username");
           }
+        } else if (isMounted) {
+          // Anonymous session: header stays Sign in, do not set user_xxxxx as a logged-in name
+          setIsLoggedIn(false);
+          localStorage.removeItem("reax_is_logged_in");
+          localStorage.removeItem("clips_username");
+          setUsername("");
+          setTempUsername("");
         }
       } catch (err) {
         console.warn("Could not fetch my profile on mount:", err);
@@ -519,9 +533,6 @@ export default function App() {
 
   // Check guest quota with /api/guest-status before opening composer
   const checkGuestQuotaBeforeComposer = async (): Promise<boolean> => {
-    const logged = localStorage.getItem("reax_is_logged_in") === "true";
-    if (logged) return false;
-
     try {
       let token = "";
       try { token = await getAuthToken(); } catch {}
@@ -761,7 +772,7 @@ export default function App() {
           {/* Right: @username (opens Profile) OR Sign in, and + button */}
           <div className="flex items-center gap-2">
             {/* If logged in: @username (opens Profile). If guest: Sign in */}
-            {isLoggedIn && username ? (
+            {isLoggedIn && username && !username.startsWith("user_") ? (
               <button 
                 onClick={() => setIsProfileOpen(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 font-mono text-xs rounded-xl transition-all cursor-pointer"

@@ -138,6 +138,7 @@ export interface Store {
   updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number>;
   insertClip(clip: Clip): Promise<Clip>;
   updateClip(id: string, updates: Partial<Clip>): Promise<Clip | null>;
+  purgeClip(id: string): Promise<boolean>;
   recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }>;
   recordUnlike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }>;
   recordLaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }>;
@@ -299,6 +300,15 @@ class MemoryStore implements Store {
     if (!clip) return null;
     Object.assign(clip, updates);
     return clip;
+  }
+
+  async purgeClip(id: string): Promise<boolean> {
+    const idx = this.clips.findIndex(c => c.id === id);
+    if (idx !== -1) {
+      this.clips.splice(idx, 1);
+      return true;
+    }
+    return false;
   }
 
   async recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
@@ -766,6 +776,52 @@ class SupabaseStore implements Store {
 
     if (error) throw error;
     return data ? mapDbToClip(data) : null;
+  }
+
+  async purgeClip(id: string): Promise<boolean> {
+    try {
+      // 1. Clean up child replies and associated table rows
+      try {
+        await this.client.from("clips").update({ parent_id: null }).eq("parent_id", id);
+      } catch {}
+      try {
+        await this.client.from("likes").delete().eq("clip_id", id);
+      } catch {}
+      try {
+        await this.client.from("laughs").delete().eq("clip_id", id);
+      } catch {}
+      try {
+        await this.client.from("reports").delete().eq("clip_id", id);
+      } catch {}
+
+      // 2. Attempt hard delete of the clips row
+      const { error } = await this.client
+        .from("clips")
+        .delete()
+        .eq("id", id);
+
+      if (!error) {
+        return true;
+      }
+
+      console.warn("Hard delete of clip failed, falling back to soft delete with purged_at:", error.message);
+      // 3. Fallback: mark deleted=true and purged_at=now()
+      try {
+        await this.client
+          .from("clips")
+          .update({ deleted: true, purged_at: new Date().toISOString() } as any)
+          .eq("id", id);
+      } catch {
+        await this.client
+          .from("clips")
+          .update({ deleted: true })
+          .eq("id", id);
+      }
+      return true;
+    } catch (err: any) {
+      console.error("SupabaseStore.purgeClip error:", err?.message || err);
+      return false;
+    }
   }
 
   async recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
@@ -1236,12 +1292,12 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
       const isAnonymous = Boolean(
         (userData.user as any).is_anonymous ||
         userData.user.app_metadata?.provider === "anonymous" ||
-        (userData.user.app_metadata?.providers && userData.user.app_metadata.providers.includes("anonymous") && !userData.user.email)
+        !userData.user.email
       );
 
       const user = {
         id: userData.user.id,
-        email: userData.user.email,
+        email: userData.user.email || null,
         is_anonymous: isAnonymous
       };
 
@@ -1291,13 +1347,14 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
       token === "dev-bearer-token" ||
       token.startsWith("anon-") ||
       req.headers["x-guest"] === "true" ||
-      req.headers["x-anonymous"] === "true"
+      req.headers["x-anonymous"] === "true" ||
+      !profile.email
     );
 
     return {
       ok: true,
       auth: {
-        user: { id: devId, email: profile.email || "dev@reax.local", is_anonymous: isAnonymous },
+        user: { id: devId, email: profile.email || null, is_anonymous: isAnonymous },
         profile
       }
     };
@@ -1475,7 +1532,7 @@ app.get("/api/guest-status", async (req, res) => {
     return res.status(authRes.status).json({ error: authRes.error });
   }
   const { user } = authRes.auth;
-  const isAnonymous = Boolean(user.is_anonymous);
+  const isAnonymous = Boolean(user.is_anonymous || !user.email);
   const clipCount = await store!.countClipsByAuthor(user.id);
   const signupRequired = Boolean(isAnonymous && clipCount >= 3);
   return res.json({ isAnonymous, clipCount, signupRequired });
@@ -1489,7 +1546,8 @@ app.get("/api/me", async (req, res) => {
   }
   const { user, profile } = authRes.auth;
   const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
-  return res.json({ profile, isAdmin });
+  const isAnonymous = Boolean(user.is_anonymous || !user.email);
+  return res.json({ profile, isAdmin, isAnonymous, email: user.email || null });
 });
 
 // API: Upsert / Update Current Authenticated User Profile (Username)
@@ -1557,8 +1615,9 @@ app.post("/api/clips", async (req, res) => {
   }
   const { user, profile } = authRes.auth;
 
-  // Guest quota check: anonymous users are capped at 3 clips
-  if (user.is_anonymous) {
+  // Guest quota check: anonymous users (is_anonymous || !user.email) are capped at 3 clips
+  const isAnon = Boolean(user.is_anonymous || !user.email);
+  if (isAnon) {
     const clipCount = await store!.countClipsByAuthor(user.id);
     if (clipCount >= 3) {
       return res.status(403).json({ error: "signup_required", clipCount: 3 });
@@ -1866,8 +1925,9 @@ app.post("/api/upload", async (req, res) => {
   const { user } = authRes.auth;
   const userId = user.id;
 
-  // Guest quota check: anonymous users are capped at 3 clips
-  if (user.is_anonymous) {
+  // Guest quota check: anonymous users (is_anonymous || !user.email) are capped at 3 clips
+  const isAnon = Boolean(user.is_anonymous || !user.email);
+  if (isAnon) {
     const clipCount = await store!.countClipsByAuthor(user.id);
     if (clipCount >= 3) {
       return res.status(403).json({ error: "signup_required", clipCount: 3 });
@@ -2193,6 +2253,89 @@ app.post("/api/admin/clips/:id/restore", async (req, res) => {
   } catch (err: any) {
     console.error("Error in restore clip:", err);
     res.status(500).json({ error: "Failed to restore clip" });
+  }
+});
+
+// Helper: Delete storage object from our Supabase bucket if hosted with us
+async function deleteStorageObject(rawUrl: string | null | undefined): Promise<boolean> {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
+  if (!storageClient) return false;
+
+  try {
+    let cleanUrl = rawUrl.trim();
+    if (cleanUrl.startsWith("audio_url:")) {
+      cleanUrl = cleanUrl.split("|||")[0].replace(/^audio_url:/, "").trim();
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(cleanUrl);
+    } catch {
+      return false;
+    }
+
+    // Verify it is hosted on our Supabase Storage domain
+    const isOurSupabase = (SUPABASE_URL && parsedUrl.hostname === new URL(SUPABASE_URL).hostname) ||
+                          parsedUrl.hostname.endsWith(".supabase.co");
+    if (!isOurSupabase) {
+      return false;
+    }
+
+    const pathname = parsedUrl.pathname;
+    // Match /storage/v1/object/(public|authenticated|sign)/:bucket/:path
+    // or /storage/v1/object/:bucket/:path
+    const match = pathname.match(/\/storage\/v1\/object\/(?:public|authenticated|sign)\/([^/]+)\/(.+)$/) ||
+                  pathname.match(/\/storage\/v1\/object\/([^/]+)\/(.+)$/);
+    if (!match) return false;
+
+    const bucket = match[1];
+    const objectPath = decodeURIComponent(match[2]);
+
+    console.log(`[Admin Purge] Deleting object from bucket '${bucket}': ${objectPath}`);
+    const { error } = await storageClient.storage.from(bucket).remove([objectPath]);
+    if (error) {
+      console.warn(`[Admin Purge] Storage remove error (${bucket}/${objectPath}):`, error.message);
+      return false;
+    }
+    console.log(`[Admin Purge] Storage remove success (${bucket}/${objectPath})`);
+    return true;
+  } catch (err: any) {
+    console.warn(`[Admin Purge] Exception removing storage object:`, err?.message || err);
+    return false;
+  }
+}
+
+// 4b. POST Permanently Purge a clip (Admin Auth)
+app.post("/api/admin/clips/:id/purge", async (req, res) => {
+  const clipId = req.params.id;
+  try {
+    const clip = await store!.getClip(clipId);
+    if (!clip) {
+      return res.status(404).json({ error: "Clip not found" });
+    }
+
+    // Delete storage objects for mediaUrl and voiceAudioUrl if in our bucket
+    if (clip.mediaUrl) {
+      await deleteStorageObject(clip.mediaUrl);
+    }
+    if (clip.voiceAudioUrl) {
+      await deleteStorageObject(clip.voiceAudioUrl);
+    }
+    if (clip.voiceText && clip.voiceText.includes("audio_url:")) {
+      const match = clip.voiceText.match(/audio_url:([^| \n\r\t]+)/);
+      if (match && match[1]) {
+        await deleteStorageObject(match[1]);
+      }
+    }
+
+    // Delete the clip row from DB (or fallback to deleted=true AND purged_at=now())
+    await store!.purgeClip(clipId);
+
+    res.json({ success: true, purgedId: clipId });
+  } catch (err: any) {
+    console.error("Error in purge clip:", err);
+    res.status(500).json({ error: "Failed to purge clip" });
   }
 });
 
