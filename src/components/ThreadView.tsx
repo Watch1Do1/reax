@@ -558,9 +558,9 @@ export default function ThreadView({
               {(() => {
                 const [, , , textStylePosition = "bottom"] = (focusedClip.effect || "zoom").split("|");
                 const positionClasses: Record<string, string> = {
-                  "top-left": "absolute top-3 left-3 flex justify-start items-start text-left max-w-[80%] z-10 pointer-events-none",
-                  "top": "absolute top-3 inset-x-0 flex justify-center items-start text-center px-4 z-10 pointer-events-none",
-                  "top-right": "absolute top-3 right-3 flex justify-end items-start text-right max-w-[80%] z-10 pointer-events-none",
+                  "top-left": "absolute top-8 left-3 flex justify-start items-start text-left max-w-[80%] z-20 px-3 pointer-events-none",
+                  "top": "absolute top-8 inset-x-0 flex justify-center items-start text-center px-3 z-20 pointer-events-none",
+                  "top-right": "absolute top-8 right-3 flex justify-end items-start text-right max-w-[80%] z-20 px-3 pointer-events-none",
                   "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
                   "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
                   "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",

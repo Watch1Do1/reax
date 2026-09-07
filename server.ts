@@ -581,6 +581,7 @@ function mapClipToDb(clip: Clip) {
     media_url: clip.mediaUrl,
     media_type: inferMediaType(clip.mediaUrl, clip.mediaType),
     voice_text: voiceTextVal,
+    voice_audio_url: clip.voiceAudioUrl || null,
     voice_style: clip.voiceStyle || null,
     overlay_text: clip.overlayText || null,
     tone: clip.tone,
@@ -631,7 +632,7 @@ class SupabaseStore implements Store {
           this.client
             .from("clips")
             .select(
-              "id, parent_id, media_url, media_type, voice_text, voice_style, overlay_text, tone, effect, author_name, author_id, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
+              "id, parent_id, media_url, media_type, voice_text, voice_audio_url, voice_style, overlay_text, tone, effect, author_name, author_id, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
             )
             .order("created_at", { ascending: false })
             .limit(100),
@@ -750,6 +751,7 @@ class SupabaseStore implements Store {
     if (updates.overlayText !== undefined) dbUpdates.overlay_text = updates.overlayText;
     if (updates.voiceText !== undefined) dbUpdates.voice_text = updates.voiceText;
     if (updates.voiceAudioUrl !== undefined) {
+      dbUpdates.voice_audio_url = updates.voiceAudioUrl || null;
       if (updates.voiceAudioUrl) {
         dbUpdates.voice_text = updates.voiceText ? `audio_url:${updates.voiceAudioUrl}|||${updates.voiceText}` : updates.voiceAudioUrl;
       }
@@ -1464,6 +1466,19 @@ CREATE POLICY "Allow public laughs" ON public.laughs FOR ALL USING (true);
 CREATE POLICY "Allow public reports" ON public.reports FOR ALL USING (true);
 `
   });
+});
+
+// API: Get Guest Quota Status
+app.get("/api/guest-status", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+  const isAnonymous = Boolean(user.is_anonymous);
+  const clipCount = await store!.countClipsByAuthor(user.id);
+  const signupRequired = Boolean(isAnonymous && clipCount >= 3);
+  return res.json({ isAnonymous, clipCount, signupRequired });
 });
 
 // API: Get Current Authenticated User Profile & Admin Status

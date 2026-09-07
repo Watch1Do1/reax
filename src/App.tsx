@@ -517,22 +517,61 @@ export default function App() {
     }
   };
 
+  // Check guest quota with /api/guest-status before opening composer
+  const checkGuestQuotaBeforeComposer = async (): Promise<boolean> => {
+    const logged = localStorage.getItem("reax_is_logged_in") === "true";
+    if (logged) return false;
+
+    try {
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+      if (!token) return false;
+
+      const res = await fetch("/api/guest-status", {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.signupRequired) {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+            detail: { reason: "post_limit", clipCount: data.clipCount || 3 }
+          }));
+          return true; // Quota reached, do not open composer
+        }
+      }
+    } catch (err) {
+      console.warn("Could not check guest quota status:", err);
+    }
+    return false;
+  };
+
   // Open Respond modal for a specific clip with an optional preselected tone (Capture-first flow)
-  const handleRespondToClip = (parentClip: Clip, tone: Clip["tone"] | null = null) => {
+  const handleRespondToClip = async (parentClip: Clip, tone: Clip["tone"] | null = null) => {
+    const quotaExceeded = await checkGuestQuotaBeforeComposer();
+    if (quotaExceeded) return;
+
     setReplyParent(parentClip);
     setRespondTone(tone || parentClip.tone || "funny");
     setIsRespondModalOpen(true);
   };
 
   // Fast tap-to-reax pipeline handler - opens RespondModal directly at capture step
-  const handleFastRespond = (parentClip: Clip, tone: Clip["tone"]) => {
+  const handleFastRespond = async (parentClip: Clip, tone: Clip["tone"]) => {
+    const quotaExceeded = await checkGuestQuotaBeforeComposer();
+    if (quotaExceeded) return;
+
     setReplyParent(parentClip);
     setRespondTone(tone);
     setIsRespondModalOpen(true);
   };
 
   // Open full editor modal as fallback or customization option from fast panel
-  const handleOpenFullCustomize = (parentClip: Clip, tone: Clip["tone"]) => {
+  const handleOpenFullCustomize = async (parentClip: Clip, tone: Clip["tone"]) => {
+    const quotaExceeded = await checkGuestQuotaBeforeComposer();
+    if (quotaExceeded) return;
+
     setFastReaxTarget(null);
     setReplyParent(parentClip);
     setRespondTone(tone);
@@ -540,7 +579,10 @@ export default function App() {
   };
 
   // Open Respond modal to create a fresh Root Clip
-  const handleCreateRootClip = () => {
+  const handleCreateRootClip = async () => {
+    const quotaExceeded = await checkGuestQuotaBeforeComposer();
+    if (quotaExceeded) return;
+
     setReplyParent(null);
     setRespondTone(null);
     setIsRespondModalOpen(true);

@@ -190,7 +190,8 @@ export default function ClipCard({
 
         if (textStylePosition.startsWith("top")) {
           ctx.textBaseline = "top";
-          const startY = height * 0.06;
+          // Extra top padding for top positions (top / top-left / top-right) matching top-8 CSS
+          const startY = Math.max(height * 0.12, 32 * (width / 640));
           lines.forEach((line, i) => {
             const y = startY + i * lineHeight;
             ctx.strokeText(line, baseX, y);
@@ -662,13 +663,18 @@ export default function ClipCard({
     }
     stopAllFilteredAudio();
 
-    // Resolve audio URL from all possible fields
-    let audioUrl = clip.voiceAudioUrl;
+    // Resolve audio URL: prefer voiceAudioUrl, then audio_url: in voiceText
+    let audioUrl = (clip.voiceAudioUrl && clip.voiceAudioUrl.trim() !== "") ? clip.voiceAudioUrl.trim() : undefined;
     if (!audioUrl && clip.voiceText) {
       if (clip.voiceText.startsWith("audio_url:")) {
-        audioUrl = clip.voiceText.split("|||")[0].replace(/^audio_url:/, "");
-      } else if (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4"))) {
-        audioUrl = clip.voiceText;
+        audioUrl = clip.voiceText.split("|||")[0].replace(/^audio_url:/, "").trim();
+      } else if (clip.voiceText.includes("audio_url:")) {
+        const match = clip.voiceText.match(/audio_url:([^| \n\r\t]+)/);
+        if (match && match[1]) {
+          audioUrl = match[1].trim();
+        }
+      } else if (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4") || clip.voiceText.includes(".ogg") || clip.voiceText.includes(".wav") || clip.voiceText.includes(".mp3"))) {
+        audioUrl = clip.voiceText.trim();
       }
     }
     if (!audioUrl && clip.mediaType === "audio") {
@@ -874,9 +880,9 @@ export default function ClipCard({
           };
 
           const positionClasses: Record<string, string> = {
-            "top-left": "absolute top-3 left-3 flex justify-start items-start text-left max-w-[80%] z-10 pointer-events-none",
-            "top": "absolute top-3 inset-x-0 flex justify-center items-start text-center px-4 z-10 pointer-events-none",
-            "top-right": "absolute top-3 right-3 flex justify-end items-start text-right max-w-[80%] z-10 pointer-events-none",
+            "top-left": "absolute top-8 left-3 flex justify-start items-start text-left max-w-[80%] z-20 px-3 pointer-events-none",
+            "top": "absolute top-8 inset-x-0 flex justify-center items-start text-center px-3 z-20 pointer-events-none",
+            "top-right": "absolute top-8 right-3 flex justify-end items-start text-right max-w-[80%] z-20 px-3 pointer-events-none",
             "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
             "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
             "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
