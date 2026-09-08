@@ -780,44 +780,47 @@ class SupabaseStore implements Store {
 
   async purgeClip(id: string): Promise<boolean> {
     try {
-      // 1. Clean up child replies and associated table rows
-      try {
-        await this.client.from("clips").update({ parent_id: null }).eq("parent_id", id);
-      } catch {}
-      try {
-        await this.client.from("likes").delete().eq("clip_id", id);
-      } catch {}
-      try {
-        await this.client.from("laughs").delete().eq("clip_id", id);
-      } catch {}
-      try {
-        await this.client.from("reports").delete().eq("clip_id", id);
-      } catch {}
+      // 1. Clean up child replies, remix links, and associated records
+      await Promise.allSettled([
+        this.client.from("clips").update({ parent_id: null }).eq("parent_id", id),
+        this.client.from("clips").update({ remixed_from: null }).eq("remixed_from", id),
+        this.client.from("reports").delete().eq("clip_id", id),
+        this.client.from("likes").delete().eq("clip_id", id),
+        this.client.from("laughs").delete().eq("clip_id", id)
+      ]);
 
       // 2. Attempt hard delete of the clips row
-      const { error } = await this.client
+      let { error } = await this.client
         .from("clips")
         .delete()
         .eq("id", id);
 
       if (!error) {
+        console.log(`[SupabaseStore] Successfully hard-deleted clip ${id}`);
         return true;
       }
 
-      console.warn("Hard delete of clip failed, falling back to soft delete with purged_at:", error.message);
-      // 3. Fallback: mark deleted=true and purged_at=now()
-      try {
-        await this.client
-          .from("clips")
-          .update({ deleted: true, purged_at: new Date().toISOString() } as any)
-          .eq("id", id);
-      } catch {
-        await this.client
-          .from("clips")
-          .update({ deleted: true })
-          .eq("id", id);
+      console.warn(`[SupabaseStore] Initial hard delete failed for ${id}:`, error.message, error.details);
+
+      // Clean up any remaining references and retry once
+      await Promise.allSettled([
+        this.client.from("clips").update({ parent_id: null }).eq("parent_id", id),
+        this.client.from("clips").update({ remixed_from: null }).eq("remixed_from", id),
+        this.client.from("reports").delete().eq("clip_id", id)
+      ]);
+
+      const retry = await this.client
+        .from("clips")
+        .delete()
+        .eq("id", id);
+
+      if (!retry.error) {
+        console.log(`[SupabaseStore] Hard-deleted clip ${id} on retry`);
+        return true;
       }
-      return true;
+
+      console.error(`[SupabaseStore] Purge failed for clip ${id}:`, retry.error.message);
+      return false;
     } catch (err: any) {
       console.error("SupabaseStore.purgeClip error:", err?.message || err);
       return false;
@@ -2116,29 +2119,7 @@ app.post("/api/upload", async (req, res) => {
 
 const adminAuthMiddleware = async (req: any, res: any, next: any) => {
   try {
-    const authHeader = (req.headers.authorization || "").toString().trim();
-    const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
-
-    // 1. Check authenticated Supabase user against ADMIN_USER_IDS allowlist
-    if (supabase && token && token !== "dev-bearer-token") {
-      try {
-        const { data: userData, error: authError } = await supabase.auth.getUser(token);
-        if (!authError && userData?.user?.id) {
-          const userId = userData.user.id.toLowerCase();
-          if (ADMIN_USER_IDS.length > 0) {
-            if (ADMIN_USER_IDS.includes(userId)) {
-              return next();
-            } else {
-              return res.status(403).json({ error: "Forbidden: User ID is not authorized as an administrator." });
-            }
-          }
-        }
-      } catch (err) {
-        // Fall through
-      }
-    }
-
-    // 2. Local dev or fallback passcode support if ADMIN_USER_IDS is unpopulated
+    // 1. Passcode verification (X-Admin-Passcode header, query param, or body)
     let passcode = req.headers["x-admin-passcode"] || (req.query && req.query.passcode) || (req.body && req.body.passcode);
     if (typeof passcode === "string") {
       passcode = passcode.trim();
@@ -2157,6 +2138,36 @@ const adminAuthMiddleware = async (req: any, res: any, next: any) => {
 
     if (passcode && passcode === expectedPasscode) {
       return next();
+    }
+
+    // 2. Authenticated Supabase user against ADMIN_USER_IDS or admin emails
+    const authHeader = (req.headers.authorization || "").toString().trim();
+    const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
+
+    if (supabase && token && token !== "dev-bearer-token") {
+      try {
+        const { data: userData, error: authError } = await supabase.auth.getUser(token);
+        if (!authError && userData?.user?.id) {
+          const userId = userData.user.id.toLowerCase();
+          const userEmail = (userData.user.email || "").toLowerCase();
+          const userRole = userData.user.user_metadata?.role || userData.user.app_metadata?.role;
+
+          const adminEmails = (process.env.ADMIN_USER_EMAILS || "team@watch1do1.com")
+            .split(",")
+            .map((e: string) => e.trim().toLowerCase())
+            .filter(Boolean);
+
+          if (
+            (ADMIN_USER_IDS.length > 0 && ADMIN_USER_IDS.includes(userId)) ||
+            adminEmails.includes(userEmail) ||
+            userRole === "admin"
+          ) {
+            return next();
+          }
+        }
+      } catch (err) {
+        // Fall through
+      }
     }
 
     if (!isProduction && process.env.DEV_MEMORY_STORE === "true" && token === "dev-bearer-token") {
@@ -2259,7 +2270,7 @@ app.post("/api/admin/clips/:id/restore", async (req, res) => {
 // Helper: Delete storage object from our Supabase bucket if hosted with us
 async function deleteStorageObject(rawUrl: string | null | undefined): Promise<boolean> {
   if (!rawUrl || typeof rawUrl !== "string") return false;
-  const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
+  const storageClient = supabaseAdmin || supabase;
   if (!storageClient) return false;
 
   try {
@@ -2276,7 +2287,12 @@ async function deleteStorageObject(rawUrl: string | null | undefined): Promise<b
     }
 
     // Verify it is hosted on our Supabase Storage domain
-    const isOurSupabase = (SUPABASE_URL && parsedUrl.hostname === new URL(SUPABASE_URL).hostname) ||
+    let supabaseHost = "";
+    try {
+      supabaseHost = SUPABASE_URL ? new URL(SUPABASE_URL).hostname : "";
+    } catch {}
+
+    const isOurSupabase = (supabaseHost && parsedUrl.hostname === supabaseHost) ||
                           parsedUrl.hostname.endsWith(".supabase.co");
     if (!isOurSupabase) {
       return false;
@@ -2310,32 +2326,39 @@ async function deleteStorageObject(rawUrl: string | null | undefined): Promise<b
 app.post("/api/admin/clips/:id/purge", async (req, res) => {
   const clipId = req.params.id;
   try {
-    const clip = await store!.getClip(clipId);
-    if (!clip) {
-      return res.status(404).json({ error: "Clip not found" });
+    let clip: Clip | null = null;
+    try {
+      clip = await store!.getClip(clipId);
+    } catch (e) {
+      console.warn("Could not find clip metadata before purge:", e);
     }
 
-    // Delete storage objects for mediaUrl and voiceAudioUrl if in our bucket
-    if (clip.mediaUrl) {
-      await deleteStorageObject(clip.mediaUrl);
-    }
-    if (clip.voiceAudioUrl) {
-      await deleteStorageObject(clip.voiceAudioUrl);
-    }
-    if (clip.voiceText && clip.voiceText.includes("audio_url:")) {
-      const match = clip.voiceText.match(/audio_url:([^| \n\r\t]+)/);
-      if (match && match[1]) {
-        await deleteStorageObject(match[1]);
+    // Delete storage objects for mediaUrl and voiceAudioUrl if present
+    if (clip) {
+      if (clip.mediaUrl) {
+        try { await deleteStorageObject(clip.mediaUrl); } catch {}
+      }
+      if (clip.voiceAudioUrl) {
+        try { await deleteStorageObject(clip.voiceAudioUrl); } catch {}
+      }
+      if (clip.voiceText && clip.voiceText.includes("audio_url:")) {
+        const match = clip.voiceText.match(/audio_url:([^| \n\r\t]+)/);
+        if (match && match[1]) {
+          try { await deleteStorageObject(match[1]); } catch {}
+        }
       }
     }
 
-    // Delete the clip row from DB (or fallback to deleted=true AND purged_at=now())
-    await store!.purgeClip(clipId);
+    // Delete the clip row and all references from DB
+    const purged = await store!.purgeClip(clipId);
+    if (!purged) {
+      return res.status(500).json({ error: "Failed to delete clip record from database" });
+    }
 
     res.json({ success: true, purgedId: clipId });
   } catch (err: any) {
     console.error("Error in purge clip:", err);
-    res.status(500).json({ error: "Failed to purge clip" });
+    res.status(500).json({ error: err?.message || "Failed to purge clip" });
   }
 });
 

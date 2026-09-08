@@ -113,8 +113,8 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   };
 
   // Load Admin Data (all real counts and records)
-  const loadAdminData = async () => {
-    setLoading(true);
+  const loadAdminData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [statsRes, clipsRes, reportsRes, usersRes] = await Promise.all([
         adminFetch("/api/admin/stats"),
@@ -134,7 +134,7 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
       console.error("Failed to fetch admin data", err);
       showToast("Error loading panel data.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -157,33 +157,41 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
 
   // Soft Delete Clip
   const handleDeleteClip = async (clipId: string) => {
+    // Optimistically mark as deleted
+    setClipsList(prev => prev.map(c => c.id === clipId ? { ...c, deleted: true } : c));
     try {
       const res = await adminFetch(`/api/admin/clips/${clipId}/delete`, { method: "POST" });
       if (res.ok) {
         showToast("Clip soft-deleted successfully.");
         onRefreshClips();
-        await loadAdminData();
+        await loadAdminData(true);
       } else {
-        throw new Error("Delete API failed");
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Delete API failed");
       }
-    } catch (err) {
-      showToast("Failed to delete clip.");
+    } catch (err: any) {
+      showToast(err?.message || "Failed to delete clip.");
+      await loadAdminData(true);
     }
   };
 
   // Restore Soft-Deleted Clip
   const handleRestoreClip = async (clipId: string) => {
+    // Optimistically mark as active
+    setClipsList(prev => prev.map(c => c.id === clipId ? { ...c, deleted: false } : c));
     try {
       const res = await adminFetch(`/api/admin/clips/${clipId}/restore`, { method: "POST" });
       if (res.ok) {
         showToast("Clip restored successfully.");
         onRefreshClips();
-        await loadAdminData();
+        await loadAdminData(true);
       } else {
-        throw new Error("Restore API failed");
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Restore API failed");
       }
-    } catch (err) {
-      showToast("Failed to restore clip.");
+    } catch (err: any) {
+      showToast(err?.message || "Failed to restore clip.");
+      await loadAdminData(true);
     }
   };
 
@@ -192,17 +200,36 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     if (!window.confirm("Are you sure you want to permanently delete this clip forever? This will delete media and voice files from storage and remove the clip record. This cannot be undone.")) {
       return;
     }
+
+    // Immediately remove from UI lists (optimistic deletion from Content Browser)
+    const prevClips = [...clipsList];
+    const prevReports = [...reportsList];
+    setClipsList(prev => prev.filter(c => c.id !== clipId));
+    setReportsList(prev => prev.filter(r => r.clipId !== clipId));
+    setStats(prev => prev ? {
+      ...prev,
+      overview: {
+        ...prev.overview,
+        totalClips: Math.max(0, prev.overview.totalClips - 1)
+      }
+    } : null);
+
     try {
       const res = await adminFetch(`/api/admin/clips/${clipId}/purge`, { method: "POST" });
       if (res.ok) {
         showToast("Clip and storage assets deleted forever.");
         onRefreshClips();
-        await loadAdminData();
+        await loadAdminData(true);
       } else {
-        throw new Error("Purge API failed");
+        const data = await res.json().catch(() => ({}));
+        // Revert UI on error
+        setClipsList(prevClips);
+        setReportsList(prevReports);
+        throw new Error(data.error || "Purge API failed");
       }
-    } catch (err) {
-      showToast("Failed to permanently delete clip.");
+    } catch (err: any) {
+      showToast(err?.message || "Failed to permanently delete clip.");
+      await loadAdminData(true);
     }
   };
 
@@ -819,13 +846,22 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                                         </button>
                                       </div>
                                     ) : (
-                                      <button 
-                                        onClick={() => handleDeleteClip(clip.id)}
-                                        className="p-1.5 bg-red-950/20 hover:bg-red-500/10 border border-red-900/30 hover:border-red-500/40 text-red-400 rounded-lg transition-colors cursor-pointer inline-flex items-center"
-                                        title="Soft Delete Clip"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
+                                      <div className="inline-flex items-center gap-1.5">
+                                        <button 
+                                          onClick={() => handleDeleteClip(clip.id)}
+                                          className="p-1.5 bg-red-950/20 hover:bg-red-500/10 border border-red-900/30 hover:border-red-500/40 text-red-400 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                                          title="Soft Delete Clip (Hide from feed)"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button 
+                                          onClick={() => handlePurgeClip(clip.id)}
+                                          className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 hover:border-red-600 text-red-300 hover:text-white font-bold text-[9px] rounded-lg transition-all cursor-pointer uppercase"
+                                          title="Delete forever"
+                                        >
+                                          Delete forever
+                                        </button>
+                                      </div>
                                     )}
                                   </td>
 
