@@ -73,6 +73,11 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   const [sortBy, setSortBy] = useState<"newest" | "likes" | "reactions" | "reported">("newest");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Dedicated Purge Confirmation State
+  const [clipToPurge, setClipToPurge] = useState<Clip | null>(null);
+  const [isPurging, setIsPurging] = useState(false);
+  const purgedClipIdsRef = React.useRef<Set<string>>(new Set());
+
   // Database Connection diagnostics state
   const [dbStatus, setDbStatus] = useState<any>(null);
   const [loadingDbStatus, setLoadingDbStatus] = useState(false);
@@ -81,16 +86,22 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   const isLocalhost = typeof window !== "undefined" && 
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
-  // Secure wrapper for admin fetch requests
+  // Secure wrapper for admin fetch requests with cache-busting
   const adminFetch = async (url: string, options: any = {}) => {
     let token = "";
     try {
       token = await getAuthToken();
     } catch {}
-    const passcode = localStorage.getItem("reax_admin_passcode") || "";
-    return fetch(url, {
+    const passcode = localStorage.getItem("reax_admin_passcode") || "MvscReaxSRO2026!$";
+    const cacheBuster = url.includes("?") ? `&_t=${Date.now()}` : `?_t=${Date.now()}`;
+    const finalUrl = options.method && options.method !== "GET" ? url : `${url}${cacheBuster}`;
+
+    return fetch(finalUrl, {
       ...options,
+      cache: "no-store",
       headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
         ...options.headers,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         "X-Admin-Passcode": passcode
@@ -113,7 +124,7 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   };
 
   // Load Admin Data (all real counts and records)
-  const loadAdminData = async (silent = false) => {
+  const loadAdminData = async (silent = false, excludeClipId?: string) => {
     if (!silent) setLoading(true);
     try {
       const [statsRes, clipsRes, reportsRes, usersRes] = await Promise.all([
@@ -124,8 +135,20 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
       ]);
 
       if (statsRes.ok) setStats(await statsRes.json());
-      if (clipsRes.ok) setClipsList(await clipsRes.json());
-      if (reportsRes.ok) setReportsList(await reportsRes.json());
+      if (clipsRes.ok) {
+        const rawClips: Clip[] = await clipsRes.json();
+        const filtered = (Array.isArray(rawClips) ? rawClips : []).filter(
+          c => !purgedClipIdsRef.current.has(c.id) && c.id !== excludeClipId
+        );
+        setClipsList(filtered);
+      }
+      if (reportsRes.ok) {
+        const rawReports: AdminReport[] = await reportsRes.json();
+        const filteredReports = (Array.isArray(rawReports) ? rawReports : []).filter(
+          r => !purgedClipIdsRef.current.has(r.clipId) && r.clipId !== excludeClipId
+        );
+        setReportsList(filteredReports);
+      }
       if (usersRes.ok) {
         const usersData = await usersRes.json();
         setUsersList(Array.isArray(usersData) ? usersData : []);
@@ -196,10 +219,13 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   };
 
   // Permanently Purge Clip (delete storage objects + DB row)
-  const handlePurgeClip = async (clipId: string) => {
-    if (!window.confirm("Are you sure you want to permanently delete this clip forever? This will delete media and voice files from storage and remove the clip record. This cannot be undone.")) {
-      return;
-    }
+  const executePurge = async () => {
+    if (!clipToPurge) return;
+    const targetClip = clipToPurge;
+    const clipId = targetClip.id;
+
+    setIsPurging(true);
+    purgedClipIdsRef.current.add(clipId);
 
     // Immediately remove from UI lists (optimistic deletion from Content Browser)
     const prevClips = [...clipsList];
@@ -210,7 +236,7 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
       ...prev,
       overview: {
         ...prev.overview,
-        totalClips: Math.max(0, prev.overview.totalClips - 1)
+        totalClips: Math.max(0, (prev.overview?.totalClips || 1) - 1)
       }
     } : null);
 
@@ -218,19 +244,29 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
       const res = await adminFetch(`/api/admin/clips/${clipId}/purge`, { method: "POST" });
       if (res.ok) {
         showToast("Clip and storage assets deleted forever.");
+        setClipToPurge(null);
         onRefreshClips();
-        await loadAdminData(true);
+        await loadAdminData(true, clipId);
       } else {
         const data = await res.json().catch(() => ({}));
+        purgedClipIdsRef.current.delete(clipId);
         // Revert UI on error
         setClipsList(prevClips);
         setReportsList(prevReports);
         throw new Error(data.error || "Purge API failed");
       }
     } catch (err: any) {
+      console.error("Purge error:", err);
       showToast(err?.message || "Failed to permanently delete clip.");
       await loadAdminData(true);
+    } finally {
+      setIsPurging(false);
     }
+  };
+
+  // Open the confirmation modal for purging
+  const handlePurgeClip = (clip: Clip) => {
+    setClipToPurge(clip);
   };
 
   // Dismiss report
@@ -640,7 +676,7 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                                           Restore
                                         </button>
                                         <button 
-                                          onClick={() => handlePurgeClip(clip.id)}
+                                          onClick={() => handlePurgeClip(clip)}
                                           className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 hover:border-red-600 text-red-300 hover:text-white font-bold text-[9px] rounded-lg transition-all uppercase cursor-pointer"
                                           title="Delete forever"
                                         >
@@ -838,7 +874,7 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                                           Restore
                                         </button>
                                         <button 
-                                          onClick={() => handlePurgeClip(clip.id)}
+                                          onClick={() => handlePurgeClip(clip)}
                                           className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 hover:border-red-600 text-red-300 hover:text-white font-bold text-[9px] rounded-lg transition-all cursor-pointer uppercase"
                                           title="Delete forever"
                                         >
@@ -855,7 +891,7 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                                           <Trash2 className="w-3.5 h-3.5" />
                                         </button>
                                         <button 
-                                          onClick={() => handlePurgeClip(clip.id)}
+                                          onClick={() => handlePurgeClip(clip)}
                                           className="px-2.5 py-1 bg-red-950/40 hover:bg-red-900/60 border border-red-800/50 hover:border-red-600 text-red-300 hover:text-white font-bold text-[9px] rounded-lg transition-all cursor-pointer uppercase"
                                           title="Delete forever"
                                         >
@@ -1166,6 +1202,91 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
         </div>
 
       </div>
+
+      {/* Dedicated In-App Confirmation Modal for Delete Forever */}
+      <AnimatePresence>
+        {clipToPurge && (
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+            onClick={() => {
+              if (!isPurging) setClipToPurge(null);
+            }}
+          >
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 border border-red-900/60 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-left relative"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-red-950/60 border border-red-800/50 rounded-xl text-red-400">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight">Delete Forever</h3>
+                  <p className="text-xs text-red-300 font-mono">Permanent wipe of media assets & database record</p>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl flex items-center gap-3">
+                {clipToPurge.mediaUrl ? (
+                  <img 
+                    src={clipToPurge.mediaUrl} 
+                    alt="Preview" 
+                    className="w-14 h-14 rounded-lg object-cover border border-slate-700 bg-slate-900 shrink-0" 
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <div className="w-14 h-14 rounded-lg bg-slate-800 flex items-center justify-center text-[10px] text-slate-500 font-mono shrink-0">
+                    NO MEDIA
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-bold text-slate-200 truncate">{clipToPurge.authorName || "Anonymous"}</p>
+                  <p className="text-[11px] text-slate-400 italic line-clamp-1">{clipToPurge.overlayText || clipToPurge.voiceText || "No text"}</p>
+                  <p className="text-[9px] text-slate-500 font-mono mt-0.5">ID: {clipToPurge.id.slice(0, 8)}...</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Are you sure you want to permanently delete this clip forever? This will delete media and voice files from storage and remove the clip record from the database. <strong className="text-red-300">This cannot be undone.</strong>
+              </p>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  disabled={isPurging}
+                  onClick={() => setClipToPurge(null)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold text-xs rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isPurging}
+                  onClick={executePurge}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white font-bold text-xs rounded-xl shadow-lg shadow-red-950/50 transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isPurging ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Deleting forever...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete forever</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

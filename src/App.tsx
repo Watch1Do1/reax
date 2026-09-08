@@ -311,7 +311,13 @@ export default function App() {
     let active = true;
     setLoading(true);
 
-    fetch("/api/clips")
+    fetch(`/api/clips?_t=${Date.now()}`, {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache"
+      }
+    })
       .then(async (res) => {
         if (res.status === 503) {
           const errData = await res.json().catch(() => ({}));
