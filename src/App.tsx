@@ -3,7 +3,7 @@ import {
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
   ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User,
-  MoreVertical
+  MoreVertical, Mail
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -13,6 +13,7 @@ import FastReaxPanel from "./components/FastReaxPanel";
 import SavedReactionsVault from "./components/SavedReactionsVault";
 import OnboardingModal from "./components/OnboardingModal";
 import ResetPasswordModal from "./components/ResetPasswordModal";
+import ContactModal from "./components/ContactModal";
 import ProfilePanel from "./components/ProfilePanel";
 import AdminPanel from "./components/AdminPanel";
 import { Clip, SavedReaction } from "./types";
@@ -64,6 +65,7 @@ export default function App() {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeTriggerReason, setUpgradeTriggerReason] = useState<"save_reaction" | "post_limit" | "edit_username" | "nav_click" | null>(null);
   const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
+  const [isContactModalOpen, setIsContactModalOpen] = useState(false);
 
   // Age constraint state
   const [ageConfirmed, setAgeConfirmed] = useState(() => {
@@ -839,6 +841,13 @@ export default function App() {
                     <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                     <span>My Templates</span>
                   </button>
+                  <button
+                    onClick={() => setIsContactModalOpen(true)}
+                    className="w-full px-3 py-2 text-left text-indigo-300 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer font-medium border-t border-slate-800/50"
+                  >
+                    <Mail className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Contact Us</span>
+                  </button>
                   {isLoggedIn && (
                     <button
                       onClick={handleLogout}
@@ -993,11 +1002,13 @@ export default function App() {
 
       {/* Footer Branding */}
       <footer className="bg-slate-950 border-t border-slate-900 py-6 text-center text-[10px] font-mono text-slate-600 space-y-2.5">
-        <p>REAX © 2026 — SECURE CLIENT-SERVER AI AGENT</p>
+        <p>REAX © 2026</p>
         <div className="flex justify-center gap-4 text-slate-500 text-[9.5px]">
           <button onClick={() => setActiveDocsTab("privacy")} className="hover:text-amber-400 transition-colors cursor-pointer">Privacy Policy</button>
           <span>•</span>
           <button onClick={() => setActiveDocsTab("terms")} className="hover:text-amber-400 transition-colors cursor-pointer">Terms of Service</button>
+          <span>•</span>
+          <button onClick={() => setIsContactModalOpen(true)} className="hover:text-amber-400 transition-colors cursor-pointer">Contact Us</button>
         </div>
       </footer>
 
@@ -1146,10 +1157,21 @@ export default function App() {
 
                   <div>
                     <h3 className="font-bold text-white text-sm mt-3">Contact</h3>
-                    <p>
-                      <a href="mailto:team@watch1do1.com" className="text-amber-400 font-mono hover:underline">
-                        team@watch1do1.com
+                    <p className="flex items-center gap-3 mt-1">
+                      <a href="mailto:support@getreax.com" className="text-amber-400 font-mono hover:underline">
+                        support@getreax.com
                       </a>
+                      <span>•</span>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setActiveDocsTab(null);
+                          setIsContactModalOpen(true);
+                        }}
+                        className="text-indigo-400 hover:text-indigo-300 font-mono text-xs underline cursor-pointer"
+                      >
+                        Contact Form
+                      </button>
                     </p>
                   </div>
                 </div>
@@ -1202,10 +1224,21 @@ export default function App() {
 
                   <div>
                     <h3 className="font-bold text-white text-sm mt-3">Contact</h3>
-                    <p>
-                      <a href="mailto:team@watch1do1.com" className="text-amber-400 font-mono hover:underline">
-                        team@watch1do1.com
+                    <p className="flex items-center gap-3 mt-1">
+                      <a href="mailto:support@getreax.com" className="text-amber-400 font-mono hover:underline">
+                        support@getreax.com
                       </a>
+                      <span>•</span>
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setActiveDocsTab(null);
+                          setIsContactModalOpen(true);
+                        }}
+                        className="text-indigo-400 hover:text-indigo-300 font-mono text-xs underline cursor-pointer"
+                      >
+                        Contact Form
+                      </button>
                     </p>
                   </div>
                 </div>
@@ -1394,6 +1427,12 @@ export default function App() {
           }
           window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🔑 Password updated successfully!" } }));
         }}
+      />
+
+      {/* CONTACT US MODAL */}
+      <ContactModal
+        isOpen={isContactModalOpen}
+        onClose={() => setIsContactModalOpen(false)}
       />
 
       {/* USER PROFILE PANEL */}

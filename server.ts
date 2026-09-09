@@ -2164,7 +2164,7 @@ const adminAuthMiddleware = async (req: any, res: any, next: any) => {
           const userEmail = (userData.user.email || "").toLowerCase();
           const userRole = userData.user.user_metadata?.role || userData.user.app_metadata?.role;
 
-          const adminEmails = (process.env.ADMIN_USER_EMAILS || "team@watch1do1.com")
+          const adminEmails = (process.env.ADMIN_USER_EMAILS || "team@watch1do1.com,support@getreax.com")
             .split(",")
             .map((e: string) => e.trim().toLowerCase())
             .filter(Boolean);
@@ -2516,6 +2516,16 @@ app.post("/api/funnel/track", async (req, res) => {
     console.error("Error tracking funnel event:", err);
     res.status(500).json({ error: "Failed to track funnel event" });
   }
+});
+
+// 13. POST Contact Support
+app.post("/api/contact", async (req, res) => {
+  const { name, email, category, message } = req.body || {};
+  if (!email || !message) {
+    return res.status(400).json({ error: "Email and message are required" });
+  }
+  console.log(`[Support Contact] From: ${name || "Anonymous"} <${email}> [${category || "general"}]: ${message}`);
+  return res.json({ success: true, message: "Thank you for contacting Reax support. Your message has been received." });
 });
 
 // Helper for AI responses
