@@ -14,7 +14,6 @@ import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -2661,9 +2660,14 @@ To respond directly to the sender, email: ${contactMsg.email}`;
     }
   }
 
-  // 2. SMTP (via nodemailer)
+  // 2. SMTP (via nodemailer if installed)
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
+      const nodemailerModule = await import("nodemailer").catch(() => null);
+      if (!nodemailerModule) {
+        return { sent: false, provider: "smtp", error: "SMTP configured but nodemailer is not available in environment." };
+      }
+      const nodemailer = nodemailerModule.default || nodemailerModule;
       const port = Number(process.env.SMTP_PORT || 587);
       const transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,
