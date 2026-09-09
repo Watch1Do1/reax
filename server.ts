@@ -2745,32 +2745,6 @@ app.post("/api/contact", async (req, res) => {
   });
 });
 
-// 14. GET Admin Contact Messages
-app.get("/api/admin/contact-messages", async (req, res) => {
-  try {
-    const msgs = await store!.getContactMessages();
-    res.json(msgs);
-  } catch (err) {
-    console.error("Error in /api/admin/contact-messages:", err);
-    res.status(500).json({ error: "Failed to fetch contact messages" });
-  }
-});
-
-// 15. PATCH Admin Contact Message Status
-app.patch("/api/admin/contact-messages/:id", async (req, res) => {
-  try {
-    const { status } = req.body || {};
-    if (!status || !["unread", "read", "resolved"].includes(status)) {
-      return res.status(400).json({ error: "Invalid status. Must be unread, read, or resolved." });
-    }
-    const success = await store!.updateContactMessageStatus(req.params.id, status as any);
-    res.json({ success });
-  } catch (err) {
-    console.error("Error updating contact message status:", err);
-    res.status(500).json({ error: "Failed to update contact message status" });
-  }
-});
-
 // Helper for AI responses
 function getDynamicFallback(tone: string, imageContext?: string) {
   let contextTopic = "this";

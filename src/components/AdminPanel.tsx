@@ -3,8 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Shield, Users, Settings, Trash2, 
   RefreshCw, Eye, UserX, AlertTriangle, 
-  Tv, CheckCircle, Database, ShieldAlert,
-  Mail, MessageSquare, ExternalLink, Check, Copy
+  Tv, CheckCircle, Database, ShieldAlert, Copy
 } from "lucide-react";
 import { Clip } from "../types";
 import { getAuthToken } from "../utils/supabaseClient";
@@ -17,17 +16,7 @@ interface AdminPanelProps {
   onSelectThread: (id: string) => void;
 }
 
-type AdminTab = "reports" | "content" | "dashboard" | "users" | "messages" | "settings";
-
-type AdminContactMessage = {
-  id: string;
-  name: string;
-  email: string;
-  category: string;
-  message: string;
-  createdAt: string;
-  status: "unread" | "read" | "resolved";
-};
+type AdminTab = "reports" | "content" | "dashboard" | "users" | "settings";
 
 type AdminStats = {
   overview?: {
@@ -78,8 +67,6 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   const [clipsList, setClipsList] = useState<Clip[]>([]);
   const [reportsList, setReportsList] = useState<AdminReport[]>([]);
   const [usersList, setUsersList] = useState<AdminUser[]>([]);
-  const [contactMessagesList, setContactMessagesList] = useState<AdminContactMessage[]>([]);
-  const [messageFilter, setMessageFilter] = useState<"all" | "unread" | "read" | "resolved">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "live" | "deleted" | "reported">("all");
@@ -105,7 +92,12 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     try {
       token = await getAuthToken();
     } catch {}
-    const passcode = localStorage.getItem("reax_admin_passcode") || "MvscReaxSRO2026!$";
+    const passcode = localStorage.getItem("reax_admin_passcode");
+    if (!passcode) {
+      showToast("Admin session expired or missing passcode. Please log in again.");
+      onClose();
+      throw new Error("Missing admin passcode");
+    }
     const cacheBuster = url.includes("?") ? `&_t=${Date.now()}` : `?_t=${Date.now()}`;
     const finalUrl = options.method && options.method !== "GET" ? url : `${url}${cacheBuster}`;
 
@@ -140,12 +132,11 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   const loadAdminData = async (silent = false, excludeClipId?: string) => {
     if (!silent) setLoading(true);
     try {
-      const [statsRes, clipsRes, reportsRes, usersRes, contactRes] = await Promise.all([
+      const [statsRes, clipsRes, reportsRes, usersRes] = await Promise.all([
         adminFetch("/api/admin/stats"),
         adminFetch("/api/admin/clips"),
         adminFetch("/api/admin/reports"),
-        adminFetch("/api/admin/users"),
-        adminFetch("/api/admin/contact-messages")
+        adminFetch("/api/admin/users")
       ]);
 
       if (statsRes.ok) setStats(await statsRes.json());
@@ -166,10 +157,6 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
       if (usersRes.ok) {
         const usersData = await usersRes.json();
         setUsersList(Array.isArray(usersData) ? usersData : []);
-      }
-      if (contactRes && contactRes.ok) {
-        const contactData = await contactRes.json();
-        setContactMessagesList(Array.isArray(contactData) ? contactData : []);
       }
     } catch (err) {
       console.error("Failed to fetch admin data", err);
@@ -350,25 +337,6 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     }
   };
 
-  // Update Contact Message Status
-  const handleUpdateMessageStatus = async (id: string, newStatus: "unread" | "read" | "resolved") => {
-    try {
-      const res = await adminFetch(`/api/admin/contact-messages/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus })
-      });
-      if (res.ok) {
-        setContactMessagesList(prev => prev.map(m => m.id === id ? { ...m, status: newStatus } : m));
-        showToast(`Message marked as ${newStatus}.`);
-      } else {
-        throw new Error("Failed to update message status");
-      }
-    } catch (err: any) {
-      showToast(err?.message || "Failed to update status");
-    }
-  };
-
   // Localhost-only test report generator (never shown in production)
   const handleTriggerLocalhostMockReport = async () => {
     if (clipsList.length === 0) {
@@ -427,14 +395,11 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     });
   }, [clipsList, searchQuery, selectedUserFilter, statusFilter, sortBy]);
 
-  const unreadMessagesCount = contactMessagesList.filter(m => m.status === "unread").length;
-
   // Dynamic Navigation Tabs
   const navTabs: Array<{ id: AdminTab; label: string; desc: string; badge?: number }> = [
     { id: "reports", label: "🚩 Reports Queue", desc: "Open reports queue", badge: reportsList.length },
     { id: "content", label: "📝 Content Browser", desc: "Clips & moderation" },
     { id: "dashboard", label: "📊 Dashboard", desc: "Real count overview" },
-    { id: "messages" as AdminTab, label: "📬 Support Inquiries", desc: "Contact messages", badge: unreadMessagesCount },
     ...(usersList.length > 0 ? [{ id: "users" as AdminTab, label: "👥 Users Manager", desc: "Auth-backed profiles" }] : []),
     { id: "settings", label: "⚙️ Settings", desc: "Database diagnostics" },
   ];
@@ -547,7 +512,6 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
               {activeTab === "content" && "📝 Content Browser"}
               {activeTab === "dashboard" && "📊 Dashboard Analytics"}
               {activeTab === "users" && "👥 Community User Directory"}
-              {activeTab === "messages" && "📬 Support Inquiries & Messages"}
               {activeTab === "settings" && "⚙️ System Configuration"}
             </h1>
           </div>
@@ -1229,163 +1193,6 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                 </div>
               )}
 
-            </div>
-          )}
-
-          {/* MESSAGES TAB */}
-          {activeTab === "messages" && (
-            <div className="space-y-6">
-              {/* Header & Filter Controls */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#08090c] border border-slate-900 rounded-2xl p-5">
-                <div>
-                  <h2 className="text-base font-bold text-white flex items-center gap-2">
-                    <Mail className="w-4 h-4 text-indigo-400" />
-                    <span>Customer & User Inquiries</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                      {contactMessagesList.length} total
-                    </span>
-                  </h2>
-                  <p className="text-xs text-slate-400 font-mono mt-0.5">
-                    Messages submitted via Contact Us and directed to support@getreax.com
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {(["all", "unread", "read", "resolved"] as const).map(f => (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => setMessageFilter(f)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-mono capitalize transition-colors cursor-pointer ${
-                        messageFilter === f
-                          ? "bg-indigo-600 text-white font-bold"
-                          : "bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800"
-                      }`}
-                    >
-                      {f}
-                      {f === "unread" && unreadMessagesCount > 0 && ` (${unreadMessagesCount})`}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Messages Listing */}
-              {contactMessagesList.filter(m => messageFilter === "all" || m.status === messageFilter).length === 0 ? (
-                <div className="py-16 text-center border border-dashed border-slate-900 rounded-2xl bg-[#08090c]/40">
-                  <Mail className="w-10 h-10 text-slate-700 mx-auto mb-3" />
-                  <p className="text-sm font-mono text-slate-400">
-                    No {messageFilter !== "all" ? messageFilter : ""} support inquiries found.
-                  </p>
-                  <p className="text-xs font-mono text-slate-600 mt-1">
-                    Messages submitted through the Contact Us form will be listed here.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {contactMessagesList
-                    .filter(m => messageFilter === "all" || m.status === messageFilter)
-                    .map(msg => {
-                      const replyMailto = `mailto:${encodeURIComponent(msg.email)}?subject=${encodeURIComponent(`Re: [Reax Support - ${msg.category.toUpperCase()}]`)}&body=${encodeURIComponent(`Hi ${msg.name || "there"},\n\nThank you for contacting Reax Support regarding your inquiry:\n\n> ${msg.message}\n\n`)}`;
-
-                      return (
-                        <div
-                          key={msg.id}
-                          className={`bg-[#08090c] border rounded-2xl p-5 space-y-3 transition-colors ${
-                            msg.status === "unread" 
-                              ? "border-indigo-500/40 shadow-lg shadow-indigo-950/20" 
-                              : "border-slate-900"
-                          }`}
-                        >
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-900/80 pb-3">
-                            <div className="flex items-center gap-3">
-                              <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-mono text-xs font-bold shrink-0 ${
-                                msg.status === "unread"
-                                  ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                                  : msg.status === "resolved"
-                                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                                  : "bg-slate-800 text-slate-400 border border-slate-700"
-                              }`}>
-                                {msg.name ? msg.name.slice(0, 2).toUpperCase() : "US"}
-                              </div>
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-sm text-white">
-                                    {msg.name || "Anonymous User"}
-                                  </span>
-                                  <span className="text-xs text-indigo-400 font-mono select-all">
-                                    &lt;{msg.email}&gt;
-                                  </span>
-                                </div>
-                                <span className="text-[10px] text-slate-500 font-mono block">
-                                  {new Date(msg.createdAt).toLocaleString()} • ID: {msg.id}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <span className="px-2.5 py-1 rounded-lg text-[10px] font-mono uppercase font-bold tracking-wider bg-slate-900 border border-slate-800 text-slate-300">
-                                {msg.category}
-                              </span>
-                              <span className={`px-2.5 py-1 rounded-lg text-[10px] font-mono uppercase font-bold tracking-wider ${
-                                msg.status === "unread"
-                                  ? "bg-amber-500/10 border border-amber-500/30 text-amber-300"
-                                  : msg.status === "resolved"
-                                  ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-300"
-                                  : "bg-slate-800 border border-slate-700 text-slate-400"
-                              }`}>
-                                {msg.status}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="p-4 bg-slate-950/60 border border-slate-900 rounded-xl text-xs font-mono text-slate-200 whitespace-pre-wrap leading-relaxed">
-                            {msg.message}
-                          </div>
-
-                          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                            <a
-                              href={replyMailto}
-                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                              <span>Reply to {msg.email}</span>
-                            </a>
-
-                            <div className="flex items-center gap-2">
-                              {msg.status === "unread" && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleUpdateMessageStatus(msg.id, "read")}
-                                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl font-mono text-xs transition-colors cursor-pointer"
-                                >
-                                  Mark Read
-                                </button>
-                              )}
-                              {msg.status !== "resolved" ? (
-                                <button
-                                  type="button"
-                                  onClick={() => handleUpdateMessageStatus(msg.id, "resolved")}
-                                  className="px-3 py-1.5 bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/60 rounded-xl font-mono text-xs transition-colors cursor-pointer flex items-center gap-1"
-                                >
-                                  <Check className="w-3.5 h-3.5" />
-                                  <span>Mark Resolved</span>
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleUpdateMessageStatus(msg.id, "read")}
-                                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800 rounded-xl font-mono text-xs transition-colors cursor-pointer"
-                                >
-                                  Reopen
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              )}
             </div>
           )}
 
