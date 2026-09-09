@@ -18,8 +18,15 @@ export default function ContactModal({
   const [category, setCategory] = useState<string>("general");
   const [message, setMessage] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copiedMessage, setCopiedMessage] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{
+    emailSent: boolean;
+    provider?: string;
+    saved?: boolean;
+    submittedMsg?: { name: string; email: string; category: string; message: string };
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -28,6 +35,13 @@ export default function ContactModal({
     navigator.clipboard.writeText("support@getreax.com");
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyMessage = () => {
+    const text = submitResult?.submittedMsg?.message || message;
+    navigator.clipboard.writeText(text);
+    setCopiedMessage(true);
+    setTimeout(() => setCopiedMessage(false), 2000);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -64,14 +78,30 @@ export default function ContactModal({
         throw new Error("Failed to send message. Please email support@getreax.com directly.");
       }
 
+      const data = await res.json();
+      setSubmitResult({
+        emailSent: Boolean(data.emailSent),
+        provider: data.provider,
+        saved: Boolean(data.saved),
+        submittedMsg: {
+          name: name.trim(),
+          email: cleanEmail,
+          category,
+          message: cleanMsg
+        }
+      });
       setSubmitSuccess(true);
-      setMessage("");
     } catch (err: any) {
       setError(err?.message || "Failed to send message.");
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  const currentMsg = submitResult?.submittedMsg || { name, email, category, message };
+  const mailtoSubject = encodeURIComponent(`[Reax Support - ${currentMsg.category.toUpperCase()}] From ${currentMsg.name || currentMsg.email || "User"}`);
+  const mailtoBody = encodeURIComponent(`Hi Reax Support,\n\n${currentMsg.message || ""}\n\nSender: ${currentMsg.name ? `${currentMsg.name} (${currentMsg.email})` : currentMsg.email}`);
+  const directMailtoUrl = `mailto:support@getreax.com?subject=${mailtoSubject}&body=${mailtoBody}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
@@ -148,24 +178,66 @@ export default function ContactModal({
         {/* Message Form or Success view */}
         <div className="p-5 flex-1">
           {submitSuccess ? (
-            <div className="text-center py-6 space-y-3">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-md">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-white font-sans">Message Sent</h3>
-              <p className="text-xs text-slate-300 font-mono max-w-sm mx-auto leading-relaxed">
-                Thank you for reaching out! Your message was delivered to our support desk at <strong className="text-indigo-400">support@getreax.com</strong>. We typically respond within 24–48 hours.
-              </p>
-              <div className="pt-3">
+            <div className="text-center py-5 space-y-4">
+              {submitResult?.emailSent ? (
+                <>
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-md">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white font-sans">Email Dispatched!</h3>
+                    <p className="text-xs text-slate-300 font-mono max-w-sm mx-auto leading-relaxed mt-1.5">
+                      Your message was sent via email relay directly to <strong className="text-indigo-400 font-bold">support@getreax.com</strong>. We typically respond within 24–48 hours.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400 shadow-md">
+                    <MessageSquare className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white font-sans">Message Saved to Admin Queue</h3>
+                    <p className="text-xs text-slate-300 font-mono max-w-sm mx-auto leading-relaxed mt-1.5">
+                      Your inquiry is stored in our admin dashboard. To also send a <strong className="text-amber-300">direct email from your personal mailbox</strong> to <strong className="text-indigo-300">support@getreax.com</strong> right now, tap below:
+                    </p>
+                  </div>
+
+                  {/* 1-Click Launch Email Client */}
+                  <div className="p-3.5 bg-slate-950 border border-indigo-500/30 rounded-2xl text-left space-y-2.5">
+                    <a
+                      href={directMailtoUrl}
+                      className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>Send via Your Email App (Gmail / Apple Mail / Outlook)</span>
+                    </a>
+
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-1">
+                      <span>Recipient: <strong className="text-indigo-300">support@getreax.com</strong></span>
+                      <button
+                        type="button"
+                        onClick={handleCopyMessage}
+                        className="text-slate-400 hover:text-white underline cursor-pointer flex items-center gap-1"
+                      >
+                        {copiedMessage ? "Copied!" : "Copy message text"}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div className="pt-2 flex justify-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
                     setSubmitSuccess(false);
+                    setMessage("");
                     onClose();
                   }}
-                  className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white font-mono text-xs rounded-xl transition-colors cursor-pointer"
+                  className="px-6 py-2 bg-slate-800 hover:bg-slate-700 text-white font-mono text-xs rounded-xl transition-colors cursor-pointer"
                 >
-                  Done
+                  Close
                 </button>
               </div>
             </div>

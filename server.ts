@@ -14,6 +14,7 @@ import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -130,6 +131,16 @@ export type TodayStats = {
   voiceReactions: number;
 };
 
+export interface ContactMessage {
+  id: string;
+  name: string;
+  email: string;
+  category: string;
+  message: string;
+  createdAt: string;
+  status: "unread" | "read" | "resolved";
+}
+
 // Store Interface
 export interface Store {
   getClips(includeDeleted?: boolean): Promise<Clip[]>;
@@ -146,6 +157,9 @@ export interface Store {
   insertReport(report: Report): Promise<Report>;
   getReports(): Promise<Array<Report & { clip?: Partial<Clip> | null }>>;
   dismissReport(reportId: string): Promise<boolean>;
+  insertContactMessage(msg: ContactMessage): Promise<ContactMessage>;
+  getContactMessages(): Promise<ContactMessage[]>;
+  updateContactMessageStatus(id: string, status: "unread" | "read" | "resolved"): Promise<boolean>;
   getUsers(): Promise<UserProfile[]>;
   getUserProfile(query: { id?: string; username?: string }): Promise<UserProfile | null>;
   upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string }): Promise<UserProfile>;
@@ -238,6 +252,7 @@ class MemoryStore implements Store {
   ];
 
   private reports: Report[] = [];
+  private contactMessages: ContactMessage[] = [];
   private userProfiles: UserProfile[] = [];
   private likesMap: Map<string, Set<string>> = new Map();
   private laughsMap: Map<string, Set<string>> = new Map();
@@ -408,6 +423,24 @@ class MemoryStore implements Store {
       clip.reportCount -= 1;
     }
     return true;
+  }
+
+  async insertContactMessage(msg: ContactMessage): Promise<ContactMessage> {
+    this.contactMessages.unshift(msg);
+    return msg;
+  }
+
+  async getContactMessages(): Promise<ContactMessage[]> {
+    return [...this.contactMessages];
+  }
+
+  async updateContactMessageStatus(id: string, status: "unread" | "read" | "resolved"): Promise<boolean> {
+    const found = this.contactMessages.find(m => m.id === id);
+    if (found) {
+      found.status = status;
+      return true;
+    }
+    return false;
   }
 
   async getUsers(): Promise<UserProfile[]> {
@@ -617,6 +650,7 @@ function mapClipToDb(clip: Clip) {
 
 class SupabaseStore implements Store {
   private client: any;
+  private fallbackContactMessages: ContactMessage[] = [];
 
   constructor(client: any) {
     this.client = client;
@@ -983,6 +1017,67 @@ class SupabaseStore implements Store {
     } catch (err) {
       return false;
     }
+  }
+
+  async insertContactMessage(msg: ContactMessage): Promise<ContactMessage> {
+    try {
+      const { error } = await this.client.from("contact_messages").insert([{
+        id: msg.id,
+        name: msg.name,
+        email: msg.email,
+        category: msg.category,
+        message: msg.message,
+        created_at: msg.createdAt,
+        status: msg.status
+      }]);
+      if (error) {
+        console.warn("insertContactMessage note (table might not exist yet):", error.message);
+        this.fallbackContactMessages.unshift(msg);
+      }
+    } catch (err) {
+      this.fallbackContactMessages.unshift(msg);
+    }
+    return msg;
+  }
+
+  async getContactMessages(): Promise<ContactMessage[]> {
+    try {
+      const { data, error } = await this.client
+        .from("contact_messages")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!error && data && Array.isArray(data)) {
+        return data.map((m: any) => ({
+          id: m.id,
+          name: m.name || "",
+          email: m.email || "",
+          category: m.category || "general",
+          message: m.message || "",
+          createdAt: m.created_at || new Date().toISOString(),
+          status: m.status || "unread"
+        }));
+      }
+    } catch (err) {
+      console.warn("getContactMessages note:", err);
+    }
+    return this.fallbackContactMessages;
+  }
+
+  async updateContactMessageStatus(id: string, status: "unread" | "read" | "resolved"): Promise<boolean> {
+    try {
+      const { error } = await this.client
+        .from("contact_messages")
+        .update({ status })
+        .eq("id", id);
+      if (!error) return true;
+    } catch {}
+    const found = this.fallbackContactMessages.find(m => m.id === id);
+    if (found) {
+      found.status = status;
+      return true;
+    }
+    return false;
   }
 
   async getUsers(): Promise<UserProfile[]> {
@@ -2518,14 +2613,158 @@ app.post("/api/funnel/track", async (req, res) => {
   }
 });
 
+// Helper to send outbound email notification for support inquiries
+async function sendSupportNotificationEmail(contactMsg: ContactMessage): Promise<{ sent: boolean; provider?: string; error?: string }> {
+  const targetEmail = process.env.SUPPORT_EMAIL || "support@getreax.com";
+  const subject = `[Reax Support - ${contactMsg.category.toUpperCase()}] New message from ${contactMsg.name ? `${contactMsg.name} (${contactMsg.email})` : contactMsg.email}`;
+  const textContent = `New Reax Support Inquiry received:
+--------------------------------------------------
+Category: ${contactMsg.category}
+Name:     ${contactMsg.name || "Not provided"}
+Email:    ${contactMsg.email}
+Time:     ${contactMsg.createdAt}
+
+Message:
+${contactMsg.message}
+--------------------------------------------------
+To respond directly to the sender, email: ${contactMsg.email}`;
+
+  // 1. Resend API (HTTP REST)
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const fromEmail = process.env.EMAIL_FROM || "Reax Support <onboarding@resend.dev>";
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          from: fromEmail,
+          to: [targetEmail],
+          reply_to: contactMsg.email,
+          subject,
+          text: textContent
+        })
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (res.ok) {
+        console.log(`[Email] Dispatched via Resend to ${targetEmail} (ID: ${data.id})`);
+        return { sent: true, provider: "resend" };
+      } else {
+        console.warn("[Email] Resend API error:", data);
+        return { sent: false, provider: "resend", error: data.message || "Resend error" };
+      }
+    } catch (err: any) {
+      console.warn("[Email] Resend request failed:", err?.message);
+      return { sent: false, provider: "resend", error: err?.message };
+    }
+  }
+
+  // 2. SMTP (via nodemailer)
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    try {
+      const port = Number(process.env.SMTP_PORT || 587);
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port,
+        secure: port === 465,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS
+        }
+      });
+      const info = await transporter.sendMail({
+        from: process.env.EMAIL_FROM || `"Reax Support" <${process.env.SMTP_USER}>`,
+        to: targetEmail,
+        replyTo: contactMsg.email,
+        subject,
+        text: textContent
+      });
+      console.log(`[Email] Dispatched via SMTP to ${targetEmail} (Msg ID: ${info.messageId})`);
+      return { sent: true, provider: "smtp" };
+    } catch (err: any) {
+      console.warn("[Email] SMTP dispatch failed:", err?.message);
+      return { sent: false, provider: "smtp", error: err?.message };
+    }
+  }
+
+  // No external relay configured
+  return {
+    sent: false,
+    provider: "none",
+    error: "No outbound email relay configured (RESEND_API_KEY or SMTP_HOST/SMTP_USER/SMTP_PASS)"
+  };
+}
+
 // 13. POST Contact Support
 app.post("/api/contact", async (req, res) => {
   const { name, email, category, message } = req.body || {};
   if (!email || !message) {
     return res.status(400).json({ error: "Email and message are required" });
   }
-  console.log(`[Support Contact] From: ${name || "Anonymous"} <${email}> [${category || "general"}]: ${message}`);
-  return res.json({ success: true, message: "Thank you for contacting Reax support. Your message has been received." });
+
+  const cleanEmail = String(email).trim();
+  const cleanMsg = String(message).trim();
+  const cleanName = name ? String(name).trim() : "";
+  const cleanCat = category ? String(category).trim() : "general";
+
+  const newMsg: ContactMessage = {
+    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: cleanName,
+    email: cleanEmail,
+    category: cleanCat,
+    message: cleanMsg,
+    createdAt: new Date().toISOString(),
+    status: "unread"
+  };
+
+  // Persist to store (database or fallback)
+  try {
+    await store!.insertContactMessage(newMsg);
+  } catch (err) {
+    console.warn("Error persisting contact message:", err);
+  }
+
+  // Attempt outbound email relay to support@getreax.com
+  const emailResult = await sendSupportNotificationEmail(newMsg);
+
+  return res.json({
+    success: true,
+    saved: true,
+    emailSent: emailResult.sent,
+    provider: emailResult.provider,
+    error: emailResult.error,
+    message: emailResult.sent 
+      ? "Your message has been emailed directly to support@getreax.com."
+      : "Your message has been saved to the support inbox."
+  });
+});
+
+// 14. GET Admin Contact Messages
+app.get("/api/admin/contact-messages", async (req, res) => {
+  try {
+    const msgs = await store!.getContactMessages();
+    res.json(msgs);
+  } catch (err) {
+    console.error("Error in /api/admin/contact-messages:", err);
+    res.status(500).json({ error: "Failed to fetch contact messages" });
+  }
+});
+
+// 15. PATCH Admin Contact Message Status
+app.patch("/api/admin/contact-messages/:id", async (req, res) => {
+  try {
+    const { status } = req.body || {};
+    if (!status || !["unread", "read", "resolved"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status. Must be unread, read, or resolved." });
+    }
+    const success = await store!.updateContactMessageStatus(req.params.id, status as any);
+    res.json({ success });
+  } catch (err) {
+    console.error("Error updating contact message status:", err);
+    res.status(500).json({ error: "Failed to update contact message status" });
+  }
 });
 
 // Helper for AI responses
