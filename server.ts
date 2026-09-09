@@ -1625,22 +1625,29 @@ BEGIN
     base_username := 'user_' || substr(NEW.id::text, 1, 8);
   END IF;
   extracted_username := base_username;
-  WHILE EXISTS (SELECT 1 FROM public.user_profiles WHERE username = extracted_username AND id != NEW.id) LOOP
+  WHILE EXISTS (SELECT 1 FROM public.user_profiles WHERE username = extracted_username AND user_id != NEW.id AND id != NEW.id) LOOP
     suffix := suffix + 1;
     extracted_username := base_username || '_' || suffix::text;
   END LOOP;
 
-  INSERT INTO public.user_profiles (
-    id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
-  ) VALUES (
-    NEW.id, NEW.id, NEW.email, extracted_username, false, 0, 0,
-    COALESCE(NEW.created_at, NOW()), COALESCE(NEW.created_at, NOW())
-  )
-  ON CONFLICT (id) DO UPDATE SET
-    email = EXCLUDED.email,
-    user_id = EXCLUDED.user_id,
-    username = COALESCE(public.user_profiles.username, EXCLUDED.username);
+  IF EXISTS (SELECT 1 FROM public.user_profiles WHERE user_id = NEW.id OR id = NEW.id) THEN
+    UPDATE public.user_profiles
+    SET 
+      email = COALESCE(NEW.email, public.user_profiles.email),
+      username = COALESCE(public.user_profiles.username, extracted_username)
+    WHERE user_id = NEW.id OR id = NEW.id;
+  ELSE
+    INSERT INTO public.user_profiles (
+      id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
+    ) VALUES (
+      NEW.id, NEW.id, NEW.email, extracted_username, false, 0, 0,
+      COALESCE(NEW.created_at, NOW()), COALESCE(NEW.created_at, NOW())
+    );
+  END IF;
 
+  RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'handle_new_user error: %', SQLERRM;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

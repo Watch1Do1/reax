@@ -92,16 +92,16 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     try {
       token = await getAuthToken();
     } catch {}
-    const passcode = localStorage.getItem("reax_admin_passcode");
-    if (!passcode) {
-      showToast("Admin session expired or missing passcode. Please log in again.");
+    const passcode = localStorage.getItem("reax_admin_passcode") || "";
+    if (!passcode && !token) {
+      showToast("Admin session expired. Please enter passcode.");
       onClose();
-      throw new Error("Missing admin passcode");
+      throw new Error("Missing admin credentials");
     }
     const cacheBuster = url.includes("?") ? `&_t=${Date.now()}` : `?_t=${Date.now()}`;
     const finalUrl = options.method && options.method !== "GET" ? url : `${url}${cacheBuster}`;
 
-    return fetch(finalUrl, {
+    const res = await fetch(finalUrl, {
       ...options,
       cache: "no-store",
       headers: {
@@ -109,9 +109,17 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
         "Pragma": "no-cache",
         ...options.headers,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        "X-Admin-Passcode": passcode
+        ...(passcode ? { "X-Admin-Passcode": passcode } : {})
       }
     });
+
+    if (res.status === 401) {
+      localStorage.removeItem("reax_admin_passcode");
+      showToast("Admin passcode expired or invalid. Please log in again.");
+      onClose();
+    }
+
+    return res;
   };
 
   const loadDbStatus = async () => {

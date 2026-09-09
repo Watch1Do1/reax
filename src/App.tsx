@@ -270,7 +270,7 @@ export default function App() {
         let token = "";
         try { token = await getAuthToken(); } catch {}
 
-        if (storedPasscode || token) {
+        if (storedPasscode) {
           // Attempt silent background verification
           try {
             const res = await fetch("/api/admin/verify", {
@@ -288,7 +288,8 @@ export default function App() {
             console.error("Silent verification error:", e);
           }
         }
-        // If passcode is missing or invalid, open auth dialog
+        // If passcode is missing or invalid, open auth dialog to prompt for passcode
+        setIsAdminOpen(false);
         setIsAdminAuthOpen(true);
       } else {
         setIsAdminAuthOpen(false);
