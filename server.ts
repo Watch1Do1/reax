@@ -1267,7 +1267,8 @@ const ADMIN_USER_IDS: string[] = (cleanEnvVar(process.env.ADMIN_USER_IDS) || "")
 export interface AuthResult {
   user: {
     id: string;
-    email?: string;
+    email?: string | null;
+    email_confirmed_at?: string | null;
     is_anonymous: boolean;
   };
   profile: UserProfile;
@@ -1298,9 +1299,12 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
         !userData.user.email
       );
 
+      const emailConfirmedAt = userData.user.email_confirmed_at || (userData.user as any).confirmed_at || null;
+
       const user = {
         id: userData.user.id,
         email: userData.user.email || null,
+        email_confirmed_at: emailConfirmedAt,
         is_anonymous: isAnonymous
       };
 
@@ -1550,7 +1554,8 @@ app.get("/api/me", async (req, res) => {
   const { user, profile } = authRes.auth;
   const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
   const isAnonymous = Boolean(user.is_anonymous || !user.email);
-  return res.json({ profile, isAdmin, isAnonymous, email: user.email || null });
+  const emailConfirmed = Boolean(user.email_confirmed_at);
+  return res.json({ profile, isAdmin, isAnonymous, email: user.email || null, emailConfirmed });
 });
 
 // API: Upsert / Update Current Authenticated User Profile (Username)

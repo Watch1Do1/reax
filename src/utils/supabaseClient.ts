@@ -107,16 +107,21 @@ export async function signUpWithEmail({
     const supabase = await getSupabaseClient();
     if (!supabase) {
       // Local development fallback
-      localStorage.setItem("reax_is_logged_in", "true");
-      return { needsEmailConfirm: false, user: null, session: null };
+      localStorage.removeItem("reax_is_logged_in");
+      return { needsEmailConfirm: true, user: null, session: null };
     }
 
     const { data: sessionData } = await supabase.auth.getSession();
     const currentSession = sessionData?.session;
-    const isAnon = currentSession?.user && (
-      Boolean((currentSession.user as any).is_anonymous) ||
-      currentSession.user.app_metadata?.provider === "anonymous"
+    const isAnon = Boolean(
+      currentSession?.user && (
+        (currentSession.user as any).is_anonymous ||
+        currentSession.user.app_metadata?.provider === "anonymous" ||
+        !currentSession.user.email
+      )
     );
+
+    let createdUser: User | null = null;
 
     if (isAnon) {
       // Link anonymous user to permanent email + password credentials
@@ -133,22 +138,7 @@ export async function signUpWithEmail({
         return { needsEmailConfirm: false, error: error.message };
       }
 
-      const { data: sessionData } = await supabase.auth.getSession();
-      const hasActiveSession = Boolean(sessionData?.session);
-      const sessionUser = sessionData?.session?.user;
-      const isAnon = sessionUser && (
-        Boolean((sessionUser as any).is_anonymous) ||
-        sessionUser.app_metadata?.provider === "anonymous" ||
-        !sessionUser.email
-      );
-      if (hasActiveSession && !isAnon && sessionUser?.email) {
-        localStorage.setItem("reax_is_logged_in", "true");
-      }
-      return {
-        needsEmailConfirm: !hasActiveSession,
-        user: data.user,
-        session: sessionData?.session || null
-      };
+      createdUser = data.user;
     } else {
       const origin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "";
       const { data, error } = await supabase.auth.signUp({
@@ -167,14 +157,45 @@ export async function signUpWithEmail({
         return { needsEmailConfirm: false, error: error.message };
       }
 
-      const needsConfirm = !data.session;
-      if (data.session) {
-        localStorage.setItem("reax_is_logged_in", "true");
-      }
+      createdUser = data.user;
+    }
+
+    const { data: refreshedSessionData } = await supabase.auth.getSession();
+    const session = refreshedSessionData?.session || null;
+    const user = session?.user || createdUser;
+
+    // Condition:
+    // After updateUser or signUp, set reax_is_logged_in ONLY if
+    // session.user.email exists AND user.email_confirmed_at is set AND is_anonymous is false.
+    // Otherwise return needsEmailConfirm: true. Do not treat anon session as logged in.
+    const sessionEmail = session?.user?.email;
+    const emailConfirmedAt = user?.email_confirmed_at || (user as any)?.confirmed_at;
+    const isAnonymous = Boolean(
+      !user ||
+      (user as any).is_anonymous ||
+      user.app_metadata?.provider === "anonymous" ||
+      !sessionEmail
+    );
+
+    const isConfirmedAndLoggedIn = Boolean(
+      sessionEmail &&
+      emailConfirmedAt &&
+      !isAnonymous
+    );
+
+    if (isConfirmedAndLoggedIn) {
+      localStorage.setItem("reax_is_logged_in", "true");
       return {
-        needsEmailConfirm: needsConfirm,
-        user: data.user,
-        session: data.session
+        needsEmailConfirm: false,
+        user,
+        session
+      };
+    } else {
+      localStorage.removeItem("reax_is_logged_in");
+      return {
+        needsEmailConfirm: true,
+        user,
+        session
       };
     }
   } catch (err: any) {
@@ -222,20 +243,70 @@ export async function signInWithEmail({
       return { success: false, error: error.message };
     }
 
-    if (typeof window !== "undefined") {
-      const isAnon = Boolean((data?.user as any)?.is_anonymous || !data?.user?.email || data?.user?.app_metadata?.provider === "anonymous");
-      if (data?.session && data?.user?.email && !isAnon) {
+    const checkUser = data.user;
+    const sessionUser = data.session?.user;
+    const sessionEmail = sessionUser?.email;
+    const emailConfirmedAt = checkUser?.email_confirmed_at || (checkUser as any)?.confirmed_at;
+    const isAnon = Boolean(
+      !checkUser ||
+      (checkUser as any).is_anonymous ||
+      checkUser.app_metadata?.provider === "anonymous" ||
+      !sessionEmail
+    );
+
+    const isConfirmedAndLoggedIn = Boolean(
+      sessionEmail &&
+      emailConfirmedAt &&
+      !isAnon
+    );
+
+    if (isConfirmedAndLoggedIn) {
+      if (typeof window !== "undefined") {
         localStorage.setItem("reax_is_logged_in", "true");
       }
+      return {
+        success: true,
+        user: data.user,
+        session: data.session
+      };
+    } else {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("reax_is_logged_in");
+      }
+      return {
+        success: false,
+        error: "Please check your email to confirm your account before signing in."
+      };
     }
-
-    return {
-      success: true,
-      user: data.user,
-      session: data.session
-    };
   } catch (err: any) {
     return { success: false, error: err?.message || "Failed to sign in." };
+  }
+}
+
+/**
+ * Sends a password reset email using Supabase resetPasswordForEmail.
+ * Redirects back to the current origin so the user can set a new password.
+ */
+export async function resetPasswordForEmail(email: string): Promise<{ success: boolean; error?: string }> {
+  const cleanEmail = email.trim();
+  if (!cleanEmail || !cleanEmail.includes("@")) {
+    return { success: false, error: "Please enter a valid email address." };
+  }
+  try {
+    const supabase = await getSupabaseClient();
+    if (!supabase) {
+      return { success: true };
+    }
+    const origin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "";
+    const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+      redirectTo: origin || undefined
+    });
+    if (error) {
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || "Failed to send reset email. Please try again." };
   }
 }
 
@@ -267,14 +338,17 @@ export async function updateUserPassword(newPassword: string): Promise<{ success
  */
 export async function handleUrlAuthTokens(): Promise<{
   success: boolean;
+  isRecovery?: boolean;
   session?: Session | null;
   user?: User | null;
   username?: string;
 }> {
-  if (typeof window === "undefined") return { success: false };
+  if (typeof window === "undefined") return { success: false, isRecovery: false };
 
   const hash = window.location.hash || "";
   const search = window.location.search || "";
+  const isRecovery = hash.includes("type=recovery") || search.includes("type=recovery");
+
   const hasTokens =
     hash.includes("access_token") ||
     hash.includes("refresh_token") ||
@@ -283,13 +357,14 @@ export async function handleUrlAuthTokens(): Promise<{
     hash.includes("type=recovery") ||
     search.includes("type=signup") ||
     search.includes("type=magiclink") ||
+    search.includes("type=recovery") ||
     search.includes("code=");
 
-  if (!hasTokens) return { success: false };
+  if (!hasTokens) return { success: false, isRecovery: false };
 
   try {
     const supabase = await getSupabaseClient();
-    if (!supabase) return { success: false };
+    if (!supabase) return { success: false, isRecovery };
 
     let session: Session | null = null;
     let user: User | null = null;
@@ -319,11 +394,21 @@ export async function handleUrlAuthTokens(): Promise<{
     }
 
     if (user) {
-      // Strip hash & auth search params from browser URL
+      // Strip hash & auth search params from browser URL so they aren't repeated
       window.history.replaceState({}, document.title, window.location.pathname);
+
+      if (isRecovery) {
+        return { success: true, isRecovery: true, session, user };
+      }
+
+      // Check confirmed email status:
+      // reax_is_logged_in true ONLY if session user has email AND email_confirmed_at is set AND is_anonymous is false
       const isAnon = Boolean((user as any)?.is_anonymous || !user.email || user.app_metadata?.provider === "anonymous");
-      if (user.email && !isAnon) {
+      const isConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at);
+      if (user.email && !isAnon && isConfirmed) {
         localStorage.setItem("reax_is_logged_in", "true");
+      } else {
+        localStorage.removeItem("reax_is_logged_in");
       }
 
       let username =
@@ -341,13 +426,13 @@ export async function handleUrlAuthTokens(): Promise<{
         }
       }
 
-      return { success: true, session, user, username };
+      return { success: true, isRecovery: false, session, user, username };
     }
   } catch (err) {
     console.warn("Error processing URL auth tokens:", err);
   }
 
-  return { success: false };
+  return { success: false, isRecovery };
 }
 
 /**
@@ -425,10 +510,12 @@ export async function fetchMyProfile(): Promise<{
   isAdmin: boolean;
   isAnonymous: boolean;
   hasEmail: boolean;
+  emailConfirmed: boolean;
   email?: string | null;
 }> {
   let isAnonymous = true;
   let hasEmail = false;
+  let emailConfirmed = false;
   let email: string | null = null;
 
   try {
@@ -440,6 +527,9 @@ export async function fetchMyProfile(): Promise<{
         (supabaseUser as any).is_anonymous ||
         supabaseUser.app_metadata?.provider === "anonymous" ||
         !supabaseUser.email
+      );
+      emailConfirmed = Boolean(
+        supabaseUser.email_confirmed_at || (supabaseUser as any).confirmed_at
       );
     }
   } catch (err) {
@@ -463,10 +553,14 @@ export async function fetchMyProfile(): Promise<{
         email = data.email || null;
         hasEmail = Boolean(email && email.trim().length > 0);
       }
+      if (data.emailConfirmed !== undefined) {
+        emailConfirmed = Boolean(data.emailConfirmed);
+      }
 
-      // Logged-in means email account: set reax_is_logged_in true ONLY if session user has email and is_anonymous is not true
-      const isEmailAccount = Boolean(hasEmail && !isAnonymous);
-      if (isEmailAccount) {
+      // Logged-in means confirmed email account ONLY:
+      // reax_is_logged_in true ONLY if session user has email AND emailConfirmed is true AND isAnonymous is false
+      const isConfirmedEmailUser = Boolean(hasEmail && !isAnonymous && emailConfirmed);
+      if (isConfirmedEmailUser) {
         localStorage.setItem("reax_is_logged_in", "true");
       } else {
         localStorage.removeItem("reax_is_logged_in");
@@ -477,6 +571,7 @@ export async function fetchMyProfile(): Promise<{
         isAdmin: Boolean(data.isAdmin),
         isAnonymous,
         hasEmail,
+        emailConfirmed,
         email
       };
     }
@@ -490,8 +585,9 @@ export async function fetchMyProfile(): Promise<{
     if (user) {
       const userHasEmail = Boolean(user.email && user.email.trim().length > 0);
       const isAnon = Boolean(!userHasEmail || (user as any).is_anonymous || user.app_metadata?.provider === "anonymous");
-      const isEmailAccount = Boolean(userHasEmail && !isAnon);
-      if (isEmailAccount) {
+      const userEmailConfirmed = Boolean(user.email_confirmed_at || (user as any).confirmed_at);
+      const isConfirmedEmailUser = Boolean(userHasEmail && !isAnon && userEmailConfirmed);
+      if (isConfirmedEmailUser) {
         localStorage.setItem("reax_is_logged_in", "true");
       } else {
         localStorage.removeItem("reax_is_logged_in");
@@ -512,6 +608,7 @@ export async function fetchMyProfile(): Promise<{
           isAdmin: false,
           isAnonymous: isAnon,
           hasEmail: userHasEmail,
+          emailConfirmed: userEmailConfirmed,
           email: user.email || null
         };
       }
@@ -519,7 +616,7 @@ export async function fetchMyProfile(): Promise<{
   } catch {}
 
   localStorage.removeItem("reax_is_logged_in");
-  return { profile: null, isAdmin: false, isAnonymous: true, hasEmail: false, email: null };
+  return { profile: null, isAdmin: false, isAnonymous: true, hasEmail: false, emailConfirmed: false, email: null };
 }
 
 export interface UploadResult {

@@ -12,6 +12,7 @@ import ThreadView from "./components/ThreadView";
 import FastReaxPanel from "./components/FastReaxPanel";
 import SavedReactionsVault from "./components/SavedReactionsVault";
 import OnboardingModal from "./components/OnboardingModal";
+import ResetPasswordModal from "./components/ResetPasswordModal";
 import ProfilePanel from "./components/ProfilePanel";
 import AdminPanel from "./components/AdminPanel";
 import { Clip, SavedReaction } from "./types";
@@ -62,6 +63,7 @@ export default function App() {
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeTriggerReason, setUpgradeTriggerReason] = useState<"save_reaction" | "post_limit" | "edit_username" | "nav_click" | null>(null);
+  const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
 
   // Age constraint state
   const [ageConfirmed, setAgeConfirmed] = useState(() => {
@@ -73,22 +75,27 @@ export default function App() {
     let isMounted = true;
 
     async function initAuth() {
-      // 1. Process URL tokens if user arrived via email confirmation link
+      // 1. Process URL tokens if user arrived via email confirmation or recovery link
       try {
         const urlAuth = await handleUrlAuthTokens();
-        if (urlAuth.success && urlAuth.user && urlAuth.user.email && !(urlAuth.user as any).is_anonymous) {
-          setIsLoggedIn(true);
-          localStorage.setItem("reax_is_logged_in", "true");
-          localStorage.setItem("reax_age_confirmed", "true");
-          setAgeConfirmed(true);
+        if (urlAuth.isRecovery) {
+          setIsResetPasswordModalOpen(true);
+        } else if (urlAuth.success && urlAuth.user && urlAuth.user.email && !(urlAuth.user as any).is_anonymous) {
+          const emailConfirmed = Boolean(urlAuth.user.email_confirmed_at || (urlAuth.user as any).confirmed_at);
+          if (emailConfirmed) {
+            setIsLoggedIn(true);
+            localStorage.setItem("reax_is_logged_in", "true");
+            localStorage.setItem("reax_age_confirmed", "true");
+            setAgeConfirmed(true);
 
-          if (urlAuth.username && isMounted && !urlAuth.username.startsWith("user_")) {
-            setUsername(urlAuth.username);
-            setTempUsername(urlAuth.username);
-            localStorage.setItem("clips_username", urlAuth.username);
+            if (urlAuth.username && isMounted && !urlAuth.username.startsWith("user_")) {
+              setUsername(urlAuth.username);
+              setTempUsername(urlAuth.username);
+              localStorage.setItem("clips_username", urlAuth.username);
+            }
+
+            window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎉 Successfully confirmed & signed in!" } }));
           }
-
-          window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎉 Successfully confirmed & signed in!" } }));
         }
       } catch (err) {
         console.warn("Error handling auth URL tokens on mount:", err);
@@ -96,10 +103,10 @@ export default function App() {
 
       // 2. Fetch profile from backend
       try {
-        const { profile, isAnonymous, hasEmail } = await fetchMyProfile();
-        const isEmailAccount = Boolean(hasEmail && !isAnonymous);
+        const { profile, isAnonymous, hasEmail, emailConfirmed } = await fetchMyProfile();
+        const isConfirmedEmailUser = Boolean(hasEmail && !isAnonymous && emailConfirmed);
 
-        if (isEmailAccount && profile && isMounted) {
+        if (isConfirmedEmailUser && profile && isMounted) {
           setIsLoggedIn(true);
           localStorage.setItem("reax_is_logged_in", "true");
           const uname = profile.username || "";
@@ -113,7 +120,7 @@ export default function App() {
             localStorage.removeItem("clips_username");
           }
         } else if (isMounted) {
-          // Anonymous session: header stays Sign in, do not set user_xxxxx as a logged-in name
+          // Anonymous session or unconfirmed email: not logged in
           setIsLoggedIn(false);
           localStorage.removeItem("reax_is_logged_in");
           localStorage.removeItem("clips_username");
@@ -1369,6 +1376,24 @@ export default function App() {
         onLoginSuccess={handleLoginSuccess}
         guestUsername={username}
         triggerReason={upgradeTriggerReason}
+      />
+
+      {/* RESET PASSWORD MODAL (RECOVERY FLOW) */}
+      <ResetPasswordModal
+        isOpen={isResetPasswordModalOpen}
+        onClose={() => setIsResetPasswordModalOpen(false)}
+        onSuccess={async () => {
+          setIsResetPasswordModalOpen(false);
+          const { profile } = await fetchMyProfile();
+          setIsLoggedIn(true);
+          localStorage.setItem("reax_is_logged_in", "true");
+          if (profile?.username && !profile.username.startsWith("user_")) {
+            setUsername(profile.username);
+            setTempUsername(profile.username);
+            localStorage.setItem("clips_username", profile.username);
+          }
+          window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🔑 Password updated successfully!" } }));
+        }}
       />
 
       {/* USER PROFILE PANEL */}
