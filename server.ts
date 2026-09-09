@@ -1083,19 +1083,49 @@ class SupabaseStore implements Store {
     try {
       const { data, error } = await this.client
         .from("user_profiles")
-        .select("*");
+        .select("*")
+        .order("created_at", { ascending: false });
 
       if (!error && data && Array.isArray(data)) {
-        return data.map((u: any) => ({
-          id: u.id,
-          username: u.username,
-          email: u.email,
-          createdAt: u.created_at,
-          lastActive: u.last_active,
-          reactionCount: u.reaction_count || 0,
-          suspended: u.suspended || false,
-          strikes: u.strikes || 0
-        }));
+        // Query clips count to ensure reactionCount accurately reflects live reactions/clips
+        const clipCounts: Record<string, number> = {};
+        try {
+          const { data: clips } = await this.client
+            .from("clips")
+            .select("author_id, author_name")
+            .eq("deleted", false);
+          if (clips && Array.isArray(clips)) {
+            for (const c of clips) {
+              if (c.author_id) {
+                clipCounts[c.author_id] = (clipCounts[c.author_id] || 0) + 1;
+              }
+              if (c.author_name) {
+                const lower = c.author_name.toLowerCase();
+                clipCounts[lower] = (clipCounts[lower] || 0) + 1;
+              }
+            }
+          }
+        } catch {}
+
+        return data.map((u: any) => {
+          const id = u.user_id || u.id;
+          const uname = u.username || (u.email ? u.email.split("@")[0] : `user_${(id || "").slice(0, 8)}`);
+          const clipsTotal = (id && clipCounts[id]) || (uname && clipCounts[uname.toLowerCase()]) || 0;
+          const reactionCount = typeof u.reaction_count === "number" && u.reaction_count > clipsTotal
+            ? u.reaction_count
+            : clipsTotal;
+
+          return {
+            id,
+            username: uname,
+            email: u.email || undefined,
+            createdAt: u.created_at || new Date().toISOString(),
+            lastActive: u.last_active || u.created_at || new Date().toISOString(),
+            reactionCount,
+            suspended: Boolean(u.suspended),
+            strikes: typeof u.strikes === "number" ? u.strikes : 0
+          };
+        });
       }
     } catch (err) {
       console.warn("getUsers query failed or table not present:", err);
@@ -1544,6 +1574,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- User Profiles Table
 CREATE TABLE IF NOT EXISTS public.user_profiles (
   id UUID PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   username TEXT UNIQUE NOT NULL,
   email TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -1552,6 +1583,73 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
   suspended BOOLEAN DEFAULT false,
   strikes INTEGER DEFAULT 0
 );
+
+-- Ensure all columns exist on user_profiles
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'user_id') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'reaction_count') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN reaction_count INTEGER DEFAULT 0;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'suspended') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN suspended BOOLEAN DEFAULT false;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'strikes') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN strikes INTEGER DEFAULT 0;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'last_active') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN last_active TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+  END IF;
+END $$;
+
+-- Automatic Profile Creation Trigger on auth.users
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+DECLARE
+  base_username TEXT;
+  extracted_username TEXT;
+  suffix INTEGER := 0;
+BEGIN
+  base_username := COALESCE(
+    NULLIF(TRIM(NEW.raw_user_meta_data->>'username'), ''),
+    NULLIF(TRIM(NEW.raw_user_meta_data->>'user_name'), ''),
+    NULLIF(TRIM(NEW.raw_user_meta_data->>'full_name'), ''),
+    NULLIF(TRIM(NEW.raw_user_meta_data->>'name'), ''),
+    NULLIF(TRIM(split_part(NEW.email, '@', 1)), ''),
+    'user_' || substr(NEW.id::text, 1, 8)
+  );
+  base_username := regexp_replace(base_username, '[^a-zA-Z0-9_]', '_', 'g');
+  IF base_username IS NULL OR base_username = '' THEN
+    base_username := 'user_' || substr(NEW.id::text, 1, 8);
+  END IF;
+  extracted_username := base_username;
+  WHILE EXISTS (SELECT 1 FROM public.user_profiles WHERE username = extracted_username AND id != NEW.id) LOOP
+    suffix := suffix + 1;
+    extracted_username := base_username || '_' || suffix::text;
+  END LOOP;
+
+  INSERT INTO public.user_profiles (
+    id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
+  ) VALUES (
+    NEW.id, NEW.id, NEW.email, extracted_username, false, 0, 0,
+    COALESCE(NEW.created_at, NOW()), COALESCE(NEW.created_at, NOW())
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    user_id = EXCLUDED.user_id,
+    username = COALESCE(public.user_profiles.username, EXCLUDED.username);
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_new_user();
 
 -- Clips Table
 CREATE TABLE IF NOT EXISTS public.clips (
@@ -1622,6 +1720,50 @@ CREATE POLICY "Allow public update clips" ON public.clips FOR UPDATE USING (true
 CREATE POLICY "Allow public likes" ON public.likes FOR ALL USING (true);
 CREATE POLICY "Allow public laughs" ON public.laughs FOR ALL USING (true);
 CREATE POLICY "Allow public reports" ON public.reports FOR ALL USING (true);
+
+-- One-Time Backfill for existing auth.users:
+DO $$
+DECLARE
+  r RECORD;
+  base_uname TEXT;
+  final_uname TEXT;
+  suffix INTEGER;
+BEGIN
+  FOR r IN 
+    SELECT u.id, u.email, u.created_at, u.raw_user_meta_data
+    FROM auth.users u
+    LEFT JOIN public.user_profiles p ON (p.id = u.id OR p.user_id = u.id)
+    WHERE p.id IS NULL
+  LOOP
+    base_uname := COALESCE(
+      NULLIF(TRIM(r.raw_user_meta_data->>'username'), ''),
+      NULLIF(TRIM(r.raw_user_meta_data->>'user_name'), ''),
+      NULLIF(TRIM(r.raw_user_meta_data->>'full_name'), ''),
+      NULLIF(TRIM(r.raw_user_meta_data->>'name'), ''),
+      NULLIF(TRIM(split_part(r.email, '@', 1)), ''),
+      'user_' || substr(r.id::text, 1, 8)
+    );
+    base_uname := regexp_replace(base_uname, '[^a-zA-Z0-9_]', '_', 'g');
+    IF base_uname IS NULL OR base_uname = '' THEN
+      base_uname := 'user_' || substr(r.id::text, 1, 8);
+    END IF;
+    final_uname := base_uname;
+    suffix := 0;
+    WHILE EXISTS (SELECT 1 FROM public.user_profiles WHERE username = final_uname AND id != r.id) LOOP
+      suffix := suffix + 1;
+      final_uname := base_uname || '_' || suffix::text;
+    END LOOP;
+
+    INSERT INTO public.user_profiles (
+      id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
+    )
+    VALUES (
+      r.id, r.id, r.email, final_uname, false, 0, 0,
+      COALESCE(r.created_at, NOW()), COALESCE(r.created_at, NOW())
+    )
+    ON CONFLICT (id) DO NOTHING;
+  END LOOP;
+END $$;
 `
   });
 });
@@ -2549,7 +2691,15 @@ app.post("/api/admin/reports/:id/dismiss", async (req, res) => {
 app.get("/api/admin/users", async (req, res) => {
   try {
     const users = await store!.getUsers();
-    res.json(users);
+    const formatted = users.map(u => ({
+      username: u.username,
+      createdAt: u.createdAt,
+      lastActive: u.lastActive,
+      reactionCount: typeof u.reactionCount === "number" ? u.reactionCount : 0,
+      suspended: Boolean(u.suspended),
+      strikes: typeof u.strikes === "number" ? u.strikes : 0
+    }));
+    res.json(formatted);
   } catch (err: any) {
     console.error("Error in /api/admin/users:", err);
     res.status(500).json({ error: "Failed to fetch users" });
