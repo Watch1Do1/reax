@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Shield, Users, Settings, Trash2, 
   RefreshCw, Eye, UserX, AlertTriangle, 
-  Tv, CheckCircle, Database, ShieldAlert, Copy
+  Tv, CheckCircle, Database, ShieldAlert, Copy,
+  Mail, Search, Check
 } from "lucide-react";
 import { Clip } from "../types";
 import { getAuthToken } from "../utils/supabaseClient";
@@ -52,12 +53,15 @@ type AdminReport = {
 };
 
 type AdminUser = {
+  id?: string;
   username: string;
+  email?: string | null;
   createdAt: string;
   lastActive: string;
   reactionCount: number;
   suspended: boolean;
   strikes: number;
+  isConfirmed?: boolean;
 };
 
 export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: AdminPanelProps) {
@@ -67,6 +71,8 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   const [clipsList, setClipsList] = useState<Clip[]>([]);
   const [reportsList, setReportsList] = useState<AdminReport[]>([]);
   const [usersList, setUsersList] = useState<AdminUser[]>([]);
+  const [userCategoryFilter, setUserCategoryFilter] = useState<"confirmed" | "all" | "guests">("confirmed");
+  const [userSearchQuery, setUserSearchQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedUserFilter, setSelectedUserFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "live" | "deleted" | "reported">("all");
@@ -403,12 +409,41 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     });
   }, [clipsList, searchQuery, selectedUserFilter, statusFilter, sortBy]);
 
+  // User Manager Counts and Filtered List
+  const confirmedUsersCount = useMemo(() => {
+    return usersList.filter(u => Boolean(u.isConfirmed || (u.email && u.email.includes("@")))).length;
+  }, [usersList]);
+
+  const guestUsersCount = useMemo(() => {
+    return Math.max(0, usersList.length - confirmedUsersCount);
+  }, [usersList, confirmedUsersCount]);
+
+  const filteredUsersList = useMemo(() => {
+    return usersList.filter(u => {
+      const isConf = Boolean(u.isConfirmed || (u.email && u.email.includes("@")));
+      if (userCategoryFilter === "confirmed" && !isConf) return false;
+      if (userCategoryFilter === "guests" && isConf) return false;
+      if (userSearchQuery.trim()) {
+        const q = userSearchQuery.toLowerCase();
+        const matchesName = (u.username || "").toLowerCase().includes(q);
+        const matchesEmail = (u.email || "").toLowerCase().includes(q);
+        if (!matchesName && !matchesEmail) return false;
+      }
+      return true;
+    });
+  }, [usersList, userCategoryFilter, userSearchQuery]);
+
   // Dynamic Navigation Tabs
   const navTabs: Array<{ id: AdminTab; label: string; desc: string; badge?: number }> = [
     { id: "reports", label: "🚩 Reports Queue", desc: "Open reports queue", badge: reportsList.length },
     { id: "content", label: "📝 Content Browser", desc: "Clips & moderation" },
     { id: "dashboard", label: "📊 Dashboard", desc: "Real count overview" },
-    ...(usersList.length > 0 ? [{ id: "users" as AdminTab, label: "👥 Users Manager", desc: "Auth-backed profiles" }] : []),
+    ...(usersList.length > 0 ? [{ 
+      id: "users" as AdminTab, 
+      label: "👥 Users Manager", 
+      desc: "Auth-backed profiles", 
+      badge: confirmedUsersCount > 0 ? confirmedUsersCount : usersList.length 
+    }] : []),
     { id: "settings", label: "⚙️ Settings", desc: "Database diagnostics" },
   ];
 
@@ -1006,14 +1041,94 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
 
               {/* TAB 4: USERS MANAGER (SHOWN ONLY IF REAL USER PROFILES EXIST) */}
               {activeTab === "users" && usersList.length > 0 && (
-                <div className="space-y-5">
+                <div className="space-y-4">
+                  
+                  {/* Category Pills & Search Toolbar */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-950 border border-slate-900 p-3 rounded-2xl">
+                    {/* Category Filter Pills */}
+                    <div className="flex items-center gap-1.5 bg-[#0a0c10] p-1 rounded-xl border border-slate-900 overflow-x-auto">
+                      <button
+                        type="button"
+                        onClick={() => setUserCategoryFilter("confirmed")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                          userCategoryFilter === "confirmed"
+                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-sm"
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-900 border border-transparent"
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Confirmed Accounts</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                          userCategoryFilter === "confirmed" ? "bg-emerald-500/30 text-emerald-200" : "bg-slate-800 text-slate-400"
+                        }`}>
+                          {confirmedUsersCount}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setUserCategoryFilter("all")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                          userCategoryFilter === "all"
+                            ? "bg-slate-800 text-white border border-slate-700 shadow-sm"
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-900 border border-transparent"
+                        }`}
+                      >
+                        <span>All Accounts</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                          userCategoryFilter === "all" ? "bg-slate-700 text-slate-200" : "bg-slate-800 text-slate-400"
+                        }`}>
+                          {usersList.length}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setUserCategoryFilter("guests")}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                          userCategoryFilter === "guests"
+                            ? "bg-slate-800 text-slate-300 border border-slate-700 shadow-sm"
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-900 border border-transparent"
+                        }`}
+                      >
+                        <span>Guest Sessions</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                          userCategoryFilter === "guests" ? "bg-slate-700 text-slate-200" : "bg-slate-800 text-slate-400"
+                        }`}>
+                          {guestUsersCount}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Search Bar */}
+                    <div className="relative flex-1 sm:max-w-xs">
+                      <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={userSearchQuery}
+                        onChange={(e) => setUserSearchQuery(e.target.value)}
+                        placeholder="Search by username or email..."
+                        className="w-full pl-8 pr-8 py-1.5 bg-[#0a0c10] border border-slate-900 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-slate-700 font-mono"
+                      />
+                      {userSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setUserSearchQuery("")}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   
                   <div className="bg-slate-950 border border-slate-900 rounded-3xl overflow-hidden shadow-lg">
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs font-mono">
                         <thead className="bg-[#0a0c10] text-slate-400 border-b border-slate-900 font-bold">
                           <tr>
-                            <th className="p-4 uppercase text-[9px] tracking-wider">Username</th>
+                            <th className="p-4 uppercase text-[9px] tracking-wider">Account / Username</th>
+                            <th className="p-4 uppercase text-[9px] tracking-wider">Email Address</th>
                             <th className="p-4 uppercase text-[9px] tracking-wider">Joined</th>
                             <th className="p-4 uppercase text-[9px] tracking-wider text-center">Reactions</th>
                             <th className="p-4 uppercase text-[9px] tracking-wider">Last Active</th>
@@ -1022,90 +1137,141 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-900/60 text-slate-300">
-                          {usersList.map((user) => (
-                            <tr key={user.username} className={`hover:bg-slate-900/30 transition-colors ${user.suspended ? "bg-red-950/5" : ""}`}>
-                              
-                              {/* Username */}
-                              <td className="p-4 font-bold text-slate-200">
-                                <div className="flex items-center gap-1.5">
-                                  <span className={`w-2 h-2 rounded-full ${user.suspended ? "bg-red-500" : "bg-emerald-400"}`} />
-                                  <span>@{user.username}</span>
-                                </div>
-                              </td>
-
-                              {/* Created */}
-                              <td className="p-4 text-[10px] text-slate-500">
-                                {new Date(user.createdAt).toLocaleDateString()}
-                              </td>
-
-                              {/* Count */}
-                              <td className="p-4 text-center font-bold">
-                                {user.reactionCount || 0}
-                              </td>
-
-                              {/* Last Active */}
-                              <td className="p-4 text-[10px] text-slate-400">
-                                {new Date(user.lastActive).toLocaleDateString()}
-                              </td>
-
-                              {/* Real Strikes */}
-                              <td className="p-4">
-                                <div className="flex items-center gap-2">
-                                  {user.suspended ? (
-                                    <span className="px-2 py-0.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded text-[9px] uppercase font-black">
-                                      Suspended
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded text-[9px] uppercase font-black">
-                                      Active
-                                    </span>
-                                  )}
-                                  <span className="text-[10px] text-slate-400 font-bold">
-                                    ⚠️ {user.strikes || 0} strike{user.strikes !== 1 ? "s" : ""}
-                                  </span>
-                                </div>
-                              </td>
-
-                              {/* Actions */}
-                              <td className="p-4 text-right space-x-1.5 whitespace-nowrap">
-                                <button 
-                                  onClick={() => {
-                                    setSelectedUserFilter(user.username);
-                                    setActiveTab("content");
-                                  }}
-                                  className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer"
-                                  title="View user posts"
-                                >
-                                  Clips
-                                </button>
-
-                                <button 
-                                  onClick={() => handleIssueStrike(user.username)}
-                                  className="px-2 py-1 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/20 text-yellow-400 rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer"
-                                  title="Issue formal warning strike"
-                                >
-                                  +1 Strike
-                                </button>
-
-                                {user.suspended ? (
-                                  <button 
-                                    onClick={() => handleUnsuspendUser(user.username)}
-                                    className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[9px] rounded-lg transition-all uppercase cursor-pointer"
+                          {filteredUsersList.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="p-8 text-center text-slate-500">
+                                <p className="text-sm font-bold text-slate-400 mb-1">No users found</p>
+                                <p className="text-xs">
+                                  {userCategoryFilter === "confirmed"
+                                    ? "No confirmed email accounts match your criteria."
+                                    : "No accounts found matching your query."}
+                                </p>
+                                {(userCategoryFilter !== "all" || userSearchQuery) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setUserCategoryFilter("all");
+                                      setUserSearchQuery("");
+                                    }}
+                                    className="mt-3 px-3 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs rounded-lg font-mono cursor-pointer"
                                   >
-                                    Unsuspend
-                                  </button>
-                                ) : (
-                                  <button 
-                                    onClick={() => handleSuspendUser(user.username)}
-                                    className="px-2 py-1 bg-red-950/40 hover:bg-red-900 text-red-400 hover:text-white border border-red-900/30 rounded-lg text-[9px] font-bold transition-all uppercase cursor-pointer"
-                                  >
-                                    Suspend
+                                    Reset Filters
                                   </button>
                                 )}
                               </td>
-
                             </tr>
-                          ))}
+                          ) : (
+                            filteredUsersList.map((user) => {
+                              const isConfirmed = Boolean(user.isConfirmed || (user.email && user.email.includes("@")));
+                              return (
+                                <tr key={user.username} className={`hover:bg-slate-900/30 transition-colors ${user.suspended ? "bg-red-950/5" : ""}`}>
+                                  
+                                  {/* Username & Verification Badge */}
+                                  <td className="p-4 font-bold text-slate-200">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`w-2 h-2 rounded-full shrink-0 ${user.suspended ? "bg-red-500" : "bg-emerald-400"}`} />
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-mono text-xs">@{user.username}</span>
+                                        {isConfirmed ? (
+                                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-bold uppercase tracking-wide">
+                                            <Check className="w-2.5 h-2.5" /> Confirmed
+                                          </span>
+                                        ) : (
+                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-800/60 border border-slate-800 text-slate-500 text-[9px] uppercase font-mono">
+                                            Guest
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </td>
+
+                                  {/* Email */}
+                                  <td className="p-4">
+                                    {user.email ? (
+                                      <div className="flex items-center gap-1.5 text-slate-300 font-mono text-[11px]">
+                                        <Mail className="w-3 h-3 text-emerald-400 shrink-0" />
+                                        <span className="select-all">{user.email}</span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-600 text-[10px] italic">None (Guest Session)</span>
+                                    )}
+                                  </td>
+
+                                  {/* Created */}
+                                  <td className="p-4 text-[10px] text-slate-500">
+                                    {new Date(user.createdAt).toLocaleDateString()}
+                                  </td>
+
+                                  {/* Count */}
+                                  <td className="p-4 text-center font-bold">
+                                    {user.reactionCount || 0}
+                                  </td>
+
+                                  {/* Last Active */}
+                                  <td className="p-4 text-[10px] text-slate-400">
+                                    {new Date(user.lastActive).toLocaleDateString()}
+                                  </td>
+
+                                  {/* Real Strikes */}
+                                  <td className="p-4">
+                                    <div className="flex items-center gap-2">
+                                      {user.suspended ? (
+                                        <span className="px-2 py-0.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded text-[9px] uppercase font-black">
+                                          Suspended
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded text-[9px] uppercase font-black">
+                                          Active
+                                        </span>
+                                      )}
+                                      <span className="text-[10px] text-slate-400 font-bold">
+                                        ⚠️ {user.strikes || 0} strike{user.strikes !== 1 ? "s" : ""}
+                                      </span>
+                                    </div>
+                                  </td>
+
+                                  {/* Actions */}
+                                  <td className="p-4 text-right space-x-1.5 whitespace-nowrap">
+                                    <button 
+                                      onClick={() => {
+                                        setSelectedUserFilter(user.username);
+                                        setActiveTab("content");
+                                      }}
+                                      className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer"
+                                      title="View user posts"
+                                    >
+                                      Clips
+                                    </button>
+
+                                    <button 
+                                      onClick={() => handleIssueStrike(user.username)}
+                                      className="px-2 py-1 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/20 text-yellow-400 rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer"
+                                      title="Issue formal warning strike"
+                                    >
+                                      +1 Strike
+                                    </button>
+
+                                    {user.suspended ? (
+                                      <button 
+                                        onClick={() => handleUnsuspendUser(user.username)}
+                                        className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[9px] rounded-lg transition-all uppercase cursor-pointer"
+                                      >
+                                        Unsuspend
+                                      </button>
+                                    ) : (
+                                      <button 
+                                        onClick={() => handleSuspendUser(user.username)}
+                                        className="px-2 py-1 bg-red-950/40 hover:bg-red-900 text-red-400 hover:text-white border border-red-900/30 rounded-lg text-[9px] font-bold transition-all uppercase cursor-pointer"
+                                      >
+                                        Suspend
+                                      </button>
+                                    )}
+                                  </td>
+
+                                </tr>
+                              );
+                            })
+                          )}
                         </tbody>
                       </table>
                     </div>

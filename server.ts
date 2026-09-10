@@ -2699,12 +2699,15 @@ app.get("/api/admin/users", async (req, res) => {
   try {
     const users = await store!.getUsers();
     const formatted = users.map(u => ({
+      id: u.id,
       username: u.username,
+      email: u.email || null,
       createdAt: u.createdAt,
       lastActive: u.lastActive,
       reactionCount: typeof u.reactionCount === "number" ? u.reactionCount : 0,
       suspended: Boolean(u.suspended),
-      strikes: typeof u.strikes === "number" ? u.strikes : 0
+      strikes: typeof u.strikes === "number" ? u.strikes : 0,
+      isConfirmed: Boolean(u.email)
     }));
     res.json(formatted);
   } catch (err: any) {
@@ -2820,7 +2823,7 @@ To respond directly to the sender, email: ${contactMsg.email}`;
   // 2. SMTP (via nodemailer if installed)
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
-      const nodemailerModule = await import("nodemailer").catch(() => null);
+      const nodemailerModule = await (Function('return import("nodemailer")')() as Promise<any>).catch(() => null);
       if (!nodemailerModule) {
         return { sent: false, provider: "smtp", error: "SMTP configured but nodemailer is not available in environment." };
       }
