@@ -243,14 +243,14 @@ export default function OnboardingModal({
             <div>
               <h2 className="text-base font-bold text-white font-sans">
                 {triggerReason === "post_limit"
-                  ? "Guest Limit Reached (3 Clips)"
+                  ? "Keep posting on Reax"
                   : tab === "signin"
                   ? "Sign In to Reax"
                   : "Create Your Reax Account"}
               </h2>
               <p className="text-xs text-slate-400 font-mono">
                 {triggerReason === "post_limit"
-                  ? "Sign up to keep your 3 clips and unlock unlimited reactions!"
+                  ? "You’ve used your 3 guest loops. Create an account to keep reacting. Same phone, same posts."
                   : triggerReason === "save_reaction"
                   ? "Sign in to save custom reactions to your vault"
                   : triggerReason === "edit_username"
@@ -302,7 +302,7 @@ export default function OnboardingModal({
               }`}
             >
               <UserPlus className="w-3.5 h-3.5" />
-              Sign Up
+              {triggerReason === "post_limit" ? "Create Account" : "Sign Up"}
             </button>
           </div>
         )}
@@ -318,10 +318,14 @@ export default function OnboardingModal({
               </div>
               <div className="space-y-2">
                 <h3 className="text-base font-bold text-white font-sans">
-                  Check your email to confirm. Then sign in.
+                  {triggerReason === "post_limit"
+                    ? "Keep these loops. Confirm your email, then sign in."
+                    : "Check your email to confirm. Then sign in."}
                 </h3>
                 <p className="text-xs text-slate-300 font-mono leading-relaxed max-w-xs mx-auto">
-                  We sent a confirmation link to your email. Click the link to verify your account, then sign in with your password.
+                  {triggerReason === "post_limit"
+                    ? "We sent a confirmation link to your email. Confirm your email, then sign in."
+                    : "We sent a confirmation link to your email. Click the link to verify your account, then sign in with your password."}
                 </p>
               </div>
               <div className="pt-2 flex flex-col gap-2">
@@ -481,6 +485,24 @@ export default function OnboardingModal({
                     <LogIn className="w-3.5 h-3.5" />
                     {isSubmitting ? "Signing in..." : "Sign In"}
                   </button>
+
+                  {triggerReason === "post_limit" && (
+                    <div className="text-center pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTab("signup");
+                          setIsForgotPassword(false);
+                          setResetEmailSent(false);
+                          setError(null);
+                          setSuccessMsg(null);
+                        }}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 font-mono hover:underline cursor-pointer"
+                      >
+                        Create account
+                      </button>
+                    </div>
+                  )}
                 </form>
               )}
 
@@ -490,7 +512,7 @@ export default function OnboardingModal({
                   {triggerReason === "post_limit" && (
                     <div className="p-2.5 rounded-xl bg-indigo-950/40 border border-indigo-800/60 text-indigo-300 text-xs font-mono flex items-center gap-2">
                       <CheckCircle className="w-4 h-4 text-indigo-400 shrink-0" />
-                      <span>Your existing 3 clips will be kept and linked to your new username!</span>
+                      <span>You’ve used your 3 guest loops. Create an account to keep reacting. Same phone, same posts.</span>
                     </div>
                   )}
                   <div>
@@ -623,8 +645,30 @@ export default function OnboardingModal({
                     className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
                   >
                     <UserPlus className="w-3.5 h-3.5" />
-                    {isSubmitting ? "Creating account..." : "Sign Up"}
+                    {isSubmitting
+                      ? "Creating account..."
+                      : triggerReason === "post_limit"
+                      ? "Create account"
+                      : "Sign Up"}
                   </button>
+
+                  {triggerReason === "post_limit" && (
+                    <div className="text-center pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTab("signin");
+                          setIsForgotPassword(false);
+                          setResetEmailSent(false);
+                          setError(null);
+                          setSuccessMsg(null);
+                        }}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 font-mono hover:underline cursor-pointer"
+                      >
+                        Sign in if you already have one
+                      </button>
+                    </div>
+                  )}
                 </form>
               )}
 
