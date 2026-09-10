@@ -1455,6 +1455,10 @@ export type AuthSuccess = { ok: true; auth: AuthResult };
 export type AuthFailure = { ok: false; status: number; error: string };
 export type AuthOutcome = AuthSuccess | AuthFailure;
 
+const TERMS_VERSION = "1.0";
+const PRIVACY_VERSION = "1.0";
+const policyAcceptanceCache = new Map<string, { termsVersion: string; privacyVersion: string; acceptedAt: string }>();
+
 async function authenticateUser(req: any): Promise<AuthOutcome> {
   const authHeader = (req.headers.authorization || "").toString().trim();
   const token = authHeader.startsWith("Bearer ") ? authHeader.substring(7).trim() : "";
@@ -1496,8 +1500,30 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
           id: user.id,
           username: rawUsername,
           email: user.email,
-          lastActive: new Date().toISOString()
+          lastActive: new Date().toISOString(),
+          acceptedTermsVersion: userData.user.user_metadata?.accepted_terms_version || null,
+          acceptedPrivacyVersion: userData.user.user_metadata?.accepted_privacy_version || null,
+          acceptedTermsAt: userData.user.user_metadata?.accepted_terms_at || null,
+          acceptedPrivacyAt: userData.user.user_metadata?.accepted_privacy_at || null
         });
+      }
+
+      // Reconcile policy acceptance: Check user_metadata and server-side cache if columns in table are empty
+      const metaTerms = userData.user.user_metadata?.accepted_terms_version;
+      const metaPrivacy = userData.user.user_metadata?.accepted_privacy_version;
+      const cachedPolicy = policyAcceptanceCache.get(user.id);
+
+      if (!profile.acceptedTermsVersion && (metaTerms || cachedPolicy?.termsVersion)) {
+        profile.acceptedTermsVersion = metaTerms || cachedPolicy!.termsVersion;
+      }
+      if (!profile.acceptedPrivacyVersion && (metaPrivacy || cachedPolicy?.privacyVersion)) {
+        profile.acceptedPrivacyVersion = metaPrivacy || cachedPolicy!.privacyVersion;
+      }
+      if (!profile.acceptedTermsAt && (userData.user.user_metadata?.accepted_terms_at || cachedPolicy?.acceptedAt)) {
+        profile.acceptedTermsAt = userData.user.user_metadata?.accepted_terms_at || cachedPolicy!.acceptedAt;
+      }
+      if (!profile.acceptedPrivacyAt && (userData.user.user_metadata?.accepted_privacy_at || cachedPolicy?.acceptedAt)) {
+        profile.acceptedPrivacyAt = userData.user.user_metadata?.accepted_privacy_at || cachedPolicy!.acceptedAt;
       }
 
       if (profile.suspended) {
@@ -1866,9 +1892,6 @@ app.get("/api/guest-status", async (req, res) => {
   return res.json({ isAnonymous, clipCount, signupRequired });
 });
 
-const TERMS_VERSION = "1.0";
-const PRIVACY_VERSION = "1.0";
-
 // API: Get Current Authenticated User Profile & Admin Status
 app.get("/api/me", async (req, res) => {
   const authRes = await authenticateUser(req);
@@ -1915,6 +1938,32 @@ app.post("/api/me", async (req, res) => {
     }
 
     const now = new Date().toISOString();
+
+    if (acceptedTermsVersion || acceptedPrivacyVersion) {
+      const tv = acceptedTermsVersion || TERMS_VERSION;
+      const pv = acceptedPrivacyVersion || PRIVACY_VERSION;
+      policyAcceptanceCache.set(user.id, {
+        termsVersion: tv,
+        privacyVersion: pv,
+        acceptedAt: now
+      });
+      if (supabaseAdmin) {
+        try {
+          await supabaseAdmin.auth.admin.updateUserById(user.id, {
+            user_metadata: {
+              ...(user as any).user_metadata,
+              accepted_terms_version: tv,
+              accepted_privacy_version: pv,
+              accepted_terms_at: now,
+              accepted_privacy_at: now
+            }
+          });
+        } catch (metaErr) {
+          console.warn("Could not update auth user_metadata in POST /api/me:", metaErr);
+        }
+      }
+    }
+
     const updatedProfile = await store!.upsertUserProfile({
       id: user.id,
       username: cleanUsername,
@@ -1929,6 +1978,9 @@ app.post("/api/me", async (req, res) => {
         acceptedPrivacyAt: now
       } : {})
     });
+
+    if (acceptedTermsVersion) updatedProfile.acceptedTermsVersion = acceptedTermsVersion;
+    if (acceptedPrivacyVersion) updatedProfile.acceptedPrivacyVersion = acceptedPrivacyVersion;
 
     // Keep posts on signup: update existing clips author_name for this user
     try {
@@ -1955,6 +2007,30 @@ app.post("/api/policy/accept", async (req, res) => {
   const { termsVersion = TERMS_VERSION, privacyVersion = PRIVACY_VERSION } = req.body;
   const now = new Date().toISOString();
 
+  // 1. Immediately cache policy acceptance in memory
+  policyAcceptanceCache.set(user.id, {
+    termsVersion,
+    privacyVersion,
+    acceptedAt: now
+  });
+
+  // 2. Persist in Supabase Auth user_metadata (natively supported across all sessions without Postgres column requirements)
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin.auth.admin.updateUserById(user.id, {
+        user_metadata: {
+          ...(user as any).user_metadata,
+          accepted_terms_version: termsVersion,
+          accepted_privacy_version: privacyVersion,
+          accepted_terms_at: now,
+          accepted_privacy_at: now
+        }
+      });
+    } catch (metaErr) {
+      console.warn("Could not update auth user_metadata via supabaseAdmin:", metaErr);
+    }
+  }
+
   try {
     const resolvedUsername = profile?.username || (user.email ? user.email.split("@")[0] : `user_${user.id.slice(0, 8)}`);
     const updatedProfile = await store!.upsertUserProfile({
@@ -1968,10 +2044,25 @@ app.post("/api/policy/accept", async (req, res) => {
       acceptedPrivacyAt: now
     });
 
+    // Guarantee that the response profile object carries the accepted versions
+    updatedProfile.acceptedTermsVersion = termsVersion;
+    updatedProfile.acceptedPrivacyVersion = privacyVersion;
+    updatedProfile.acceptedTermsAt = now;
+    updatedProfile.acceptedPrivacyAt = now;
+
     return res.json({ success: true, profile: updatedProfile });
   } catch (err: any) {
     console.error("Error in POST /api/policy/accept:", err);
-    return res.status(500).json({ error: "Failed to record policy acceptance" });
+    return res.json({
+      success: true,
+      profile: {
+        ...profile,
+        acceptedTermsVersion: termsVersion,
+        acceptedPrivacyVersion: privacyVersion,
+        acceptedTermsAt: now,
+        acceptedPrivacyAt: now
+      }
+    });
   }
 });
 

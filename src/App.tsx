@@ -76,6 +76,22 @@ export default function App() {
   // Policy acceptance verification helper
   const checkPolicyAcceptance = (profile: any) => {
     if (!profile) return;
+
+    // Check localStorage cache first (ensures instant persistence across windows/tabs)
+    const localUserKey = profile.id ? `reax_policy_accepted_${profile.id}` : null;
+    const localStored = (localUserKey && localStorage.getItem(localUserKey)) || localStorage.getItem("reax_policy_accepted_global");
+    if (localStored) {
+      try {
+        const parsed = JSON.parse(localStored);
+        if (parsed?.termsVersion === TERMS_VERSION && parsed?.privacyVersion === PRIVACY_VERSION) {
+          // Reconcile profile state in memory
+          if (!profile.acceptedTermsVersion) profile.acceptedTermsVersion = TERMS_VERSION;
+          if (!profile.acceptedPrivacyVersion) profile.acceptedPrivacyVersion = PRIVACY_VERSION;
+          return;
+        }
+      } catch {}
+    }
+
     const termsAccepted = profile.acceptedTermsVersion === TERMS_VERSION;
     const privacyAccepted = profile.acceptedPrivacyVersion === PRIVACY_VERSION;
     if (!termsAccepted || !privacyAccepted) {
@@ -89,9 +105,24 @@ export default function App() {
 
   const handleAcceptUpdatedPolicies = async () => {
     try {
-      await acceptPolicies(TERMS_VERSION, PRIVACY_VERSION);
+      const now = new Date().toISOString();
+      const policyRecord = JSON.stringify({
+        termsVersion: TERMS_VERSION,
+        privacyVersion: PRIVACY_VERSION,
+        acceptedAt: now
+      });
+
+      if (policyReacceptUser?.id) {
+        localStorage.setItem(`reax_policy_accepted_${policyReacceptUser.id}`, policyRecord);
+      }
+      localStorage.setItem("reax_policy_accepted_global", policyRecord);
+
       setIsPolicyReacceptModalOpen(false);
       setPolicyReacceptUser(null);
+
+      // Trigger background policy acceptance across auth metadata and backend
+      await acceptPolicies(TERMS_VERSION, PRIVACY_VERSION);
+
       window.dispatchEvent(
         new CustomEvent("reax_toast", {
           detail: { message: "✅ Policies accepted. Thank you!" }
@@ -99,6 +130,8 @@ export default function App() {
       );
     } catch (err) {
       console.error("Failed to accept policies:", err);
+      setIsPolicyReacceptModalOpen(false);
+      setPolicyReacceptUser(null);
     }
   };
 

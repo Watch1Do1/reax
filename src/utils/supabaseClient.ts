@@ -530,8 +530,59 @@ export async function acceptPolicies(
 ): Promise<{ success: boolean; profile?: UserProfile; error?: string }> {
   const token = await getAuthToken();
   const now = new Date().toISOString();
+  const recordStr = JSON.stringify({
+    termsVersion,
+    privacyVersion,
+    acceptedAt: now
+  });
 
-  // 1. Send to backend API
+  // 1. Instant client-side persistence (shared across all tabs & windows)
+  try {
+    localStorage.setItem("reax_policy_accepted_global", recordStr);
+    const user = await getCurrentSupabaseUser();
+    if (user?.id) {
+      localStorage.setItem(`reax_policy_accepted_${user.id}`, recordStr);
+    }
+  } catch (err) {
+    console.warn("Could not write policy acceptance to localStorage:", err);
+  }
+
+  // 2. Direct Supabase Auth metadata update (natively saved to auth.users across all devices)
+  try {
+    const supabase = await getSupabaseClient();
+    if (supabase) {
+      await supabase.auth.updateUser({
+        data: {
+          accepted_terms_version: termsVersion,
+          accepted_privacy_version: privacyVersion,
+          accepted_terms_at: now,
+          accepted_privacy_at: now
+        }
+      }).catch((e) => console.warn("Supabase auth.updateUser policy metadata warn:", e));
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userId = sessionData?.session?.user?.id;
+      if (userId) {
+        localStorage.setItem(`reax_policy_accepted_${userId}`, recordStr);
+        try {
+          await supabase
+            .from("user_profiles")
+            .update({
+              accepted_terms_version: termsVersion,
+              accepted_privacy_version: privacyVersion,
+              accepted_terms_at: now,
+              accepted_privacy_at: now,
+              last_active: now
+            })
+            .eq("id", userId);
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.warn("Direct Supabase update attempt warn:", err);
+  }
+
+  // 3. Send to backend API
   try {
     const res = await fetch("/api/policy/accept", {
       method: "POST",
@@ -550,44 +601,7 @@ export async function acceptPolicies(
       return { success: true, profile: data.profile };
     }
   } catch (err) {
-    console.warn("Backend acceptPolicy call failed, falling back to direct Supabase update:", err);
-  }
-
-  // 2. Direct Supabase update fallback if available
-  try {
-    const supabase = await getSupabaseClient();
-    if (supabase) {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const userId = sessionData?.session?.user?.id;
-      if (userId) {
-        // Also update user metadata
-        await supabase.auth.updateUser({
-          data: {
-            accepted_terms_version: termsVersion,
-            accepted_privacy_version: privacyVersion,
-            accepted_terms_at: now,
-            accepted_privacy_at: now
-          }
-        }).catch(() => null);
-
-        const { error } = await supabase
-          .from("user_profiles")
-          .update({
-            accepted_terms_version: termsVersion,
-            accepted_privacy_version: privacyVersion,
-            accepted_terms_at: now,
-            accepted_privacy_at: now,
-            last_active: now
-          })
-          .eq("id", userId);
-
-        if (!error) {
-          return { success: true };
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Direct supabase policy acceptance update failed:", err);
+    console.warn("Backend acceptPolicy call failed:", err);
   }
 
   return { success: true };
@@ -609,8 +623,9 @@ export async function fetchMyProfile(): Promise<{
   let emailConfirmed = false;
   let email: string | null = null;
 
+  let supabaseUser: any = null;
   try {
-    const supabaseUser = await getCurrentSupabaseUser();
+    supabaseUser = await getCurrentSupabaseUser();
     if (supabaseUser) {
       email = supabaseUser.email || null;
       hasEmail = Boolean(supabaseUser.email && supabaseUser.email.trim().length > 0);
@@ -657,6 +672,43 @@ export async function fetchMyProfile(): Promise<{
         localStorage.removeItem("reax_is_logged_in");
       }
 
+      // Reconcile policy acceptance from backend profile, auth user_metadata, and localStorage
+      if (data.profile) {
+        const localUserKey = data.profile.id ? `reax_policy_accepted_${data.profile.id}` : null;
+        const localStored = (localUserKey && localStorage.getItem(localUserKey)) || localStorage.getItem("reax_policy_accepted_global");
+        let parsedLocal: any = null;
+        if (localStored) {
+          try { parsedLocal = JSON.parse(localStored); } catch {}
+        }
+
+        const effectiveTerms = data.profile.acceptedTermsVersion || 
+                              supabaseUser?.user_metadata?.accepted_terms_version || 
+                              parsedLocal?.termsVersion || 
+                              null;
+        const effectivePrivacy = data.profile.acceptedPrivacyVersion || 
+                                supabaseUser?.user_metadata?.accepted_privacy_version || 
+                                parsedLocal?.privacyVersion || 
+                                null;
+
+        data.profile.acceptedTermsVersion = effectiveTerms;
+        data.profile.acceptedPrivacyVersion = effectivePrivacy;
+
+        // Auto-heal localStorage cache for this account
+        if (effectiveTerms === TERMS_VERSION && effectivePrivacy === PRIVACY_VERSION && data.profile.id) {
+          localStorage.setItem(`reax_policy_accepted_${data.profile.id}`, JSON.stringify({
+            termsVersion: effectiveTerms,
+            privacyVersion: effectivePrivacy,
+            acceptedAt: data.profile.acceptedTermsAt || new Date().toISOString()
+          }));
+        }
+
+        // If local metadata showed acceptance but backend profile didn't have it recorded, sync in background
+        if ((!data.profile.acceptedTermsVersion || data.profile.acceptedTermsVersion !== TERMS_VERSION) && 
+            (supabaseUser?.user_metadata?.accepted_terms_version === TERMS_VERSION || parsedLocal?.termsVersion === TERMS_VERSION)) {
+          acceptPolicies(TERMS_VERSION, PRIVACY_VERSION).catch(() => null);
+        }
+      }
+
       return {
         profile: data.profile || null,
         isAdmin: Boolean(data.isAdmin),
@@ -686,6 +738,16 @@ export async function fetchMyProfile(): Promise<{
 
       const metaName = user.user_metadata?.username || user.user_metadata?.display_name || user.email?.split("@")[0];
       if (metaName) {
+        const localUserKey = user.id ? `reax_policy_accepted_${user.id}` : null;
+        const localStored = (localUserKey && localStorage.getItem(localUserKey)) || localStorage.getItem("reax_policy_accepted_global");
+        let parsedLocal: any = null;
+        if (localStored) {
+          try { parsedLocal = JSON.parse(localStored); } catch {}
+        }
+
+        const effectiveTerms = user.user_metadata?.accepted_terms_version || parsedLocal?.termsVersion || null;
+        const effectivePrivacy = user.user_metadata?.accepted_privacy_version || parsedLocal?.privacyVersion || null;
+
         return {
           profile: {
             id: user.id,
@@ -696,10 +758,10 @@ export async function fetchMyProfile(): Promise<{
             reactionCount: 0,
             suspended: false,
             strikes: 0,
-            acceptedTermsVersion: user.user_metadata?.accepted_terms_version || null,
-            acceptedPrivacyVersion: user.user_metadata?.accepted_privacy_version || null,
-            acceptedTermsAt: user.user_metadata?.accepted_terms_at || null,
-            acceptedPrivacyAt: user.user_metadata?.accepted_privacy_at || null
+            acceptedTermsVersion: effectiveTerms,
+            acceptedPrivacyVersion: effectivePrivacy,
+            acceptedTermsAt: user.user_metadata?.accepted_terms_at || parsedLocal?.acceptedAt || null,
+            acceptedPrivacyAt: user.user_metadata?.accepted_privacy_at || parsedLocal?.acceptedAt || null
           },
           isAdmin: false,
           isAnonymous: isAnon,
