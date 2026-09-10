@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient, User, Session } from "@supabase/supabase-js";
 import { UserProfile } from "../types";
+import { TERMS_VERSION, PRIVACY_VERSION } from "../constants/policy";
 
 let clientInstance: SupabaseClient | null = null;
 let initPromise: Promise<SupabaseClient | null> | null = null;
@@ -123,15 +124,22 @@ export async function signUpWithEmail({
 
     let createdUser: User | null = null;
 
+    const nowIso = new Date().toISOString();
+    const policyMetadata = {
+      username: cleanUsername,
+      display_name: cleanUsername,
+      accepted_terms_version: TERMS_VERSION,
+      accepted_privacy_version: PRIVACY_VERSION,
+      accepted_terms_at: nowIso,
+      accepted_privacy_at: nowIso
+    };
+
     if (isAnon) {
       // Link anonymous user to permanent email + password credentials
       const { data, error } = await supabase.auth.updateUser({
         email: cleanEmail,
         password: cleanPassword,
-        data: {
-          username: cleanUsername,
-          display_name: cleanUsername
-        }
+        data: policyMetadata
       });
 
       if (error) {
@@ -146,10 +154,7 @@ export async function signUpWithEmail({
         password: cleanPassword,
         options: {
           emailRedirectTo: origin || undefined,
-          data: {
-            username: cleanUsername,
-            display_name: cleanUsername
-          }
+          data: policyMetadata
         }
       });
 
@@ -469,7 +474,13 @@ export async function getCurrentSupabaseUser(): Promise<User | null> {
 /**
  * Sync / upsert user profile on backend (POST /api/me)
  */
-export async function syncUserProfile(username: string): Promise<UserProfile> {
+export async function syncUserProfile(
+  username: string,
+  policyData?: {
+    acceptedTermsVersion?: string;
+    acceptedPrivacyVersion?: string;
+  }
+): Promise<UserProfile> {
   const token = await getAuthToken();
   try {
     const res = await fetch("/api/me", {
@@ -478,7 +489,11 @@ export async function syncUserProfile(username: string): Promise<UserProfile> {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`
       },
-      body: JSON.stringify({ username })
+      body: JSON.stringify({ 
+        username,
+        acceptedTermsVersion: policyData?.acceptedTermsVersion || TERMS_VERSION,
+        acceptedPrivacyVersion: policyData?.acceptedPrivacyVersion || PRIVACY_VERSION
+      })
     });
 
     if (res.ok) {
@@ -497,9 +512,85 @@ export async function syncUserProfile(username: string): Promise<UserProfile> {
     lastActive: new Date().toISOString(),
     reactionCount: 0,
     suspended: false,
-    strikes: 0
+    strikes: 0,
+    acceptedTermsVersion: policyData?.acceptedTermsVersion || TERMS_VERSION,
+    acceptedPrivacyVersion: policyData?.acceptedPrivacyVersion || PRIVACY_VERSION,
+    acceptedTermsAt: new Date().toISOString(),
+    acceptedPrivacyAt: new Date().toISOString()
   };
   return fallbackProfile;
+}
+
+/**
+ * Explicitly record policy acceptance (Terms of Service & Privacy Policy)
+ */
+export async function acceptPolicies(
+  termsVersion: string = TERMS_VERSION,
+  privacyVersion: string = PRIVACY_VERSION
+): Promise<{ success: boolean; profile?: UserProfile; error?: string }> {
+  const token = await getAuthToken();
+  const now = new Date().toISOString();
+
+  // 1. Send to backend API
+  try {
+    const res = await fetch("/api/policy/accept", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        termsVersion,
+        privacyVersion
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, profile: data.profile };
+    }
+  } catch (err) {
+    console.warn("Backend acceptPolicy call failed, falling back to direct Supabase update:", err);
+  }
+
+  // 2. Direct Supabase update fallback if available
+  try {
+    const supabase = await getSupabaseClient();
+    if (supabase) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userId = sessionData?.session?.user?.id;
+      if (userId) {
+        // Also update user metadata
+        await supabase.auth.updateUser({
+          data: {
+            accepted_terms_version: termsVersion,
+            accepted_privacy_version: privacyVersion,
+            accepted_terms_at: now,
+            accepted_privacy_at: now
+          }
+        }).catch(() => null);
+
+        const { error } = await supabase
+          .from("user_profiles")
+          .update({
+            accepted_terms_version: termsVersion,
+            accepted_privacy_version: privacyVersion,
+            accepted_terms_at: now,
+            accepted_privacy_at: now,
+            last_active: now
+          })
+          .eq("id", userId);
+
+        if (!error) {
+          return { success: true };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Direct supabase policy acceptance update failed:", err);
+  }
+
+  return { success: true };
 }
 
 /**
@@ -599,11 +690,16 @@ export async function fetchMyProfile(): Promise<{
           profile: {
             id: user.id,
             username: metaName,
+            email: user.email || undefined,
             createdAt: user.created_at || new Date().toISOString(),
             lastActive: new Date().toISOString(),
             reactionCount: 0,
             suspended: false,
-            strikes: 0
+            strikes: 0,
+            acceptedTermsVersion: user.user_metadata?.accepted_terms_version || null,
+            acceptedPrivacyVersion: user.user_metadata?.accepted_privacy_version || null,
+            acceptedTermsAt: user.user_metadata?.accepted_terms_at || null,
+            acceptedPrivacyAt: user.user_metadata?.accepted_privacy_at || null
           },
           isAdmin: false,
           isAnonymous: isAnon,

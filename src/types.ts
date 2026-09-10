@@ -38,6 +38,10 @@ export type UserProfile = {
   reactionCount: number;
   suspended: boolean;
   strikes: number;
+  acceptedTermsVersion?: string | null;
+  acceptedPrivacyVersion?: string | null;
+  acceptedTermsAt?: string | null;
+  acceptedPrivacyAt?: string | null;
 };
 
 export type FunnelStats = {

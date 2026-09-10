@@ -114,6 +114,10 @@ export type UserProfile = {
   reactionCount: number;
   suspended: boolean;
   strikes: number;
+  acceptedTermsVersion?: string | null;
+  acceptedPrivacyVersion?: string | null;
+  acceptedTermsAt?: string | null;
+  acceptedPrivacyAt?: string | null;
 };
 
 export type FunnelStats = {
@@ -161,7 +165,7 @@ export interface Store {
   updateContactMessageStatus(id: string, status: "unread" | "read" | "resolved"): Promise<boolean>;
   getUsers(): Promise<UserProfile[]>;
   getUserProfile(query: { id?: string; username?: string }): Promise<UserProfile | null>;
-  upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string }): Promise<UserProfile>;
+  upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string; acceptedTermsVersion?: string | null; acceptedPrivacyVersion?: string | null; acceptedTermsAt?: string | null; acceptedPrivacyAt?: string | null }): Promise<UserProfile>;
   upsertUser(user: Partial<UserProfile> & { username: string }): Promise<UserProfile>;
   incrementFunnel(event: keyof FunnelStats): Promise<FunnelStats>;
   getFunnel(): Promise<FunnelStats>;
@@ -459,7 +463,7 @@ class MemoryStore implements Store {
     return null;
   }
 
-  async upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string }): Promise<UserProfile> {
+  async upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string; acceptedTermsVersion?: string | null; acceptedPrivacyVersion?: string | null; acceptedTermsAt?: string | null; acceptedPrivacyAt?: string | null }): Promise<UserProfile> {
     let existing = this.userProfiles.find(u => u.id === profile.id || u.username.toLowerCase() === profile.username.toLowerCase());
     if (existing) {
       existing.id = profile.id;
@@ -467,6 +471,10 @@ class MemoryStore implements Store {
       if (profile.email) existing.email = profile.email;
       if (profile.suspended !== undefined) existing.suspended = profile.suspended;
       if (profile.strikes !== undefined) existing.strikes = profile.strikes;
+      if (profile.acceptedTermsVersion !== undefined) existing.acceptedTermsVersion = profile.acceptedTermsVersion;
+      if (profile.acceptedPrivacyVersion !== undefined) existing.acceptedPrivacyVersion = profile.acceptedPrivacyVersion;
+      if (profile.acceptedTermsAt !== undefined) existing.acceptedTermsAt = profile.acceptedTermsAt;
+      if (profile.acceptedPrivacyAt !== undefined) existing.acceptedPrivacyAt = profile.acceptedPrivacyAt;
       existing.lastActive = profile.lastActive || new Date().toISOString();
       return existing;
     } else {
@@ -478,7 +486,11 @@ class MemoryStore implements Store {
         lastActive: profile.lastActive || new Date().toISOString(),
         reactionCount: 0,
         suspended: profile.suspended || false,
-        strikes: profile.strikes || 0
+        strikes: profile.strikes || 0,
+        acceptedTermsVersion: profile.acceptedTermsVersion || null,
+        acceptedPrivacyVersion: profile.acceptedPrivacyVersion || null,
+        acceptedTermsAt: profile.acceptedTermsAt || null,
+        acceptedPrivacyAt: profile.acceptedPrivacyAt || null
       };
       this.userProfiles.push(newUser);
       this.todayStats.newUsers += 1;
@@ -1123,7 +1135,11 @@ class SupabaseStore implements Store {
             lastActive: u.last_active || u.created_at || new Date().toISOString(),
             reactionCount,
             suspended: Boolean(u.suspended),
-            strikes: typeof u.strikes === "number" ? u.strikes : 0
+            strikes: typeof u.strikes === "number" ? u.strikes : 0,
+            acceptedTermsVersion: u.accepted_terms_version || null,
+            acceptedPrivacyVersion: u.accepted_privacy_version || null,
+            acceptedTermsAt: u.accepted_terms_at || null,
+            acceptedPrivacyAt: u.accepted_privacy_at || null
           };
         });
       }
@@ -1151,7 +1167,11 @@ class SupabaseStore implements Store {
             lastActive: data.last_active,
             reactionCount: data.reaction_count || 0,
             suspended: data.suspended || false,
-            strikes: data.strikes || 0
+            strikes: data.strikes || 0,
+            acceptedTermsVersion: data.accepted_terms_version || null,
+            acceptedPrivacyVersion: data.accepted_privacy_version || null,
+            acceptedTermsAt: data.accepted_terms_at || null,
+            acceptedPrivacyAt: data.accepted_privacy_at || null
           };
         }
       }
@@ -1172,7 +1192,11 @@ class SupabaseStore implements Store {
             lastActive: data.last_active,
             reactionCount: data.reaction_count || 0,
             suspended: data.suspended || false,
-            strikes: data.strikes || 0
+            strikes: data.strikes || 0,
+            acceptedTermsVersion: data.accepted_terms_version || null,
+            acceptedPrivacyVersion: data.accepted_privacy_version || null,
+            acceptedTermsAt: data.accepted_terms_at || null,
+            acceptedPrivacyAt: data.accepted_privacy_at || null
           };
         }
       }
@@ -1182,7 +1206,7 @@ class SupabaseStore implements Store {
     return null;
   }
 
-  async upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string }): Promise<UserProfile> {
+  async upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string; acceptedTermsVersion?: string | null; acceptedPrivacyVersion?: string | null; acceptedTermsAt?: string | null; acceptedPrivacyAt?: string | null }): Promise<UserProfile> {
     const payload: Record<string, any> = {
       id: profile.id,
       username: profile.username,
@@ -1191,13 +1215,34 @@ class SupabaseStore implements Store {
     if (profile.email) payload.email = profile.email;
     if (profile.suspended !== undefined) payload.suspended = profile.suspended;
     if (profile.strikes !== undefined) payload.strikes = profile.strikes;
+    if (profile.acceptedTermsVersion !== undefined) payload.accepted_terms_version = profile.acceptedTermsVersion;
+    if (profile.acceptedPrivacyVersion !== undefined) payload.accepted_privacy_version = profile.acceptedPrivacyVersion;
+    if (profile.acceptedTermsAt !== undefined) payload.accepted_terms_at = profile.acceptedTermsAt;
+    if (profile.acceptedPrivacyAt !== undefined) payload.accepted_privacy_at = profile.acceptedPrivacyAt;
 
     try {
-      const { data, error } = await this.client
+      let { data, error } = await this.client
         .from("user_profiles")
         .upsert(payload, { onConflict: "id" })
         .select()
         .single();
+
+      // Graceful fallback if policy columns are not created in Postgres yet
+      if (error && (error.message?.includes("accepted_terms_version") || error.code === "42703")) {
+        console.warn("accepted_terms_version column not present yet in Supabase table user_profiles. Run supabase_policy_migration.sql in your Supabase SQL editor.");
+        const fallbackPayload = { ...payload };
+        delete fallbackPayload.accepted_terms_version;
+        delete fallbackPayload.accepted_privacy_version;
+        delete fallbackPayload.accepted_terms_at;
+        delete fallbackPayload.accepted_privacy_at;
+        const retryRes = await this.client
+          .from("user_profiles")
+          .upsert(fallbackPayload, { onConflict: "id" })
+          .select()
+          .single();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
 
       if (!error && data) {
         return {
@@ -1208,7 +1253,11 @@ class SupabaseStore implements Store {
           lastActive: data.last_active,
           reactionCount: data.reaction_count || 0,
           suspended: data.suspended || false,
-          strikes: data.strikes || 0
+          strikes: data.strikes || 0,
+          acceptedTermsVersion: data.accepted_terms_version || profile.acceptedTermsVersion || null,
+          acceptedPrivacyVersion: data.accepted_privacy_version || profile.acceptedPrivacyVersion || null,
+          acceptedTermsAt: data.accepted_terms_at || profile.acceptedTermsAt || null,
+          acceptedPrivacyAt: data.accepted_privacy_at || profile.acceptedPrivacyAt || null
         };
       }
     } catch (err) {
@@ -1223,7 +1272,11 @@ class SupabaseStore implements Store {
       lastActive: profile.lastActive || new Date().toISOString(),
       reactionCount: 0,
       suspended: profile.suspended || false,
-      strikes: profile.strikes || 0
+      strikes: profile.strikes || 0,
+      acceptedTermsVersion: profile.acceptedTermsVersion || null,
+      acceptedPrivacyVersion: profile.acceptedPrivacyVersion || null,
+      acceptedTermsAt: profile.acceptedTermsAt || null,
+      acceptedPrivacyAt: profile.acceptedPrivacyAt || null
     };
   }
 
@@ -1581,7 +1634,11 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
   last_active TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   reaction_count INTEGER DEFAULT 0,
   suspended BOOLEAN DEFAULT false,
-  strikes INTEGER DEFAULT 0
+  strikes INTEGER DEFAULT 0,
+  accepted_terms_version TEXT,
+  accepted_privacy_version TEXT,
+  accepted_terms_at TIMESTAMP WITH TIME ZONE,
+  accepted_privacy_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Ensure all columns exist on user_profiles
@@ -1601,6 +1658,18 @@ BEGIN
   END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'last_active') THEN
     ALTER TABLE public.user_profiles ADD COLUMN last_active TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'accepted_terms_version') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN accepted_terms_version TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'accepted_privacy_version') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN accepted_privacy_version TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'accepted_terms_at') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN accepted_terms_at TIMESTAMP WITH TIME ZONE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'user_profiles' AND column_name = 'accepted_privacy_at') THEN
+    ALTER TABLE public.user_profiles ADD COLUMN accepted_privacy_at TIMESTAMP WITH TIME ZONE;
   END IF;
 END $$;
 
@@ -1634,14 +1703,23 @@ BEGIN
     UPDATE public.user_profiles
     SET 
       email = COALESCE(NEW.email, public.user_profiles.email),
-      username = COALESCE(public.user_profiles.username, extracted_username)
+      username = COALESCE(public.user_profiles.username, extracted_username),
+      accepted_terms_version = COALESCE(NEW.raw_user_meta_data->>'accepted_terms_version', public.user_profiles.accepted_terms_version),
+      accepted_privacy_version = COALESCE(NEW.raw_user_meta_data->>'accepted_privacy_version', public.user_profiles.accepted_privacy_version),
+      accepted_terms_at = COALESCE((NEW.raw_user_meta_data->>'accepted_terms_at')::timestamptz, public.user_profiles.accepted_terms_at),
+      accepted_privacy_at = COALESCE((NEW.raw_user_meta_data->>'accepted_privacy_at')::timestamptz, public.user_profiles.accepted_privacy_at)
     WHERE user_id = NEW.id OR id = NEW.id;
   ELSE
     INSERT INTO public.user_profiles (
-      id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
+      id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active,
+      accepted_terms_version, accepted_privacy_version, accepted_terms_at, accepted_privacy_at
     ) VALUES (
       NEW.id, NEW.id, NEW.email, extracted_username, false, 0, 0,
-      COALESCE(NEW.created_at, NOW()), COALESCE(NEW.created_at, NOW())
+      COALESCE(NEW.created_at, NOW()), COALESCE(NEW.created_at, NOW()),
+      NEW.raw_user_meta_data->>'accepted_terms_version',
+      NEW.raw_user_meta_data->>'accepted_privacy_version',
+      (NEW.raw_user_meta_data->>'accepted_terms_at')::timestamptz,
+      (NEW.raw_user_meta_data->>'accepted_privacy_at')::timestamptz
     );
   END IF;
 
@@ -1788,6 +1866,9 @@ app.get("/api/guest-status", async (req, res) => {
   return res.json({ isAnonymous, clipCount, signupRequired });
 });
 
+const TERMS_VERSION = "1.0";
+const PRIVACY_VERSION = "1.0";
+
 // API: Get Current Authenticated User Profile & Admin Status
 app.get("/api/me", async (req, res) => {
   const authRes = await authenticateUser(req);
@@ -1798,17 +1879,25 @@ app.get("/api/me", async (req, res) => {
   const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
   const isAnonymous = Boolean(user.is_anonymous || !user.email);
   const emailConfirmed = Boolean(user.email_confirmed_at);
-  return res.json({ profile, isAdmin, isAnonymous, email: user.email || null, emailConfirmed });
+  return res.json({ 
+    profile, 
+    isAdmin, 
+    isAnonymous, 
+    email: user.email || null, 
+    emailConfirmed,
+    termsVersion: TERMS_VERSION,
+    privacyVersion: PRIVACY_VERSION 
+  });
 });
 
-// API: Upsert / Update Current Authenticated User Profile (Username)
+// API: Upsert / Update Current Authenticated User Profile (Username & Policy Acceptance)
 app.post("/api/me", async (req, res) => {
   const authRes = await authenticateUser(req);
   if (authRes.ok === false) {
     return res.status(authRes.status).json({ error: authRes.error });
   }
   const { user } = authRes.auth;
-  const { username } = req.body;
+  const { username, acceptedTermsVersion, acceptedPrivacyVersion } = req.body;
 
   if (!username || typeof username !== "string" || username.trim().length < 3 || username.trim().length > 20) {
     return res.status(400).json({ error: "Username must be between 3 and 20 characters." });
@@ -1825,11 +1914,20 @@ app.post("/api/me", async (req, res) => {
       return res.status(409).json({ error: "Username is already taken by another account." });
     }
 
+    const now = new Date().toISOString();
     const updatedProfile = await store!.upsertUserProfile({
       id: user.id,
       username: cleanUsername,
       email: user.email,
-      lastActive: new Date().toISOString()
+      lastActive: now,
+      ...(acceptedTermsVersion ? {
+        acceptedTermsVersion,
+        acceptedTermsAt: now
+      } : {}),
+      ...(acceptedPrivacyVersion ? {
+        acceptedPrivacyVersion,
+        acceptedPrivacyAt: now
+      } : {})
     });
 
     // Keep posts on signup: update existing clips author_name for this user
@@ -1844,6 +1942,36 @@ app.post("/api/me", async (req, res) => {
   } catch (err: any) {
     console.error("Error in POST /api/me:", err);
     return res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
+// API: Record Policy Acceptance (Terms of Service & Privacy Policy)
+app.post("/api/policy/accept", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user, profile } = authRes.auth;
+  const { termsVersion = TERMS_VERSION, privacyVersion = PRIVACY_VERSION } = req.body;
+  const now = new Date().toISOString();
+
+  try {
+    const resolvedUsername = profile?.username || (user.email ? user.email.split("@")[0] : `user_${user.id.slice(0, 8)}`);
+    const updatedProfile = await store!.upsertUserProfile({
+      id: user.id,
+      username: resolvedUsername,
+      email: user.email,
+      lastActive: now,
+      acceptedTermsVersion: termsVersion,
+      acceptedPrivacyVersion: privacyVersion,
+      acceptedTermsAt: now,
+      acceptedPrivacyAt: now
+    });
+
+    return res.json({ success: true, profile: updatedProfile });
+  } catch (err: any) {
+    console.error("Error in POST /api/policy/accept:", err);
+    return res.status(500).json({ error: "Failed to record policy acceptance" });
   }
 });
 

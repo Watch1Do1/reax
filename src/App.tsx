@@ -3,7 +3,7 @@ import {
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
   ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User,
-  MoreVertical, Mail
+  MoreVertical, Mail, FileText
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -16,6 +16,9 @@ import ResetPasswordModal from "./components/ResetPasswordModal";
 import ContactModal from "./components/ContactModal";
 import ProfilePanel from "./components/ProfilePanel";
 import AdminPanel from "./components/AdminPanel";
+import PolicyDocumentModal from "./components/PolicyDocumentModal";
+import PolicyReacceptModal from "./components/PolicyReacceptModal";
+import { TERMS_VERSION, PRIVACY_VERSION } from "./constants/policy";
 import { Clip, SavedReaction } from "./types";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "./utils/keyUtils";
 import { 
@@ -24,7 +27,8 @@ import {
   syncUserProfile, 
   signOutSupabase, 
   handleUrlAuthTokens,
-  getSupabaseClient 
+  getSupabaseClient,
+  acceptPolicies
 } from "./utils/supabaseClient";
 
 export default function App() {
@@ -66,6 +70,37 @@ export default function App() {
   const [upgradeTriggerReason, setUpgradeTriggerReason] = useState<"save_reaction" | "post_limit" | "edit_username" | "nav_click" | null>(null);
   const [isResetPasswordModalOpen, setIsResetPasswordModalOpen] = useState(false);
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
+  const [isPolicyReacceptModalOpen, setIsPolicyReacceptModalOpen] = useState(false);
+  const [policyReacceptUser, setPolicyReacceptUser] = useState<{ id?: string; username: string } | null>(null);
+
+  // Policy acceptance verification helper
+  const checkPolicyAcceptance = (profile: any) => {
+    if (!profile) return;
+    const termsAccepted = profile.acceptedTermsVersion === TERMS_VERSION;
+    const privacyAccepted = profile.acceptedPrivacyVersion === PRIVACY_VERSION;
+    if (!termsAccepted || !privacyAccepted) {
+      setPolicyReacceptUser({
+        id: profile.id,
+        username: profile.username || ""
+      });
+      setIsPolicyReacceptModalOpen(true);
+    }
+  };
+
+  const handleAcceptUpdatedPolicies = async () => {
+    try {
+      await acceptPolicies(TERMS_VERSION, PRIVACY_VERSION);
+      setIsPolicyReacceptModalOpen(false);
+      setPolicyReacceptUser(null);
+      window.dispatchEvent(
+        new CustomEvent("reax_toast", {
+          detail: { message: "✅ Policies accepted. Thank you!" }
+        })
+      );
+    } catch (err) {
+      console.error("Failed to accept policies:", err);
+    }
+  };
 
   // Age constraint state
   const [ageConfirmed, setAgeConfirmed] = useState(() => {
@@ -121,6 +156,9 @@ export default function App() {
             setTempUsername("");
             localStorage.removeItem("clips_username");
           }
+
+          // Check if policy versions are current
+          checkPolicyAcceptance(profile);
         } else if (isMounted) {
           // Anonymous session or unconfirmed email: not logged in
           setIsLoggedIn(false);
@@ -158,7 +196,7 @@ export default function App() {
     setIsEditingUsername(false);
   };
 
-  const handleLoginSuccess = (newUsername: string) => {
+  const handleLoginSuccess = async (newUsername: string) => {
     localStorage.setItem("reax_is_logged_in", "true");
     localStorage.setItem("clips_username", newUsername);
     setIsLoggedIn(true);
@@ -173,6 +211,16 @@ export default function App() {
     // Dispatch a sync event to redraw everything
     window.dispatchEvent(new Event("reax_saved_changed"));
     setRefreshTrigger(prev => prev + 1);
+
+    // Verify policy acceptance for this account
+    try {
+      const { profile } = await fetchMyProfile();
+      if (profile) {
+        checkPolicyAcceptance(profile);
+      }
+    } catch (err) {
+      console.warn("Could not check policy acceptance after login:", err);
+    }
   };
 
   const handleLogout = async () => {
@@ -849,6 +897,20 @@ export default function App() {
                     <Mail className="w-3.5 h-3.5 text-indigo-400" />
                     <span>Contact Us</span>
                   </button>
+                  <button
+                    onClick={() => setActiveDocsTab("terms")}
+                    className="w-full px-3 py-2 text-left text-slate-300 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer font-medium border-t border-slate-800/50"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Terms of Service</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveDocsTab("privacy")}
+                    className="w-full px-3 py-2 text-left text-slate-300 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer font-medium border-t border-slate-800/50"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Privacy Policy</span>
+                  </button>
                   {isLoggedIn && (
                     <button
                       onClick={handleLogout}
@@ -1087,175 +1149,15 @@ export default function App() {
           />
         )}
 
-        {/* PRIVACY POLICY & TERMS OF SERVICE DOCUMENT OVERLAYS */}
-        {activeDocsTab && (
-          <div key="docs-overlay" className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6 md:p-8 relative shadow-2xl space-y-6">
-              <button 
-                onClick={() => setActiveDocsTab(null)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-white px-3 py-1 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs cursor-pointer"
-              >
-                Close ESC
-              </button>
-
-              {activeDocsTab === "privacy" ? (
-                <div className="text-slate-300 space-y-4 text-xs md:text-sm leading-relaxed text-left">
-                  <h2 className="text-xl font-sans font-black text-white tracking-tight uppercase">📄 Privacy Policy</h2>
-                  <p className="font-mono text-[10px] text-slate-500">Effective: September 4, 2026</p>
-                  
-                  <p>Reax (“we”) runs getreax.com. This explains what we collect and why.</p>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">What we collect</h3>
-                    <ul className="list-disc pl-5 mt-1 space-y-1">
-                      <li>Email and password if you create an account (password is stored as a hash by our auth provider)</li>
-                      <li>Username and profile details you choose</li>
-                      <li>Content you post: photos, short videos, captions, recorded voice</li>
-                      <li>Guest / anonymous session ids if you post without an account</li>
-                      <li>Basic device and log data needed to run the site (browser, errors, abuse signals)</li>
-                    </ul>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">What is public</h3>
-                    <p>Loops you post are public. Other people can view, reply to, save, and remix them in the app.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">How we use it</h3>
-                    <p>To operate Reax, show the feed and threads, store media, send confirm-email links, prevent abuse, and improve the product. We do not sell your personal information.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Processors</h3>
-                    <p>We use hosting and database providers (currently Vercel and Supabase) to store accounts, clips, and media. They process data only to provide those services.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">AI</h3>
-                    <p>Reax does not send your posts to a paid AI API today. Optional on-device text-to-speech may read a caption you typed. If we add server AI later, we will update this policy.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Storage</h3>
-                    <p>Media lives on remote storage. Some preferences (saved reactions) stay in your browser. We do not promise forever storage.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Your choices</h3>
-                    <p>Delete your own clips in the app. Request account or content removal at the contact below. Stop using the service at any time.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Children</h3>
-                    <p>Not for anyone under 13.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Changes</h3>
-                    <p>We may update this policy. Continued use after a change means you accept the new version.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Contact</h3>
-                    <p className="flex items-center gap-3 mt-1">
-                      <a href="mailto:support@getreax.com" className="text-amber-400 font-mono hover:underline">
-                        support@getreax.com
-                      </a>
-                      <span>•</span>
-                      <button 
-                        type="button"
-                        onClick={() => {
-                          setActiveDocsTab(null);
-                          setIsContactModalOpen(true);
-                        }}
-                        className="text-indigo-400 hover:text-indigo-300 font-mono text-xs underline cursor-pointer"
-                      >
-                        Contact Form
-                      </button>
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-slate-300 space-y-4 text-xs md:text-sm leading-relaxed text-left">
-                  <h2 className="text-xl font-sans font-black text-white tracking-tight uppercase">📄 Terms of Service</h2>
-                  <p className="font-mono text-[10px] text-slate-500">Effective: September 4, 2026</p>
-
-                  <p>By using getreax.com you agree to these terms. If you don’t, don’t use Reax.</p>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Your content</h3>
-                    <p>You own what you upload. You must have the right to post it. You must not post illegal, hateful, harassing, sexual-involving-minors, or infringing material.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">License to us</h3>
-                    <p>You give Reax a non-exclusive license to host, display, and distribute your content inside the service so reactions and threads work.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Remix</h3>
-                    <p>Others may reply with new loops that reference your post. Attribution may show automatically. That is how the product works.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Accounts</h3>
-                    <p>You’re responsible for your username and password. We may reclaim names or remove accounts that break these terms. Guest posts are still bound by these rules.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Moderation</h3>
-                    <p>We may hide or delete content, including after a report. We may suspend access.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">No warranty</h3>
-                    <p>Reax is provided “as is.” Uptime and permanent storage are not guaranteed.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Liability</h3>
-                    <p>We are not responsible for other users’ content or for loss of data beyond what the law requires.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Changes</h3>
-                    <p>We may update these terms. Continued use means acceptance.</p>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold text-white text-sm mt-3">Contact</h3>
-                    <p className="flex items-center gap-3 mt-1">
-                      <a href="mailto:support@getreax.com" className="text-amber-400 font-mono hover:underline">
-                        support@getreax.com
-                      </a>
-                      <span>•</span>
-                      <button 
-                        type="button"
-                        onClick={() => {
-                          setActiveDocsTab(null);
-                          setIsContactModalOpen(true);
-                        }}
-                        className="text-indigo-400 hover:text-indigo-300 font-mono text-xs underline cursor-pointer"
-                      >
-                        Contact Form
-                      </button>
-                    </p>
-                  </div>
-                </div>
-              )}
-              
-              <div className="pt-4 border-t border-slate-800 text-center">
-                <button 
-                  onClick={() => setActiveDocsTab(null)}
-                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs text-white rounded-xl uppercase tracking-wider transition-colors cursor-pointer"
-                >
-                  I Understand
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* PRIVACY POLICY & TERMS OF SERVICE DOCUMENT MODAL */}
+        <PolicyDocumentModal
+          type={activeDocsTab}
+          onClose={() => setActiveDocsTab(null)}
+          onOpenContact={() => {
+            setActiveDocsTab(null);
+            setIsContactModalOpen(true);
+          }}
+        />
 
         {/* LIGHTWEIGHT AGE CONFIRMATION BANNER */}
         {!ageConfirmed && (
@@ -1454,6 +1356,14 @@ export default function App() {
         }}
         clips={clips}
         onClipSelect={(targetId) => setSelectedThreadRootId(targetId)}
+      />
+
+      {/* POLICY RE-ACCEPTANCE MODAL (BLOCKING FOR OUTDATED POLICY VERSIONS) */}
+      <PolicyReacceptModal
+        isOpen={isPolicyReacceptModalOpen}
+        username={policyReacceptUser?.username || ""}
+        onAccept={handleAcceptUpdatedPolicies}
+        onSignOut={handleLogout}
       />
 
       {/* FLOATING SUBTLE TOAST NOTIFICATION CONTAINER */}

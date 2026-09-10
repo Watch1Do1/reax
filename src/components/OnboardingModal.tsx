@@ -11,6 +11,7 @@ import {
   fetchMyProfile,
   resetPasswordForEmail
 } from "../utils/supabaseClient";
+import PolicyDocumentModal from "./PolicyDocumentModal";
 
 interface OnboardingModalProps {
   key?: string;
@@ -36,6 +37,8 @@ export default function OnboardingModal({
     return guestUsername.startsWith("~") ? guestUsername.slice(1) : guestUsername;
   });
   const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [policyAgreed, setPolicyAgreed] = useState(false);
+  const [activePolicyDoc, setActivePolicyDoc] = useState<"terms" | "privacy" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [needsEmailConfirm, setNeedsEmailConfirm] = useState(false);
@@ -177,6 +180,10 @@ export default function OnboardingModal({
     }
     if (!ageConfirmed) {
       setError("You must confirm you are 13 or older to register.");
+      return;
+    }
+    if (!policyAgreed) {
+      setError("You must agree to the Terms of Service and Privacy Policy to register.");
       return;
     }
 
@@ -558,6 +565,44 @@ export default function OnboardingModal({
                     </span>
                   </label>
 
+                  {/* Terms & Privacy Agreement Checkbox */}
+                  <label className="flex items-start gap-2.5 p-2 bg-slate-950/60 border border-slate-800 rounded-xl cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      id="signup-agree-policy"
+                      checked={policyAgreed}
+                      onChange={(e) => setPolicyAgreed(e.target.checked)}
+                      className="mt-0.5 rounded border-slate-700 text-indigo-600 focus:ring-0 bg-slate-900 cursor-pointer"
+                    />
+                    <span className="text-[11px] font-mono text-slate-300 leading-tight">
+                      I agree to the{" "}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setActivePolicyDoc("terms");
+                        }}
+                        className="text-indigo-400 hover:text-indigo-300 underline font-semibold cursor-pointer inline"
+                      >
+                        Terms of Service
+                      </button>{" "}
+                      and{" "}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setActivePolicyDoc("privacy");
+                        }}
+                        className="text-indigo-400 hover:text-indigo-300 underline font-semibold cursor-pointer inline"
+                      >
+                        Privacy Policy
+                      </button>
+                      .
+                    </span>
+                  </label>
+
                   {error && (
                     <div className="p-2.5 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs font-mono flex items-center gap-2">
                       <AlertCircle className="w-4 h-4 shrink-0" />
@@ -574,8 +619,8 @@ export default function OnboardingModal({
 
                   <button
                     type="submit"
-                    disabled={isSubmitting}
-                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                    disabled={isSubmitting || !ageConfirmed || !policyAgreed}
+                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all shadow-md active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
                   >
                     <UserPlus className="w-3.5 h-3.5" />
                     {isSubmitting ? "Creating account..." : "Sign Up"}
@@ -598,6 +643,12 @@ export default function OnboardingModal({
 
         </div>
       </motion.div>
+
+      {/* Embedded Terms & Privacy Policy Viewer Modal */}
+      <PolicyDocumentModal
+        type={activePolicyDoc}
+        onClose={() => setActivePolicyDoc(null)}
+      />
     </div>
   );
 }
