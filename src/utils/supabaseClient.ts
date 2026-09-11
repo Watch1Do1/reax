@@ -71,10 +71,103 @@ export async function getAuthToken(): Promise<string> {
 }
 
 /**
+ * Detects if the current browser environment is an in-app WebView
+ * (e.g., Discord in-app browser, Instagram, TikTok, Facebook, Twitter).
+ */
+export function isInAppBrowser(): boolean {
+  if (typeof window === "undefined") return false;
+  const ua = (navigator?.userAgent || "").toLowerCase();
+  const ref = (document?.referrer || "").toLowerCase();
+
+  return (
+    ref.includes("discord") ||
+    ua.includes("discord") ||
+    ua.includes("fban") ||
+    ua.includes("fbav") ||
+    ua.includes("instagram") ||
+    ua.includes("twitter") ||
+    ua.includes("tiktok") ||
+    ua.includes("bytedance") ||
+    ua.includes("snapchat") ||
+    ua.includes("line/") ||
+    ua.includes("micromessenger") ||
+    (ua.includes("android") && (ua.includes("; wv") || ua.includes("version/")))
+  );
+}
+
+/**
+ * Formats authentication and network errors into clear, actionable messages.
+ * Prevents raw stringified object displays like "{}" or "[object Object]"
+ * and provides clear instructions if an in-app browser blocks the connection.
+ */
+export function formatAuthError(
+  err: any,
+  fallbackMessage: string = "Authentication failed. Please try again."
+): string {
+  if (!err) {
+    return "Authentication was restricted by your browser. If you are inside Discord or an in-app browser, tap the top menu (⋮ or Share) and select 'Open in Chrome' or 'Open in Safari'.";
+  }
+
+  let raw = "";
+  if (typeof err === "string") {
+    raw = err;
+  } else if (err.message && typeof err.message === "string") {
+    raw = err.message;
+  } else if (err.error_description && typeof err.error_description === "string") {
+    raw = err.error_description;
+  } else if (err.msg && typeof err.msg === "string") {
+    raw = err.msg;
+  } else {
+    try {
+      raw = JSON.stringify(err);
+    } catch {
+      raw = "";
+    }
+  }
+
+  const trimmed = raw.trim();
+
+  // If the error message is empty, blank object, network block, or CORS failure
+  if (
+    !trimmed ||
+    trimmed === "{}" ||
+    trimmed === "[]" ||
+    trimmed === "[object Object]" ||
+    trimmed === "null" ||
+    trimmed.toLowerCase().includes("failed to fetch") ||
+    trimmed.toLowerCase().includes("networkerror") ||
+    trimmed.toLowerCase().includes("load failed") ||
+    trimmed.toLowerCase().includes("fetch failed") ||
+    err?.name === "AuthRetryableFetchError" ||
+    err?.status === 0
+  ) {
+    return "Connection was restricted by your browser. If you opened Reax inside Discord or another app, tap the top menu (⋮ or Share) and select 'Open in Chrome' or 'Open in Safari'.";
+  }
+
+  // Clear translation for known Supabase messages
+  if (trimmed.includes("User already registered") || trimmed.includes("email address is already registered")) {
+    return "An account with this email already exists. Please switch to Sign In or reset your password.";
+  }
+  if (trimmed.includes("Email rate limit exceeded")) {
+    return "Email rate limit reached. Please wait a few minutes before requesting another verification email.";
+  }
+  if (trimmed.includes("Invalid login credentials")) {
+    return "Invalid email or password. Please check your credentials and try again.";
+  }
+  if (trimmed.includes("Email not confirmed")) {
+    return "Please confirm your email address before signing in. Check your inbox for the confirmation link.";
+  }
+
+  return trimmed || fallbackMessage;
+}
+
+/**
  * Signs up a new account using Email + Password + Username.
  * - If current session is anonymous, calls updateUser so the same user ID is kept.
  * - Otherwise calls signUp with emailRedirectTo = window.location.origin.
  * - Enforces minimum 8 characters for passwords.
+ * - Always requests email verification before granting full login.
+ * - Never returns success=true before email is confirmed.
  */
 export async function signUpWithEmail({
   email,
@@ -143,7 +236,7 @@ export async function signUpWithEmail({
       });
 
       if (error) {
-        return { needsEmailConfirm: false, error: error.message };
+        return { needsEmailConfirm: false, error: formatAuthError(error) };
       }
 
       createdUser = data.user;
@@ -159,7 +252,7 @@ export async function signUpWithEmail({
       });
 
       if (error) {
-        return { needsEmailConfirm: false, error: error.message };
+        return { needsEmailConfirm: false, error: formatAuthError(error) };
       }
 
       createdUser = data.user;
@@ -204,7 +297,7 @@ export async function signUpWithEmail({
       };
     }
   } catch (err: any) {
-    return { needsEmailConfirm: false, error: err?.message || "Sign up failed. Please try again." };
+    return { needsEmailConfirm: false, error: formatAuthError(err, "Sign up failed. Please try again.") };
   }
 }
 
@@ -245,7 +338,7 @@ export async function signInWithEmail({
     });
 
     if (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: formatAuthError(error) };
     }
 
     const checkUser = data.user;
@@ -284,7 +377,7 @@ export async function signInWithEmail({
       };
     }
   } catch (err: any) {
-    return { success: false, error: err?.message || "Failed to sign in." };
+    return { success: false, error: formatAuthError(err, "Failed to sign in.") };
   }
 }
 
@@ -307,11 +400,11 @@ export async function resetPasswordForEmail(email: string): Promise<{ success: b
       redirectTo: origin || undefined
     });
     if (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: formatAuthError(error) };
     }
     return { success: true };
   } catch (err: any) {
-    return { success: false, error: err?.message || "Failed to send reset email. Please try again." };
+    return { success: false, error: formatAuthError(err, "Failed to send reset email. Please try again.") };
   }
 }
 
@@ -329,11 +422,11 @@ export async function updateUserPassword(newPassword: string): Promise<{ success
     }
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) {
-      return { success: false, error: error.message };
+      return { success: false, error: formatAuthError(error) };
     }
     return { success: true };
   } catch (err: any) {
-    return { success: false, error: err?.message || "Failed to update password." };
+    return { success: false, error: formatAuthError(err, "Failed to update password.") };
   }
 }
 
