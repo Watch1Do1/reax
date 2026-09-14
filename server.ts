@@ -1260,7 +1260,7 @@ class SupabaseStore implements Store {
         const { data, error } = await this.client
           .from("user_profiles")
           .select("*")
-          .eq("id", query.id)
+          .or(`id.eq.${query.id},user_id.eq.${query.id}`)
           .maybeSingle();
 
         if (!error && data) {
@@ -1313,7 +1313,6 @@ class SupabaseStore implements Store {
 
   async upsertUserProfile(profile: { id: string; username: string; email?: string; suspended?: boolean; strikes?: number; lastActive?: string; acceptedTermsVersion?: string | null; acceptedPrivacyVersion?: string | null; acceptedTermsAt?: string | null; acceptedPrivacyAt?: string | null }): Promise<UserProfile> {
     const payload: Record<string, any> = {
-      id: profile.id,
       username: profile.username,
       last_active: profile.lastActive || new Date().toISOString()
     };
@@ -1326,27 +1325,77 @@ class SupabaseStore implements Store {
     if (profile.acceptedPrivacyAt !== undefined) payload.accepted_privacy_at = profile.acceptedPrivacyAt;
 
     try {
-      let { data, error } = await this.client
+      // Check if row already exists for this user (by id or user_id)
+      const { data: existingRow } = await this.client
         .from("user_profiles")
-        .upsert(payload, { onConflict: "id" })
-        .select()
-        .single();
+        .select("id, user_id")
+        .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
+        .maybeSingle();
 
-      // Graceful fallback if policy columns are not created in Postgres yet
-      if (error && (error.message?.includes("accepted_terms_version") || error.code === "42703")) {
-        console.warn("accepted_terms_version column not present yet in Supabase table user_profiles. Run supabase_policy_migration.sql in your Supabase SQL editor.");
-        const fallbackPayload = { ...payload };
-        delete fallbackPayload.accepted_terms_version;
-        delete fallbackPayload.accepted_privacy_version;
-        delete fallbackPayload.accepted_terms_at;
-        delete fallbackPayload.accepted_privacy_at;
-        const retryRes = await this.client
+      let data: any = null;
+      let error: any = null;
+
+      if (existingRow) {
+        // Row exists - execute UPDATE (bypasses missing unique constraint on ON CONFLICT)
+        const updateRes = await this.client
           .from("user_profiles")
-          .upsert(fallbackPayload, { onConflict: "id" })
+          .update(payload)
+          .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
           .select()
-          .single();
-        data = retryRes.data;
-        error = retryRes.error;
+          .maybeSingle();
+        data = updateRes.data;
+        error = updateRes.error;
+
+        // Graceful fallback if policy columns are not created in Postgres yet
+        if (error && (error.message?.includes("accepted_terms_version") || error.code === "42703")) {
+          const fallbackPayload: Record<string, any> = { ...payload };
+          delete fallbackPayload.accepted_terms_version;
+          delete fallbackPayload.accepted_privacy_version;
+          delete fallbackPayload.accepted_terms_at;
+          delete fallbackPayload.accepted_privacy_at;
+          const retryRes = await this.client
+            .from("user_profiles")
+            .update(fallbackPayload)
+            .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
+            .select()
+            .maybeSingle();
+          data = retryRes.data;
+          error = retryRes.error;
+        }
+      } else {
+        // Row does not exist - INSERT new profile with both id and user_id set
+        const insertPayload: Record<string, any> = {
+          ...payload,
+          id: profile.id,
+          user_id: profile.id
+        };
+        const insertRes = await this.client
+          .from("user_profiles")
+          .insert([insertPayload])
+          .select()
+          .maybeSingle();
+        data = insertRes.data;
+        error = insertRes.error;
+
+        // Graceful fallback if policy columns or user_id are not present
+        if (error && (error.message?.includes("accepted_terms_version") || error.code === "42703")) {
+          const fallbackPayload: Record<string, any> = { ...insertPayload };
+          delete fallbackPayload.accepted_terms_version;
+          delete fallbackPayload.accepted_privacy_version;
+          delete fallbackPayload.accepted_terms_at;
+          delete fallbackPayload.accepted_privacy_at;
+          const retryRes = await this.client
+            .from("user_profiles")
+            .insert([fallbackPayload])
+            .select()
+            .maybeSingle();
+          data = retryRes.data;
+          error = retryRes.error;
+        }
+      }
+
+      if (error) {
+        console.warn("upsertUserProfile database error:", error.message || error);
       }
 
       if (!error && data) {
@@ -1366,7 +1415,7 @@ class SupabaseStore implements Store {
         };
       }
     } catch (err) {
-      console.warn("upsertUserProfile error:", err);
+      console.warn("upsertUserProfile exception:", err);
     }
 
     return {
@@ -2047,7 +2096,7 @@ app.post("/api/me", async (req, res) => {
 
   try {
     const existing = await store!.getUserProfile({ username: cleanUsername });
-    if (existing && existing.id && existing.id !== user.id) {
+    if (existing && existing.id !== user.id && (existing as any).user_id !== user.id) {
       return res.status(409).json({ error: "Username is already taken by another account." });
     }
 
@@ -2061,20 +2110,21 @@ app.post("/api/me", async (req, res) => {
         privacyVersion: pv,
         acceptedAt: now
       });
-      if (supabaseAdmin) {
-        try {
-          await supabaseAdmin.auth.admin.updateUserById(user.id, {
-            user_metadata: {
-              ...(user as any).user_metadata,
-              accepted_terms_version: tv,
-              accepted_privacy_version: pv,
-              accepted_terms_at: now,
-              accepted_privacy_at: now
-            }
-          });
-        } catch (metaErr) {
-          console.warn("Could not update auth user_metadata in POST /api/me:", metaErr);
-        }
+    }
+
+    if (supabaseAdmin) {
+      try {
+        await supabaseAdmin.auth.admin.updateUserById(user.id, {
+          user_metadata: {
+            ...(user as any).user_metadata,
+            username: cleanUsername,
+            display_name: cleanUsername,
+            ...(acceptedTermsVersion ? { accepted_terms_version: acceptedTermsVersion } : {}),
+            ...(acceptedPrivacyVersion ? { accepted_privacy_version: acceptedPrivacyVersion } : {})
+          }
+        });
+      } catch (metaErr) {
+        console.warn("Could not update auth user_metadata in POST /api/me:", metaErr);
       }
     }
 

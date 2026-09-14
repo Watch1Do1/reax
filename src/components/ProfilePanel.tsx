@@ -121,18 +121,21 @@ export default function ProfilePanel({
       setUsernameError("Username must be at least 3 characters");
       return;
     }
-    if (clean.length > 18) {
-      setUsernameError("Username must be 18 characters or fewer");
+    if (clean.length > 20) {
+      setUsernameError("Username must be 20 characters or fewer");
       return;
     }
 
     setIsSavingUsername(true);
     try {
-      await syncUserProfile(clean);
+      const updated = await syncUserProfile(clean);
+      const savedName = updated?.username || clean;
+      setEditedUsername(savedName);
       if (onUsernameUpdated) {
-        onUsernameUpdated(clean);
+        onUsernameUpdated(savedName);
       }
       setIsEditingUsername(false);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: `Username updated to @${savedName}!` } }));
     } catch (err: any) {
       setUsernameError(err?.message || "Could not save username");
     } finally {
@@ -208,7 +211,7 @@ export default function ProfilePanel({
                       value={editedUsername}
                       onChange={(e) => setEditedUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
                       className="w-full pl-7 pr-3 py-2 bg-slate-900 border border-indigo-500/50 rounded-lg text-sm text-white font-mono focus:outline-none"
-                      maxLength={18}
+                      maxLength={20}
                       autoFocus
                     />
                   </div>

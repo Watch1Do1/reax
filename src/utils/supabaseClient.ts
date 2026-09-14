@@ -612,6 +612,24 @@ export async function syncUserProfile(
     acceptedPrivacyVersion?: string;
   }
 ): Promise<UserProfile> {
+  const cleanUsername = username.trim().replace(/^@/, "");
+
+  // 1. Update Supabase Auth user_metadata so client session always reflects new username
+  try {
+    const supabase = await getSupabaseClient();
+    if (supabase) {
+      await supabase.auth.updateUser({
+        data: {
+          username: cleanUsername,
+          display_name: cleanUsername
+        }
+      });
+    }
+  } catch (authErr) {
+    console.warn("Could not update auth user_metadata on client:", authErr);
+  }
+
+  // 2. Persist in database via backend /api/me
   const token = await getAuthToken();
   const res = await fetch("/api/me", {
     method: "POST",
@@ -620,7 +638,7 @@ export async function syncUserProfile(
       Authorization: `Bearer ${token}`
     },
     body: JSON.stringify({ 
-      username,
+      username: cleanUsername,
       acceptedTermsVersion: policyData?.acceptedTermsVersion || TERMS_VERSION,
       acceptedPrivacyVersion: policyData?.acceptedPrivacyVersion || PRIVACY_VERSION
     })
@@ -628,6 +646,8 @@ export async function syncUserProfile(
 
   if (res.ok) {
     const data = await res.json();
+    const finalUsername = data.profile?.username || cleanUsername;
+    localStorage.setItem("clips_username", finalUsername);
     return data.profile;
   }
 
@@ -637,9 +657,10 @@ export async function syncUserProfile(
   }
 
   // Graceful fallback if backend /api/me is 404 / unavailable
+  localStorage.setItem("clips_username", cleanUsername);
   const fallbackProfile: UserProfile = {
     id: "user-" + Date.now(),
-    username,
+    username: cleanUsername,
     createdAt: new Date().toISOString(),
     lastActive: new Date().toISOString(),
     reactionCount: 0,
