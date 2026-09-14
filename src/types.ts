@@ -9,6 +9,7 @@ export type Clip = {
   voiceStyle?: "casual" | "sarcastic" | "dramatic" | "announcer" | "oldschool";
   tone: "funny" | "dramatic" | "sarcastic" | "chill" | "chaotic";
   authorName: string;
+  userId?: string;
   authorId?: string;
   createdAt: string;
   likesCount: number;

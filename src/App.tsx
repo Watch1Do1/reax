@@ -214,19 +214,31 @@ export default function App() {
 
   const saveUsername = async () => {
     const clean = tempUsername.trim().replace(/[^a-zA-Z0-9_]/g, "");
-    if (clean) {
+    if (!clean) {
+      setIsEditingUsername(false);
+      return;
+    }
+    if (clean.length < 3 || clean.length > 20) {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Username must be between 3 and 20 characters." } }));
+      return;
+    }
+    if (isLoggedIn) {
+      try {
+        await syncUserProfile(clean);
+        setUsername(clean);
+        localStorage.setItem("clips_username", clean);
+        setRefreshTrigger(prev => prev + 1);
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: `Username updated to @${clean}!` } }));
+        setIsEditingUsername(false);
+      } catch (e: any) {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: e?.message || "Username is already taken." } }));
+      }
+    } else {
       setUsername(clean);
       localStorage.setItem("clips_username", clean);
-      if (isLoggedIn) {
-        try {
-          await syncUserProfile(clean);
-        } catch (e) {
-          console.warn("Could not sync username to backend:", e);
-        }
-      }
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: `Username updated to @${clean}!` } }));
+      setIsEditingUsername(false);
     }
-    setIsEditingUsername(false);
   };
 
   const handleLoginSuccess = async (newUsername: string) => {
@@ -1386,6 +1398,7 @@ export default function App() {
           setUsername(newUsername);
           setTempUsername(newUsername);
           localStorage.setItem("clips_username", newUsername);
+          setRefreshTrigger(prev => prev + 1);
         }}
         clips={clips}
         onClipSelect={(targetId) => setSelectedThreadRootId(targetId)}

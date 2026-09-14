@@ -197,6 +197,15 @@ export async function signUpWithEmail({
     return { needsEmailConfirm: false, error: "Please choose a username." };
   }
 
+  // Enforce username uniqueness before creating account
+  const availability = await checkUsernameAvailable(cleanUsername);
+  if (!availability.available) {
+    return {
+      needsEmailConfirm: false,
+      error: availability.error || `Username @${cleanUsername} is already taken. Please choose another username.`
+    };
+  }
+
   try {
     const supabase = await getSupabaseClient();
     if (!supabase) {
@@ -565,6 +574,35 @@ export async function getCurrentSupabaseUser(): Promise<User | null> {
 }
 
 /**
+ * Check if a username is available (enforcing uniqueness)
+ */
+export async function checkUsernameAvailable(username: string): Promise<{ available: boolean; error?: string }> {
+  const clean = username.trim().replace(/^@/, "");
+  if (clean.length < 3) return { available: false, error: "Username must be at least 3 characters." };
+  if (clean.length > 20) return { available: false, error: "Username must be 20 characters or fewer." };
+  if (!/^[a-zA-Z0-9_]+$/.test(clean)) {
+    return { available: false, error: "Username can only contain letters, numbers, and underscores." };
+  }
+
+  try {
+    const token = await getAuthToken();
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/users/check-username?username=${encodeURIComponent(clean)}`, {
+      headers
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+    const errData = await res.json().catch(() => ({}));
+    return { available: false, error: errData.error || "Could not verify username." };
+  } catch {
+    return { available: true };
+  }
+}
+
+/**
  * Sync / upsert user profile on backend (POST /api/me)
  */
 export async function syncUserProfile(
@@ -575,26 +613,27 @@ export async function syncUserProfile(
   }
 ): Promise<UserProfile> {
   const token = await getAuthToken();
-  try {
-    const res = await fetch("/api/me", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`
-      },
-      body: JSON.stringify({ 
-        username,
-        acceptedTermsVersion: policyData?.acceptedTermsVersion || TERMS_VERSION,
-        acceptedPrivacyVersion: policyData?.acceptedPrivacyVersion || PRIVACY_VERSION
-      })
-    });
+  const res = await fetch("/api/me", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ 
+      username,
+      acceptedTermsVersion: policyData?.acceptedTermsVersion || TERMS_VERSION,
+      acceptedPrivacyVersion: policyData?.acceptedPrivacyVersion || PRIVACY_VERSION
+    })
+  });
 
-    if (res.ok) {
-      const data = await res.json();
-      return data.profile;
-    }
-  } catch (err) {
-    console.warn("syncUserProfile endpoint failed, using local profile:", err);
+  if (res.ok) {
+    const data = await res.json();
+    return data.profile;
+  }
+
+  const errData = await res.json().catch(() => ({}));
+  if (res.status === 409 || errData?.error) {
+    throw new Error(errData?.error || "Username is already taken.");
   }
 
   // Graceful fallback if backend /api/me is 404 / unavailable

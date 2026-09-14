@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, User, Mail, Lock, LogOut, Film, Sparkles, Check, 
-  AlertCircle, CheckCircle, KeyRound, Clock, Flame, ShieldCheck 
+  AlertCircle, CheckCircle, KeyRound, Clock, Flame, ShieldCheck,
+  Eye, EyeOff
 } from "lucide-react";
 import { Clip } from "../types";
 import { 
@@ -39,6 +40,8 @@ export default function ProfilePanel({
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordMsg, setPasswordMsg] = useState<{ type: "error" | "success"; text: string } | null>(null);
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
@@ -278,24 +281,46 @@ export default function ProfilePanel({
               <form onSubmit={handlePasswordSubmit} className="space-y-3 pt-2">
                 <div>
                   <label className="block text-[11px] font-mono text-slate-400 mb-1">New Password (min 8 chars)</label>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
-                    autoFocus
-                  />
+                  <div className="relative">
+                    <input
+                      type={showNewPassword ? "text" : "password"}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full pl-3 pr-8 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(prev => !prev)}
+                      className="absolute right-2.5 top-2.5 p-0.5 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer focus:outline-none"
+                      title={showNewPassword ? "Hide password" : "Show password"}
+                      aria-label={showNewPassword ? "Hide password" : "Show password"}
+                    >
+                      {showNewPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-[11px] font-mono text-slate-400 mb-1">Confirm New Password</label>
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showConfirmPassword ? "text" : "password"}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full pl-3 pr-8 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white font-mono focus:outline-none focus:border-indigo-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(prev => !prev)}
+                      className="absolute right-2.5 top-2.5 p-0.5 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer focus:outline-none"
+                      title={showConfirmPassword ? "Hide password" : "Show password"}
+                      aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                    >
+                      {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
                 </div>
 
                 {passwordMsg && (

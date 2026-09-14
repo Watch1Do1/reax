@@ -85,6 +85,7 @@ export type Clip = {
   voiceStyle?: "casual" | "sarcastic" | "dramatic" | "announcer" | "oldschool";
   tone: "funny" | "dramatic" | "sarcastic" | "chill" | "chaotic";
   authorName: string;
+  userId?: string;
   authorId?: string;
   createdAt: string;
   likesCount: number;
@@ -183,6 +184,8 @@ class MemoryStore implements Store {
       mediaUrl: "https://assets.mixkit.co/videos/preview/mixkit-cat-walking-in-the-snow-animated-3532-large.mp4",
       voiceText: "Where is everyone going? I am freezing here!",
       tone: "funny",
+      userId: "user-snowcat",
+      authorId: "user-snowcat",
       authorName: "SnowCat",
       createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
       likesCount: 14,
@@ -198,6 +201,8 @@ class MemoryStore implements Store {
       mediaUrl: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=500",
       voiceText: "I am coming with the hot chocolate right now!",
       tone: "chill",
+      userId: "user-rescuepup",
+      authorId: "user-rescuepup",
       authorName: "RescuePup",
       createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
       likesCount: 9,
@@ -213,6 +218,8 @@ class MemoryStore implements Store {
       mediaUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500",
       voiceText: "Sure you are... at a speed of two miles per hour.",
       tone: "sarcastic",
+      userId: "user-skepticalsteve",
+      authorId: "user-skepticalsteve",
       authorName: "SkepticalSteve",
       createdAt: new Date(Date.now() - 3600000 * 3).toISOString(),
       likesCount: 5,
@@ -228,6 +235,8 @@ class MemoryStore implements Store {
       mediaUrl: "https://assets.mixkit.co/videos/preview/mixkit-waves-breaking-in-the-ocean-1527-large.mp4",
       voiceText: "The ocean is beautiful but wait for the giant storm!",
       tone: "dramatic",
+      userId: "user-seafarer",
+      authorId: "user-seafarer",
       authorName: "SeaFarer",
       createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
       likesCount: 28,
@@ -243,6 +252,8 @@ class MemoryStore implements Store {
       mediaUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500",
       voiceText: "Wait... did you say a giant storm?! Oh no!",
       tone: "chaotic",
+      userId: "user-panickedpam",
+      authorId: "user-panickedpam",
       authorName: "PanickedPam",
       createdAt: new Date(Date.now() - 3600000 * 1).toISOString(),
       likesCount: 12,
@@ -256,7 +267,13 @@ class MemoryStore implements Store {
 
   private reports: Report[] = [];
   private contactMessages: ContactMessage[] = [];
-  private userProfiles: UserProfile[] = [];
+  private userProfiles: UserProfile[] = [
+    { id: "user-snowcat", username: "SnowCat", createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), reactionCount: 1, suspended: false, strikes: 0 },
+    { id: "user-rescuepup", username: "RescuePup", createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), reactionCount: 1, suspended: false, strikes: 0 },
+    { id: "user-skepticalsteve", username: "SkepticalSteve", createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), reactionCount: 1, suspended: false, strikes: 0 },
+    { id: "user-seafarer", username: "SeaFarer", createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), reactionCount: 1, suspended: false, strikes: 0 },
+    { id: "user-panickedpam", username: "PanickedPam", createdAt: new Date().toISOString(), lastActive: new Date().toISOString(), reactionCount: 1, suspended: false, strikes: 0 },
+  ];
   private likesMap: Map<string, Set<string>> = new Map();
   private laughsMap: Map<string, Set<string>> = new Map();
   private funnelStats: FunnelStats = {
@@ -278,21 +295,41 @@ class MemoryStore implements Store {
 
   async getClips(includeDeleted = false): Promise<Clip[]> {
     const filtered = includeDeleted ? this.clips : this.clips.filter(c => !c.deleted);
-    return [...filtered].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Always look up current username dynamically from the user table
+    const resolved = filtered.map(c => {
+      const uId = c.userId || c.authorId;
+      const user = uId ? this.userProfiles.find(u => u.id === uId) : null;
+      return {
+        ...c,
+        userId: uId || undefined,
+        authorId: uId || undefined,
+        authorName: user ? user.username : c.authorName
+      };
+    });
+    return [...resolved].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async getClip(id: string): Promise<Clip | null> {
-    return this.clips.find(c => c.id === id) || null;
+    const c = this.clips.find(clip => clip.id === id);
+    if (!c) return null;
+    const uId = c.userId || c.authorId;
+    const user = uId ? this.userProfiles.find(u => u.id === uId) : null;
+    return {
+      ...c,
+      userId: uId || undefined,
+      authorId: uId || undefined,
+      authorName: user ? user.username : c.authorName
+    };
   }
 
   async countClipsByAuthor(authorId: string): Promise<number> {
-    return this.clips.filter(c => c.authorId === authorId && !c.deleted).length;
+    return this.clips.filter(c => (c.userId === authorId || c.authorId === authorId) && !c.deleted).length;
   }
 
   async updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number> {
     let updated = 0;
     for (const clip of this.clips) {
-      if (clip.authorId === authorId) {
+      if (clip.userId === authorId || clip.authorId === authorId) {
         clip.authorName = newAuthorName;
         updated++;
       }
@@ -605,8 +642,9 @@ function mapDbToClip(dbRow: any): Clip {
     overlayText: safeRow.overlay_text || undefined,
     tone: safeRow.tone || "chill",
     effect: safeRow.effect || "zoom",
+    userId: safeRow.user_id || safeRow.author_id || undefined,
+    authorId: safeRow.author_id || safeRow.user_id || undefined,
     authorName: safeRow.author_name || "Anonymous",
-    authorId: safeRow.author_id || undefined,
     likesCount: safeRow.likes_count ?? 0,
     laughsCount: safeRow.laughs_count ?? 0,
     createdAt: dateStr,
@@ -629,6 +667,8 @@ function mapClipToDb(clip: Clip) {
     }
   }
 
+  const resolvedUserId = isValidUuid(clip.userId) ? clip.userId : (isValidUuid(clip.authorId) ? clip.authorId : null);
+
   const payload: Record<string, any> = {
     id: clip.id,
     parent_id: isValidUuid(clip.parentId) ? clip.parentId : null,
@@ -640,8 +680,9 @@ function mapClipToDb(clip: Clip) {
     overlay_text: clip.overlayText || null,
     tone: clip.tone,
     effect: clip.effect || "zoom",
+    user_id: resolvedUserId,
+    author_id: resolvedUserId,
     author_name: clip.authorName,
-    author_id: isValidUuid(clip.authorId) ? clip.authorId : null,
     likes_count: clip.likesCount ?? 0,
     laughs_count: clip.laughsCount ?? 0,
     original_author: clip.originalAuthor || null,
@@ -687,7 +728,7 @@ class SupabaseStore implements Store {
           this.client
             .from("clips")
             .select(
-              "id, parent_id, media_url, media_type, voice_text, voice_audio_url, voice_style, overlay_text, tone, effect, author_name, author_id, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
+              "id, parent_id, media_url, media_type, voice_text, voice_audio_url, voice_style, overlay_text, tone, effect, user_id, author_id, author_name, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count"
             )
             .order("created_at", { ascending: false })
             .limit(100),
@@ -704,8 +745,45 @@ class SupabaseStore implements Store {
       }
 
       const clips = (data || []).map(mapDbToClip);
-      if (includeDeleted) return clips;
-      return clips.filter((c: Clip) => !c.deleted);
+      const filtered = includeDeleted ? clips : clips.filter((c: Clip) => !c.deleted);
+
+      // Always look up current username from user_profiles table for each clip
+      const authorIds = Array.from(
+        new Set(
+          filtered
+            .map((c: Clip) => c.userId || c.authorId)
+            .filter((id: any) => id && isValidUuid(id))
+        )
+      );
+
+      if (authorIds.length > 0) {
+        try {
+          const { data: userRows } = await this.client
+            .from("user_profiles")
+            .select("id, user_id, username")
+            .or(`id.in.(${authorIds.join(",")}),user_id.in.(${authorIds.join(",")})`);
+
+          if (userRows && userRows.length > 0) {
+            const userMap = new Map<string, string>();
+            for (const u of userRows) {
+              if (u.username) {
+                if (u.id) userMap.set(u.id, u.username);
+                if (u.user_id) userMap.set(u.user_id, u.username);
+              }
+            }
+            for (const c of filtered) {
+              const uId = c.userId || c.authorId;
+              if (uId && userMap.has(uId)) {
+                c.authorName = userMap.get(uId)!;
+              }
+            }
+          }
+        } catch (lookupErr) {
+          console.warn("Could not lookup current usernames for clips from user_profiles:", lookupErr);
+        }
+      }
+
+      return filtered;
     } catch (err: any) {
       console.error("SupabaseStore.getClips error:", err?.message || err);
       return [];
@@ -720,7 +798,22 @@ class SupabaseStore implements Store {
       .maybeSingle();
 
     if (error) throw error;
-    return data ? mapDbToClip(data) : null;
+    if (!data) return null;
+    const clip = mapDbToClip(data);
+    const uId = clip.userId || clip.authorId;
+    if (uId && isValidUuid(uId)) {
+      try {
+        const { data: userRow } = await this.client
+          .from("user_profiles")
+          .select("username")
+          .or(`id.eq.${uId},user_id.eq.${uId}`)
+          .maybeSingle();
+        if (userRow?.username) {
+          clip.authorName = userRow.username;
+        }
+      } catch {}
+    }
+    return clip;
   }
 
   async countClipsByAuthor(authorId: string): Promise<number> {
@@ -728,7 +821,7 @@ class SupabaseStore implements Store {
       const { count, error } = await this.client
         .from("clips")
         .select("id", { count: "exact", head: true })
-        .eq("author_id", authorId)
+        .or(`user_id.eq.${authorId},author_id.eq.${authorId}`)
         .eq("deleted", false);
 
       if (!error && typeof count === "number") {
@@ -740,7 +833,7 @@ class SupabaseStore implements Store {
       const { data, error: selectErr } = await this.client
         .from("clips")
         .select("id")
-        .eq("author_id", authorId)
+        .or(`user_id.eq.${authorId},author_id.eq.${authorId}`)
         .eq("deleted", false);
 
       if (selectErr) {
@@ -759,7 +852,7 @@ class SupabaseStore implements Store {
       const { data, error } = await this.client
         .from("clips")
         .update({ author_name: newAuthorName })
-        .eq("author_id", authorId)
+        .or(`user_id.eq.${authorId},author_id.eq.${authorId}`)
         .select("id");
 
       if (error) {
@@ -781,9 +874,21 @@ class SupabaseStore implements Store {
       .select()
       .single();
 
+    // If user_id column doesn't exist on remote db yet, fallback without user_id
+    if (error && (error.message?.includes("user_id") || error.details?.includes("user_id") || error.code === "42703")) {
+      const { user_id, ...fallbackDbClip } = dbClip;
+      const retryRes = await this.client
+        .from("clips")
+        .insert([fallbackDbClip])
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
+
     // Gracefully handle case where voice_audio_url column does not exist on remote Supabase DB yet
     if (error && (error.message?.includes("voice_audio_url") || error.details?.includes("voice_audio_url") || error.code === "42703")) {
-      const { voice_audio_url, ...fallbackDbClip } = dbClip;
+      const { voice_audio_url, user_id, ...fallbackDbClip } = dbClip;
       const retryRes = await this.client
         .from("clips")
         .insert([fallbackDbClip])
@@ -1720,7 +1825,7 @@ BEGIN
     base_username := 'user_' || substr(NEW.id::text, 1, 8);
   END IF;
   extracted_username := base_username;
-  WHILE EXISTS (SELECT 1 FROM public.user_profiles WHERE username = extracted_username AND user_id != NEW.id AND id != NEW.id) LOOP
+  WHILE EXISTS (SELECT 1 FROM public.user_profiles WHERE LOWER(username) = LOWER(extracted_username) AND user_id != NEW.id AND id != NEW.id) LOOP
     suffix := suffix + 1;
     extracted_username := base_username || '_' || suffix::text;
   END LOOP;
@@ -1756,13 +1861,16 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Unique case-insensitive username index
+CREATE UNIQUE INDEX IF NOT EXISTS user_profiles_username_lower_idx ON public.user_profiles (LOWER(username));
+
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
 
--- Clips Table
+-- Clips Table (stores user_id referencing user_profiles)
 CREATE TABLE IF NOT EXISTS public.clips (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   parent_id UUID REFERENCES public.clips(id) ON DELETE CASCADE,
@@ -1774,8 +1882,9 @@ CREATE TABLE IF NOT EXISTS public.clips (
   overlay_text TEXT,
   tone TEXT NOT NULL,
   effect TEXT NOT NULL,
-  author_name TEXT NOT NULL,
+  user_id UUID REFERENCES public.user_profiles(id) ON DELETE SET NULL,
   author_id UUID REFERENCES public.user_profiles(id) ON DELETE SET NULL,
+  author_name TEXT NOT NULL,
   likes_count INTEGER DEFAULT 0,
   laughs_count INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -1784,6 +1893,11 @@ CREATE TABLE IF NOT EXISTS public.clips (
   deleted BOOLEAN DEFAULT false,
   report_count INTEGER DEFAULT 0
 );
+
+-- Ensure user_id column exists on existing clips table
+ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.user_profiles(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS clips_user_id_idx ON public.clips (user_id);
+UPDATE public.clips SET user_id = author_id WHERE user_id IS NULL AND author_id IS NOT NULL;
 
 -- Ensure voice_audio_url column exists on existing clips table
 ALTER TABLE public.clips ADD COLUMN IF NOT EXISTS voice_audio_url TEXT;
@@ -2066,6 +2180,70 @@ app.post("/api/policy/accept", async (req, res) => {
   }
 });
 
+// API: Check username availability
+app.get("/api/users/check-username", async (req, res) => {
+  const rawUsername = String(req.query.username || "").trim();
+  const cleanUsername = rawUsername.replace(/^@/, "");
+
+  if (!cleanUsername || cleanUsername.length < 3) {
+    return res.status(400).json({ available: false, error: "Username must be at least 3 characters." });
+  }
+  if (cleanUsername.length > 20) {
+    return res.status(400).json({ available: false, error: "Username must be 20 characters or fewer." });
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
+    return res.status(400).json({ available: false, error: "Username can only contain letters, numbers, and underscores." });
+  }
+
+  // Check if caller is authenticated (to allow checking own username)
+  let currentUserId: string | null = null;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ") && supabaseAdmin) {
+    try {
+      const token = authHeader.split(" ")[1];
+      const { data } = await supabaseAdmin.auth.getUser(token);
+      if (data?.user) currentUserId = data.user.id;
+    } catch {}
+  }
+
+  try {
+    const existing = await store!.getUserProfile({ username: cleanUsername });
+    if (existing) {
+      if (currentUserId && (existing.id === currentUserId || (existing as any).userId === currentUserId)) {
+        return res.json({ available: true });
+      }
+      return res.json({ available: false, error: `Username @${cleanUsername} is already taken.` });
+    }
+    return res.json({ available: true });
+  } catch (err: any) {
+    console.error("GET /api/users/check-username error:", err);
+    return res.json({ available: true });
+  }
+});
+
+// API: Batch lookup usernames by user ID
+app.get("/api/users/lookup", async (req, res) => {
+  try {
+    const idsParam = String(req.query.ids || "").trim();
+    if (!idsParam) return res.json({ users: {} });
+    const ids = idsParam.split(",").map(s => s.trim()).filter(Boolean);
+    const result: Record<string, string> = {};
+
+    for (const id of ids) {
+      try {
+        const user = await store!.getUserProfile({ id });
+        if (user && user.username) {
+          result[id] = user.username;
+        }
+      } catch {}
+    }
+    return res.json({ users: result });
+  } catch (err: any) {
+    console.error("GET /api/users/lookup error:", err);
+    return res.json({ users: {} });
+  }
+});
+
 // API: Get all active, non-deleted clips
 app.get("/api/clips", async (req, res) => {
   try {
@@ -2192,8 +2370,9 @@ app.post("/api/clips", async (req, res) => {
       voiceAudioUrl: typeof voiceAudioUrl === "string" && voiceAudioUrl ? voiceAudioUrl : undefined,
       voiceStyle,
       tone,
-      authorName: profile.username,
+      userId: user.id,
       authorId: user.id,
+      authorName: profile.username,
       createdAt: new Date().toISOString(),
       likesCount: 0,
       laughsCount: 0,

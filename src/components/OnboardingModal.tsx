@@ -3,7 +3,7 @@ import { motion } from "motion/react";
 import { 
   Sparkles, ShieldCheck, Mail, Lock, User, AlertCircle, 
   CheckCircle, ArrowRight, LogIn, UserPlus, Check,
-  Compass, Copy, ExternalLink
+  Compass, Copy, ExternalLink, Eye, EyeOff
 } from "lucide-react";
 import { 
   signUpWithEmail, 
@@ -12,7 +12,8 @@ import {
   fetchMyProfile,
   resetPasswordForEmail,
   formatAuthError,
-  isInAppBrowser
+  isInAppBrowser,
+  checkUsernameAvailable
 } from "../utils/supabaseClient";
 import PolicyDocumentModal from "./PolicyDocumentModal";
 
@@ -49,6 +50,9 @@ export default function OnboardingModal({
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [resetEmailSent, setResetEmailSent] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showSignupPassword, setShowSignupPassword] = useState(false);
+  const [showSignupConfirmPassword, setShowSignupConfirmPassword] = useState(false);
 
   const isInApp = isInAppBrowser();
 
@@ -173,6 +177,13 @@ export default function OnboardingModal({
     const uErr = validateUsername(cleanUsername);
     if (uErr) {
       setError(uErr);
+      return;
+    }
+
+    // Enforce unique @username
+    const avail = await checkUsernameAvailable(cleanUsername);
+    if (!avail.available) {
+      setError(avail.error || `Username @${cleanUsername} is already taken. Please choose another username.`);
       return;
     }
 
@@ -508,13 +519,22 @@ export default function OnboardingModal({
                     <div className="relative">
                       <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
                       <input
-                        type="password"
+                        type={showLoginPassword ? "text" : "password"}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="••••••••"
                         required
-                        className="w-full pl-9 pr-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                        className="w-full pl-9 pr-10 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowLoginPassword(prev => !prev)}
+                        className="absolute right-3 top-2.5 p-1 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer focus:outline-none"
+                        title={showLoginPassword ? "Hide password" : "Show password"}
+                        aria-label={showLoginPassword ? "Hide password" : "Show password"}
+                      >
+                        {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
                   </div>
 
@@ -611,25 +631,47 @@ export default function OnboardingModal({
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[11px] font-mono text-slate-400 mb-1">Password (min 8)</label>
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="••••••••"
-                        required
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-                      />
+                      <div className="relative">
+                        <input
+                          type={showSignupPassword ? "text" : "password"}
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="••••••••"
+                          required
+                          className="w-full pl-3 pr-8 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowSignupPassword(prev => !prev)}
+                          className="absolute right-2 top-2 p-0.5 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer focus:outline-none"
+                          title={showSignupPassword ? "Hide password" : "Show password"}
+                          aria-label={showSignupPassword ? "Hide password" : "Show password"}
+                        >
+                          {showSignupPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-[11px] font-mono text-slate-400 mb-1">Confirm Password</label>
-                      <input
-                        type="password"
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        placeholder="••••••••"
-                        required
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
-                      />
+                      <div className="relative">
+                        <input
+                          type={showSignupConfirmPassword ? "text" : "password"}
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="••••••••"
+                          required
+                          className="w-full pl-3 pr-8 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowSignupConfirmPassword(prev => !prev)}
+                          className="absolute right-2 top-2 p-0.5 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer focus:outline-none"
+                          title={showSignupConfirmPassword ? "Hide password" : "Show password"}
+                          aria-label={showSignupConfirmPassword ? "Hide password" : "Show password"}
+                        >
+                          {showSignupConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
