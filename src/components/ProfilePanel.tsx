@@ -20,6 +20,7 @@ export interface ProfilePanelProps {
   currentUsername: string;
   onSignOut: () => void;
   onUsernameUpdated?: (newUsername: string) => void;
+  onRefreshClips?: () => void;
   clips?: Clip[];
   onClipSelect?: (clipId: string) => void;
 }
@@ -30,6 +31,7 @@ export default function ProfilePanel({
   currentUsername,
   onSignOut,
   onUsernameUpdated,
+  onRefreshClips,
   clips = [],
   onClipSelect
 }: ProfilePanelProps) {
@@ -125,29 +127,50 @@ export default function ProfilePanel({
   const handleSaveUsername = async (e: React.FormEvent) => {
     e.preventDefault();
     setUsernameError(null);
-    const clean = editedUsername.trim().replace(/[^a-zA-Z0-9_]/g, "");
+    const clean = editedUsername.trim().replace(/^@/, "").replace(/[^a-zA-Z0-9_]/g, "");
 
     if (clean.length < 3) {
-      setUsernameError("Username must be at least 3 characters");
+      setUsernameError("Username must be at least 3 characters.");
       return;
     }
     if (clean.length > 20) {
-      setUsernameError("Username must be 20 characters or fewer");
+      setUsernameError("Username must be 20 characters or fewer.");
       return;
     }
 
     setIsSavingUsername(true);
     try {
-      const updated = await syncUserProfile(clean);
-      const savedName = updated?.username || clean;
+      const syncRes = await syncUserProfile(clean);
+      const savedName = syncRes.profile?.username || syncRes.username;
+      if (!savedName) {
+        throw new Error("Server did not return a valid username.");
+      }
+
+      // Do not keep a local-only name: update state with server-confirmed username
       setEditedUsername(savedName);
       if (onUsernameUpdated) {
         onUsernameUpdated(savedName);
       }
+      if (onRefreshClips) {
+        onRefreshClips();
+      }
       setIsEditingUsername(false);
-      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: `Username updated to @${savedName}!` } }));
+      window.dispatchEvent(
+        new CustomEvent("reax_toast", {
+          detail: { message: `Username updated to @${savedName}! (${syncRes.clipsUpdated || 0} clips rewritten)` }
+        })
+      );
     } catch (err: any) {
-      setUsernameError(err?.message || "Could not save username");
+      // On save failure show the server message (taken / auth).
+      const serverMsg = err?.message || "Could not save username.";
+      setUsernameError(serverMsg);
+      // Do not keep a local-only name: revert back to current confirmed username
+      setEditedUsername(currentUsername);
+      window.dispatchEvent(
+        new CustomEvent("reax_toast", {
+          detail: { message: `Save failed: ${serverMsg}` }
+        })
+      );
     } finally {
       setIsSavingUsername(false);
     }
@@ -234,14 +257,21 @@ export default function ProfilePanel({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setIsEditingUsername(false)}
+                    onClick={() => {
+                      setIsEditingUsername(false);
+                      setEditedUsername(currentUsername);
+                      setUsernameError(null);
+                    }}
                     className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono rounded-lg transition-colors cursor-pointer"
                   >
                     Cancel
                   </button>
                 </div>
                 {usernameError && (
-                  <p className="text-[11px] text-rose-400 font-mono">{usernameError}</p>
+                  <div className="flex items-center gap-1.5 p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                    <span>{usernameError}</span>
+                  </div>
                 )}
               </form>
             ) : (

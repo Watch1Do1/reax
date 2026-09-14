@@ -849,20 +849,31 @@ class SupabaseStore implements Store {
 
   async updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number> {
     try {
-      const { data, error } = await this.client
+      let { data, error } = await this.client
         .from("clips")
         .update({ author_name: newAuthorName })
-        .or(`user_id.eq.${authorId},author_id.eq.${authorId}`)
+        .or(`author_id.eq.${authorId},user_id.eq.${authorId}`)
         .select("id");
 
+      // In case user_id column does not exist on clips table, fallback to author_id
+      if (error && (error.code === "42703" || error.message?.includes("user_id"))) {
+        const fallback = await this.client
+          .from("clips")
+          .update({ author_name: newAuthorName })
+          .eq("author_id", authorId)
+          .select("id");
+        data = fallback.data;
+        error = fallback.error;
+      }
+
       if (error) {
-        console.warn("SupabaseStore.updateClipsAuthorName error:", error.message || error);
-        return 0;
+        console.error("SupabaseStore.updateClipsAuthorName database error:", error.message || error);
+        throw new Error(error.message || "Failed to update clips author name");
       }
       return data?.length || 0;
     } catch (err: any) {
-      console.warn("SupabaseStore.updateClipsAuthorName exception:", err?.message || err);
-      return 0;
+      console.error("SupabaseStore.updateClipsAuthorName exception:", err?.message || err);
+      throw err;
     }
   }
 
@@ -1282,27 +1293,34 @@ class SupabaseStore implements Store {
       }
 
       if (query.username) {
+        const clean = query.username.trim();
+        const escaped = clean.replace(/[%_]/g, "\\$&");
         const { data, error } = await this.client
           .from("user_profiles")
           .select("*")
-          .ilike("username", query.username.trim())
-          .maybeSingle();
+          .ilike("username", escaped)
+          .limit(10);
 
-        if (!error && data) {
-          return {
-            id: data.id,
-            username: data.username,
-            email: data.email,
-            createdAt: data.created_at,
-            lastActive: data.last_active,
-            reactionCount: data.reaction_count || 0,
-            suspended: data.suspended || false,
-            strikes: data.strikes || 0,
-            acceptedTermsVersion: data.accepted_terms_version || null,
-            acceptedPrivacyVersion: data.accepted_privacy_version || null,
-            acceptedTermsAt: data.accepted_terms_at || null,
-            acceptedPrivacyAt: data.accepted_privacy_at || null
-          };
+        if (!error && data && data.length > 0) {
+          const matched = data.find(
+            (row: any) => row.username && row.username.trim().toLowerCase() === clean.toLowerCase()
+          );
+          if (matched) {
+            return {
+              id: matched.id,
+              username: matched.username,
+              email: matched.email,
+              createdAt: matched.created_at,
+              lastActive: matched.last_active,
+              reactionCount: matched.reaction_count || 0,
+              suspended: matched.suspended || false,
+              strikes: matched.strikes || 0,
+              acceptedTermsVersion: matched.accepted_terms_version || null,
+              acceptedPrivacyVersion: matched.accepted_privacy_version || null,
+              acceptedTermsAt: matched.accepted_terms_at || null,
+              acceptedPrivacyAt: matched.accepted_privacy_at || null
+            };
+          }
         }
       }
     } catch (err) {
@@ -2095,9 +2113,10 @@ app.post("/api/me", async (req, res) => {
   }
 
   try {
+    // Check if another profile has the same LOWER(username) (case-insensitive)
     const existing = await store!.getUserProfile({ username: cleanUsername });
     if (existing && existing.id !== user.id && (existing as any).user_id !== user.id) {
-      return res.status(409).json({ error: "Username is already taken by another account." });
+      return res.status(409).json({ error: `Username @${cleanUsername} is already taken.` });
     }
 
     const now = new Date().toISOString();
@@ -2128,6 +2147,7 @@ app.post("/api/me", async (req, res) => {
       }
     }
 
+    // 1. Upsert user_profiles.username for the Bearer user
     const updatedProfile = await store!.upsertUserProfile({
       id: user.id,
       username: cleanUsername,
@@ -2146,18 +2166,15 @@ app.post("/api/me", async (req, res) => {
     if (acceptedTermsVersion) updatedProfile.acceptedTermsVersion = acceptedTermsVersion;
     if (acceptedPrivacyVersion) updatedProfile.acceptedPrivacyVersion = acceptedPrivacyVersion;
 
-    // Keep posts on signup: update existing clips author_name for this user
-    try {
-      await store!.updateClipsAuthorName(user.id, cleanUsername);
-    } catch (clipErr) {
-      console.warn("Could not update clips author_name on profile update:", clipErr);
-    }
+    // 2. Then UPDATE clips SET author_name = $username WHERE author_id = $userId OR user_id = $userId
+    // Do not swallow that update.
+    const clipsUpdated = await store!.updateClipsAuthorName(user.id, cleanUsername);
 
     const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
-    return res.json({ profile: updatedProfile, isAdmin });
+    return res.json({ profile: updatedProfile, clipsUpdated, isAdmin });
   } catch (err: any) {
     console.error("Error in POST /api/me:", err);
-    return res.status(500).json({ error: "Failed to update profile" });
+    return res.status(500).json({ error: err?.message || "Failed to update profile" });
   }
 });
 

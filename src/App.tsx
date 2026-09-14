@@ -158,12 +158,8 @@ export default function App() {
             localStorage.setItem("reax_age_confirmed", "true");
             setAgeConfirmed(true);
 
-            if (urlAuth.username && isMounted && !urlAuth.username.startsWith("user_")) {
-              setUsername(urlAuth.username);
-              setTempUsername(urlAuth.username);
-              localStorage.setItem("clips_username", urlAuth.username);
-            }
-
+            // Requirement 2: initAuth uses only GET /api/me for logged-in users' username.
+            // Do NOT initialize username from URL token metadata.
             window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎉 Successfully confirmed & signed in!" } }));
           }
         }
@@ -171,7 +167,7 @@ export default function App() {
         console.warn("Error handling auth URL tokens on mount:", err);
       }
 
-      // 2. Fetch profile from backend
+      // 2. Fetch profile from GET /api/me (Canonical source of truth for logged-in users)
       try {
         const { profile, isAnonymous, hasEmail, emailConfirmed } = await fetchMyProfile();
         const isConfirmedEmailUser = Boolean(hasEmail && !isAnonymous && emailConfirmed);
@@ -179,6 +175,7 @@ export default function App() {
         if (isConfirmedEmailUser && profile && isMounted) {
           setIsLoggedIn(true);
           localStorage.setItem("reax_is_logged_in", "true");
+          // Requirement 2: initAuth uses only this username for logged-in users
           const uname = (profile.username || "").trim();
           if (uname) {
             setUsername(uname);
@@ -220,13 +217,16 @@ export default function App() {
     }
     if (isLoggedIn) {
       try {
-        await syncUserProfile(clean);
-        setUsername(clean);
-        localStorage.setItem("clips_username", clean);
+        const syncRes = await syncUserProfile(clean);
+        const savedName = syncRes.profile?.username || clean;
+        setUsername(savedName);
+        setTempUsername(savedName);
+        localStorage.setItem("clips_username", savedName);
         setRefreshTrigger(prev => prev + 1);
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: `Username updated to @${clean}!` } }));
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: `Username updated to @${savedName}!` } }));
         setIsEditingUsername(false);
       } catch (e: any) {
+        setTempUsername(username);
         window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: e?.message || "Username is already taken." } }));
       }
     } else {
@@ -1396,6 +1396,7 @@ export default function App() {
           localStorage.setItem("clips_username", newUsername);
           setRefreshTrigger(prev => prev + 1);
         }}
+        onRefreshClips={() => setRefreshTrigger(prev => prev + 1)}
         clips={clips}
         onClipSelect={(targetId) => setSelectedThreadRootId(targetId)}
       />

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { KeyRound, Lock, AlertCircle, CheckCircle, RefreshCw, Eye, EyeOff } from "lucide-react";
-import { updateUserPassword, syncUserProfile } from "../utils/supabaseClient";
+import { updateUserPassword, fetchMyProfile } from "../utils/supabaseClient";
 
 interface ResetPasswordModalProps {
   isOpen: boolean;
@@ -51,7 +51,7 @@ export default function ResetPasswordModal({
       setSuccessMsg("Your password has been reset successfully!");
 
       try {
-        await syncUserProfile("");
+        await fetchMyProfile();
       } catch {}
 
       setTimeout(() => {

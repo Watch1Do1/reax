@@ -612,6 +612,11 @@ export async function checkUsernameAvailable(username: string): Promise<{ availa
   }
 }
 
+export interface SyncProfileResult {
+  profile: UserProfile;
+  clipsUpdated: number;
+}
+
 /**
  * Sync / upsert user profile on backend (POST /api/me)
  */
@@ -621,26 +626,15 @@ export async function syncUserProfile(
     acceptedTermsVersion?: string;
     acceptedPrivacyVersion?: string;
   }
-): Promise<UserProfile> {
+): Promise<SyncProfileResult & UserProfile> {
   const cleanUsername = username.trim().replace(/^@/, "");
 
-  // 1. Update Supabase Auth user_metadata so client session always reflects new username
-  try {
-    const supabase = await getSupabaseClient();
-    if (supabase) {
-      await supabase.auth.updateUser({
-        data: {
-          username: cleanUsername,
-          display_name: cleanUsername
-        }
-      });
-    }
-  } catch (authErr) {
-    console.warn("Could not update auth user_metadata on client:", authErr);
+  const token = await getAuthToken();
+  if (!token) {
+    throw new Error("Authentication required: No active session token.");
   }
 
-  // 2. Persist in database via backend /api/me
-  const token = await getAuthToken();
+  // 1. Persist in database via backend POST /api/me
   const res = await fetch("/api/me", {
     method: "POST",
     headers: {
@@ -654,34 +648,43 @@ export async function syncUserProfile(
     })
   });
 
-  if (res.ok) {
-    const data = await res.json();
-    const finalUsername = data.profile?.username || cleanUsername;
-    localStorage.setItem("clips_username", finalUsername);
-    return data.profile;
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    const errorMsg = errData?.error || `Server error (${res.status}): Failed to save username.`;
+    throw new Error(errorMsg);
   }
 
-  const errData = await res.json().catch(() => ({}));
-  if (res.status === 409 || errData?.error) {
-    throw new Error(errData?.error || "Username is already taken.");
+  const data = await res.json();
+  const savedProfile: UserProfile = data.profile;
+  const clipsUpdated = typeof data.clipsUpdated === "number" ? data.clipsUpdated : 0;
+
+  if (!savedProfile?.username) {
+    throw new Error("Invalid response from server when updating profile.");
   }
 
-  // Graceful fallback if backend /api/me is 404 / unavailable
-  localStorage.setItem("clips_username", cleanUsername);
-  const fallbackProfile: UserProfile = {
-    id: "user-" + Date.now(),
-    username: cleanUsername,
-    createdAt: new Date().toISOString(),
-    lastActive: new Date().toISOString(),
-    reactionCount: 0,
-    suspended: false,
-    strikes: 0,
-    acceptedTermsVersion: policyData?.acceptedTermsVersion || TERMS_VERSION,
-    acceptedPrivacyVersion: policyData?.acceptedPrivacyVersion || PRIVACY_VERSION,
-    acceptedTermsAt: new Date().toISOString(),
-    acceptedPrivacyAt: new Date().toISOString()
+  // Persist canonical confirmed username locally
+  localStorage.setItem("clips_username", savedProfile.username);
+
+  // 2. Keep Supabase Auth user_metadata synchronized
+  try {
+    const supabase = await getSupabaseClient();
+    if (supabase) {
+      await supabase.auth.updateUser({
+        data: {
+          username: savedProfile.username,
+          display_name: savedProfile.username
+        }
+      });
+    }
+  } catch (authErr) {
+    console.warn("Could not update auth user_metadata on client:", authErr);
+  }
+
+  return {
+    profile: savedProfile,
+    clipsUpdated,
+    ...savedProfile
   };
-  return fallbackProfile;
 }
 
 /**
