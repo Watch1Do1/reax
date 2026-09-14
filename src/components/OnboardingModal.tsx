@@ -13,7 +13,8 @@ import {
   resetPasswordForEmail,
   formatAuthError,
   isInAppBrowser,
-  checkUsernameAvailable
+  checkUsernameAvailable,
+  getSupabaseClient
 } from "../utils/supabaseClient";
 import PolicyDocumentModal from "./PolicyDocumentModal";
 
@@ -125,26 +126,36 @@ export default function OnboardingModal({
         return;
       }
 
-      // Extract username from profile or metadata
-      let resolvedUsername =
-        res.user?.user_metadata?.username ||
-        res.user?.user_metadata?.display_name;
+      // 1. Fetch current profile from backend database (canonical source of truth)
+      const { profile } = await fetchMyProfile();
+      let resolvedUsername = profile?.username;
 
+      // 2. If no database profile exists yet, fallback to user_metadata or email prefix
       if (!resolvedUsername) {
-        const { profile } = await fetchMyProfile();
-        if (profile?.username) {
-          resolvedUsername = profile.username;
-        }
-      }
+        resolvedUsername =
+          res.user?.user_metadata?.username ||
+          res.user?.user_metadata?.display_name ||
+          cleanEmail.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "") ||
+          "User";
 
-      if (!resolvedUsername) {
-        resolvedUsername = cleanEmail.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "") || "User";
+        try {
+          const synced = await syncUserProfile(resolvedUsername);
+          if (synced?.username) resolvedUsername = synced.username;
+        } catch {}
+      } else {
+        // Keep Supabase auth user_metadata synchronized with the canonical database profile
+        try {
+          const supabase = await getSupabaseClient();
+          if (supabase) {
+            await supabase.auth.updateUser({
+              data: {
+                username: resolvedUsername,
+                display_name: resolvedUsername
+              }
+            });
+          }
+        } catch {}
       }
-
-      try {
-        const synced = await syncUserProfile(resolvedUsername);
-        if (synced?.username) resolvedUsername = synced.username;
-      } catch {}
 
       setSuccessMsg(`Welcome back, @${resolvedUsername}!`);
       setTimeout(() => {

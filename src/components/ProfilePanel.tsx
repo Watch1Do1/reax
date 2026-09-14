@@ -10,7 +10,8 @@ import {
   getCurrentSupabaseUser, 
   signOutSupabase, 
   updateUserPassword, 
-  syncUserProfile 
+  syncUserProfile,
+  fetchMyProfile
 } from "../utils/supabaseClient";
 
 export interface ProfilePanelProps {
@@ -61,6 +62,15 @@ export default function ProfilePanel({
       setIsEditingUsername(false);
 
       // Fetch user profile & email details
+      fetchMyProfile().then(({ profile }) => {
+        if (profile?.username) {
+          setEditedUsername(profile.username);
+          if (onUsernameUpdated && profile.username !== currentUsername) {
+            onUsernameUpdated(profile.username);
+          }
+        }
+      }).catch(() => {});
+
       getCurrentSupabaseUser().then((user) => {
         if (user) {
           setEmail(user.email || null);
@@ -236,7 +246,7 @@ export default function ProfilePanel({
               </form>
             ) : (
               <div className="flex items-center gap-2">
-                <span className="text-lg font-bold font-mono text-white">@{currentUsername}</span>
+                <span className="text-lg font-bold font-mono text-white">@{editedUsername || currentUsername}</span>
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
               </div>
             )}

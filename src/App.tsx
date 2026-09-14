@@ -179,15 +179,11 @@ export default function App() {
         if (isConfirmedEmailUser && profile && isMounted) {
           setIsLoggedIn(true);
           localStorage.setItem("reax_is_logged_in", "true");
-          const uname = profile.username || "";
-          if (uname && !uname.startsWith("user_")) {
+          const uname = (profile.username || "").trim();
+          if (uname) {
             setUsername(uname);
             setTempUsername(uname);
             localStorage.setItem("clips_username", uname);
-          } else {
-            setUsername("");
-            setTempUsername("");
-            localStorage.removeItem("clips_username");
           }
 
           // Check if policy versions are current
@@ -1368,7 +1364,7 @@ export default function App() {
           const { profile } = await fetchMyProfile();
           setIsLoggedIn(true);
           localStorage.setItem("reax_is_logged_in", "true");
-          if (profile?.username && !profile.username.startsWith("user_")) {
+          if (profile?.username) {
             setUsername(profile.username);
             setTempUsername(profile.username);
             localStorage.setItem("clips_username", profile.username);

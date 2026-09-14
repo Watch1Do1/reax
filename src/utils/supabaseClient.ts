@@ -518,18 +518,28 @@ export async function handleUrlAuthTokens(): Promise<{
         localStorage.removeItem("reax_is_logged_in");
       }
 
-      let username =
-        user.user_metadata?.username ||
-        user.user_metadata?.display_name;
+      let username: string | undefined = undefined;
+      try {
+        const { profile } = await fetchMyProfile();
+        if (profile?.username) {
+          username = profile.username;
+        }
+      } catch {}
 
-      if (username) {
-        try {
-          const synced = await syncUserProfile(username);
-          if (synced?.username) {
-            username = synced.username;
+      if (!username) {
+        username =
+          user.user_metadata?.username ||
+          user.user_metadata?.display_name;
+
+        if (username) {
+          try {
+            const synced = await syncUserProfile(username);
+            if (synced?.username) {
+              username = synced.username;
+            }
+          } catch (e) {
+            console.warn("Could not sync user profile from metadata:", e);
           }
-        } catch (e) {
-          console.warn("Could not sync user profile from metadata:", e);
         }
       }
 
