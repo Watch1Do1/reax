@@ -1268,28 +1268,28 @@ class SupabaseStore implements Store {
   async getUserProfile(query: { id?: string; username?: string }): Promise<UserProfile | null> {
     try {
       if (query.id && isValidUuid(query.id)) {
+        // GET /api/me: WHERE id = $userId only.
+        // Do not SELECT with OR user_id = $userId OR ORDER BY last_active LIMIT 1.
         const { data, error } = await this.client
           .from("user_profiles")
           .select("*")
-          .or(`id.eq.${query.id},user_id.eq.${query.id}`)
-          .order("last_active", { ascending: false })
-          .limit(1);
+          .eq("id", query.id)
+          .maybeSingle();
 
-        if (!error && data && data.length > 0) {
-          const row = data[0];
+        if (!error && data) {
           return {
-            id: row.id,
-            username: row.username,
-            email: row.email,
-            createdAt: row.created_at,
-            lastActive: row.last_active,
-            reactionCount: row.reaction_count || 0,
-            suspended: row.suspended || false,
-            strikes: row.strikes || 0,
-            acceptedTermsVersion: row.accepted_terms_version || null,
-            acceptedPrivacyVersion: row.accepted_privacy_version || null,
-            acceptedTermsAt: row.accepted_terms_at || null,
-            acceptedPrivacyAt: row.accepted_privacy_at || null
+            id: data.id,
+            username: data.username,
+            email: data.email,
+            createdAt: data.created_at,
+            lastActive: data.last_active,
+            reactionCount: data.reaction_count || 0,
+            suspended: data.suspended || false,
+            strikes: data.strikes || 0,
+            acceptedTermsVersion: data.accepted_terms_version || null,
+            acceptedPrivacyVersion: data.accepted_privacy_version || null,
+            acceptedTermsAt: data.accepted_terms_at || null,
+            acceptedPrivacyAt: data.accepted_privacy_at || null
           };
         }
       }
@@ -1344,51 +1344,55 @@ class SupabaseStore implements Store {
     if (profile.acceptedTermsAt !== undefined) payload.accepted_terms_at = profile.acceptedTermsAt;
     if (profile.acceptedPrivacyAt !== undefined) payload.accepted_privacy_at = profile.acceptedPrivacyAt;
 
+    // Exact update filter: WHERE id = $userId
+    const exactUpdateFilter = `WHERE id = '${profile.id}'`;
+    console.log(`[upsertUserProfile] Exact update filter: ${exactUpdateFilter} (payload username: '${profile.username}')`);
+
     try {
-      // 1. Check if row already exists for this user (by id or user_id)
-      const { data: existingRows } = await this.client
+      // 1. UPDATE user_profiles SET username = $name WHERE id = $userId RETURNING *;
+      let { data: updatedRows, error: updateError } = await this.client
         .from("user_profiles")
-        .select("id, user_id")
-        .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
-        .limit(1);
+        .update(payload)
+        .eq("id", profile.id)
+        .select("*");
 
-      const existingRow = existingRows && existingRows.length > 0 ? existingRows[0] : null;
-
-      if (existingRow) {
-        // Execute UPDATE on existing row
-        let { error: updateError } = await this.client
+      // Graceful fallback if policy columns are not created in Postgres yet
+      if (updateError && (updateError.message?.includes("accepted_terms_version") || updateError.code === "42703")) {
+        const fallbackPayload: Record<string, any> = { ...payload };
+        delete fallbackPayload.accepted_terms_version;
+        delete fallbackPayload.accepted_privacy_version;
+        delete fallbackPayload.accepted_terms_at;
+        delete fallbackPayload.accepted_privacy_at;
+        const retryRes = await this.client
           .from("user_profiles")
-          .update(payload)
-          .or(`id.eq.${profile.id},user_id.eq.${profile.id}`);
+          .update(fallbackPayload)
+          .eq("id", profile.id)
+          .select("*");
+        updatedRows = retryRes.data;
+        updateError = retryRes.error;
+      }
 
-        // Graceful fallback if policy columns are not created in Postgres yet
-        if (updateError && (updateError.message?.includes("accepted_terms_version") || updateError.code === "42703")) {
-          const fallbackPayload: Record<string, any> = { ...payload };
-          delete fallbackPayload.accepted_terms_version;
-          delete fallbackPayload.accepted_privacy_version;
-          delete fallbackPayload.accepted_terms_at;
-          delete fallbackPayload.accepted_privacy_at;
-          const retryRes = await this.client
-            .from("user_profiles")
-            .update(fallbackPayload)
-            .or(`id.eq.${profile.id},user_id.eq.${profile.id}`);
-          updateError = retryRes.error;
-        }
+      if (updateError) {
+        console.error("upsertUserProfile UPDATE error:", updateError.message || updateError);
+        throw new Error(updateError.message || "Failed to update user profile row");
+      }
 
-        if (updateError) {
-          console.error("upsertUserProfile UPDATE error:", updateError.message || updateError);
-          throw new Error(updateError.message || "Failed to update user profile row");
-        }
+      let row: any = null;
+
+      if (updatedRows && updatedRows.length > 0) {
+        row = updatedRows[0];
       } else {
-        // Row does not exist - INSERT new profile
+        // 2. If 0 rows, INSERT id = $userId, username = $name RETURNING *.
+        console.log(`[upsertUserProfile] 0 rows matched for ${exactUpdateFilter}, performing INSERT id = '${profile.id}', username = '${profile.username}' RETURNING *`);
         const insertPayload: Record<string, any> = {
           ...payload,
           id: profile.id,
           user_id: profile.id
         };
-        let { error: insertError } = await this.client
+        let { data: insertedRows, error: insertError } = await this.client
           .from("user_profiles")
-          .insert([insertPayload]);
+          .insert([insertPayload])
+          .select("*");
 
         if (insertError && (insertError.message?.includes("accepted_terms_version") || insertError.code === "42703")) {
           const fallbackPayload: Record<string, any> = { ...insertPayload };
@@ -1398,7 +1402,9 @@ class SupabaseStore implements Store {
           delete fallbackPayload.accepted_privacy_at;
           const retryRes = await this.client
             .from("user_profiles")
-            .insert([fallbackPayload]);
+            .insert([fallbackPayload])
+            .select("*");
+          insertedRows = retryRes.data;
           insertError = retryRes.error;
         }
 
@@ -1406,26 +1412,22 @@ class SupabaseStore implements Store {
           console.error("upsertUserProfile INSERT error:", insertError.message || insertError);
           throw new Error(insertError.message || "Failed to insert user profile row");
         }
+
+        if (!insertedRows || insertedRows.length === 0) {
+          throw new Error(`Profile row insert returned 0 rows for user ${profile.id}.`);
+        }
+
+        row = insertedRows[0];
       }
 
-      // 2. Explicitly SELECT that row and return it
-      const { data: selectRows, error: selectErr } = await this.client
-        .from("user_profiles")
-        .select("*")
-        .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
-        .order("last_active", { ascending: false })
-        .limit(1);
-
-      if (selectErr) {
-        console.error("upsertUserProfile SELECT error:", selectErr.message || selectErr);
-        throw new Error(selectErr.message || "Failed to SELECT updated user profile");
+      // 3. If UPDATE returns DoctorJ after setting AirForce1, throw.
+      if (!row || row.username.trim().toLowerCase() !== profile.username.trim().toLowerCase()) {
+        const returnedName = row?.username || "empty";
+        throw new Error(
+          `Profile update returned @${returnedName} after setting @${profile.username}`
+        );
       }
 
-      if (!selectRows || selectRows.length === 0) {
-        throw new Error(`Profile row not found for user ${profile.id} after upsert.`);
-      }
-
-      const row = selectRows[0];
       return {
         id: row.id,
         username: row.username,
