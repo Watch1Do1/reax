@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Camera, Upload, Film, Sparkles, Volume2, VolumeX, RefreshCw, CheckCircle, 
-  Image as ImageIcon, ChevronDown, ChevronUp, Settings2, Sliders, Star, Mic, MicOff
+  Image as ImageIcon, ChevronDown, ChevronUp, Settings2, Sliders, Star, Mic, MicOff,
+  CornerDownRight
 } from "lucide-react";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { Clip, SavedReaction } from "../types";
@@ -802,8 +803,16 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
               )}
             </h3>
             {parentClip && (
-              <p className="text-[10px] text-slate-500 mt-0.5 font-mono uppercase">
-                Responding to <span className="text-indigo-400 font-bold">@{parentClip.authorName}</span>
+              <p className="text-[10px] text-slate-400 mt-0.5 font-mono flex items-center gap-1.5 flex-wrap">
+                <CornerDownRight className="w-3 h-3 text-indigo-400 shrink-0" />
+                <span>
+                  Reacting to <strong className="text-indigo-300">@{parentClip.authorName}</strong>'s {parentClip.parentId ? "reaction" : "post"}
+                </span>
+                {(parentClip.overlayText || parentClip.voiceText) && (
+                  <span className="text-slate-500 truncate max-w-[160px] sm:max-w-[240px] italic">
+                    "{parentClip.overlayText || parentClip.voiceText}"
+                  </span>
+                )}
               </p>
             )}
           </div>

@@ -52,10 +52,16 @@ export default function ThreadView({
 
   const ultimateRoot = getUltimateRootClip();
 
-  // Traversal State - start at the ultimate root of the conversation
+  // Traversal State - start at the specific clip clicked (or ultimate root if not specified)
   const [focusedClipId, setFocusedClipId] = useState<string>(() => {
-    return ultimateRoot?.id || rootClipId;
+    return rootClipId || ultimateRoot?.id || "";
   });
+
+  useEffect(() => {
+    if (rootClipId) {
+      setFocusedClipId(rootClipId);
+    }
+  }, [rootClipId]);
 
   // Track video state for focused card
   const [isPlaying, setIsPlaying] = useState(true);

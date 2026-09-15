@@ -43,6 +43,7 @@ export default function ClipCard({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [isSharing, setIsSharing] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [showSubReplies, setShowSubReplies] = useState(false);
 
   // Export-only watermark share & download handler
   const handleShare = async () => {
@@ -1156,16 +1157,25 @@ export default function ClipCard({
           )}
         </div>
 
-        {/* View Conversation Thread triggers if replies are present */}
-        {!isNestedReply && (
-          <button 
-            onClick={() => onViewThread(clip.id)}
-            className="flex items-center gap-1 text-slate-500 hover:text-indigo-300 text-[11px] font-mono transition-colors cursor-pointer"
-          >
-            <span>Thread</span>
-            <ChevronRight className="w-3 h-3" />
-          </button>
-        )}
+        {/* View Conversation Thread & Reaction Counter for ALL cards (posts and reactions) */}
+        <button 
+          onClick={() => onViewThread(clip.id)}
+          className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-mono transition-all cursor-pointer ${
+            chainCount > 0 
+              ? "bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-500/40 text-indigo-300 hover:text-indigo-200 shadow-sm" 
+              : "bg-slate-900/40 hover:bg-slate-900 text-slate-500 hover:text-slate-300 border border-slate-800/60"
+          }`}
+          title={chainCount > 0 ? `View ${chainCount} response${chainCount === 1 ? "" : "s"} in conversation thread` : "View conversation thread"}
+        >
+          <MessageCircle className={`w-3 h-3 ${chainCount > 0 ? "text-indigo-400" : "text-slate-500"}`} />
+          <span className="font-bold">{chainCount > 0 ? chainCount : "Thread"}</span>
+          {chainCount > 0 && (
+            <span className="text-[10px] text-indigo-300/80">
+              {chainCount === 1 ? "reax" : "reax"}
+            </span>
+          )}
+          <ChevronRight className="w-2.5 h-2.5 opacity-60" />
+        </button>
       </div>
 
       {/* Attribution Lineage if remixed or saved */}
@@ -1218,7 +1228,57 @@ export default function ClipCard({
         </div>
       )}
 
-      {/* ↳ Recursive Nesting - Show up to 2 replies directly beneath */}
+      {/* ↳ Sub-reactions under nested replies (reactions to reactions) */}
+      {isNestedReply && replies.length > 0 && (
+        <div className="mt-3 pl-3.5 border-l-2 border-indigo-500/30 ml-2 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSubReplies(!showSubReplies);
+              }}
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-indigo-300 hover:text-indigo-200 bg-indigo-950/50 hover:bg-indigo-900/60 border border-indigo-500/30 px-2.5 py-1 rounded-lg cursor-pointer transition-all active:scale-95"
+            >
+              <CornerDownRight className="w-3 h-3 text-indigo-400" />
+              <span>
+                {showSubReplies ? "Hide" : "Show"} {replies.length} {replies.length === 1 ? "response" : "responses"} to this reaction
+              </span>
+            </button>
+
+            <button
+              onClick={() => onViewThread(clip.id)}
+              className="text-[11px] font-mono text-slate-400 hover:text-indigo-300 hover:underline cursor-pointer"
+            >
+              Open Thread →
+            </button>
+          </div>
+
+          {showSubReplies && (
+            <div className="space-y-3 pt-1">
+              {replies.map((subReply) => (
+                <ClipCard 
+                  key={`subreply-${subReply.id}`} 
+                  clip={subReply} 
+                  allClips={allClips} 
+                  onLaugh={onLaugh}
+                  onLike={onLike} 
+                  onUnlike={onUnlike}
+                  onUnlaugh={onUnlaugh}
+                  onDelete={onDelete}
+                  onRespond={onRespond} 
+                  onRespondWithTone={onRespondWithTone}
+                  onRespondWithSaved={onRespondWithSaved}
+                  onViewThread={onViewThread} 
+                  isNestedReply={true} 
+                  isTopReply={false}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ↳ Recursive Nesting - Show up to 2 replies directly beneath root post */}
       {!isNestedReply && replies.length > 0 && (
         <div className="mt-4 pl-4 space-y-4 relative border-l-2 border-slate-800/60 ml-4">
           <div className="absolute top-0 left-0 w-3.5 h-6 border-b-2 border-l-2 border-slate-800/60 -ml-4 rounded-bl-lg" />
