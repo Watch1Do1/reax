@@ -135,8 +135,7 @@ export default function OnboardingModal({
         resolvedUsername =
           res.user?.user_metadata?.username ||
           res.user?.user_metadata?.display_name ||
-          cleanEmail.split("@")[0].replace(/[^a-zA-Z0-9_]/g, "") ||
-          "User";
+          `Reaxer_${Math.floor(1000 + Math.random() * 9000)}`;
 
         try {
           const synced = await syncUserProfile(resolvedUsername);

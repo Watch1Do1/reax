@@ -1572,6 +1572,7 @@ const PORT = 3000;
 
 // Increase limit to allow base64 image/video uploads
 app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Restore original req.url on Vercel if /api prefix got stripped or if rewritten
 app.use((req: any, res: any, next: any) => {
@@ -1667,7 +1668,7 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
       if (!profile) {
         const rawUsername = userData.user.user_metadata?.username || 
                             userData.user.user_metadata?.display_name || 
-                            (user.email ? user.email.split("@")[0] : `user_${user.id.slice(0, 6)}`);
+                            `Reaxer_${user.id.slice(0, 5)}`;
         
         profile = await store!.upsertUserProfile({
           id: user.id,
@@ -2741,24 +2742,26 @@ app.post("/api/upload", async (req, res) => {
         ext = "webm";
       }
     } else if (kind === "image") {
-      const isImage = contentType === "image/jpeg" || contentType === "image/jpg" || contentType === "image/png" || contentType === "image/webp";
+      const isImage = contentType === "image/jpeg" || contentType === "image/jpg" || contentType === "image/png" || contentType === "image/webp" || contentType === "image/gif";
       if (!isImage) {
-        return res.status(400).json({ error: "Invalid image contentType. Supported formats: image/jpeg, image/png, image/webp." });
+        return res.status(400).json({ error: "Invalid image contentType. Supported formats: image/jpeg, image/png, image/webp, image/gif." });
       }
-      if (sizeInBytes > 4 * 1024 * 1024) {
-        return res.status(413).json({ error: "Image exceeds maximum allowed size of 4MB." });
+      const isGif = contentType === "image/gif";
+      const maxImgBytes = isGif ? 16 * 1024 * 1024 : 10 * 1024 * 1024;
+      if (sizeInBytes > maxImgBytes) {
+        return res.status(413).json({ error: `Image exceeds maximum allowed size of ${Math.round(maxImgBytes / (1024 * 1024))}MB.` });
       }
       if (contentType === "image/jpg") {
         contentType = "image/jpeg";
       }
-      ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+      ext = isGif ? "gif" : contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
     } else if (kind === "video") {
       const isVideo = contentType === "video/mp4" || contentType === "video/webm";
       if (!isVideo) {
         return res.status(400).json({ error: "Invalid video contentType. Supported formats: video/mp4, video/webm." });
       }
-      if (sizeInBytes > 12 * 1024 * 1024) {
-        return res.status(413).json({ error: "Video exceeds maximum allowed size of 12MB." });
+      if (sizeInBytes > 16 * 1024 * 1024) {
+        return res.status(413).json({ error: "Video exceeds maximum allowed size of 16MB." });
       }
       ext = contentType.includes("webm") ? "webm" : "mp4";
     }

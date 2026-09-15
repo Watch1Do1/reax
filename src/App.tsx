@@ -344,6 +344,20 @@ export default function App() {
       const isHashAdmin = window.location.hash === "#admin";
       const isHashProfile = window.location.hash === "#profile";
       
+      if (window.location.hash.startsWith("#clip-")) {
+        const targetId = window.location.hash.slice(1);
+        setTimeout(() => {
+          const el = document.getElementById(targetId);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            el.classList.add("ring-2", "ring-indigo-500", "transition-all");
+            setTimeout(() => {
+              el.classList.remove("ring-2", "ring-indigo-500");
+            }, 3000);
+          }
+        }, 400);
+      }
+
       if (isHashProfile) {
         const logged = localStorage.getItem("reax_is_logged_in") === "true";
         if (logged) {
@@ -443,6 +457,20 @@ export default function App() {
           }
           setClips(uniqueClips);
           setError(null);
+
+          if (window.location.hash.startsWith("#clip-")) {
+            const targetId = window.location.hash.slice(1);
+            setTimeout(() => {
+              const el = document.getElementById(targetId);
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "center" });
+                el.classList.add("ring-2", "ring-indigo-500", "transition-all");
+                setTimeout(() => {
+                  el.classList.remove("ring-2", "ring-indigo-500");
+                }, 3000);
+              }
+            }, 300);
+          }
         }
       })
       .catch((err) => {

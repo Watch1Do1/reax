@@ -3,6 +3,7 @@ import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Pla
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
+import ShareModal from "./ShareModal";
 
 interface ClipCardProps {
   key?: string | number | null;
@@ -41,6 +42,7 @@ export default function ClipCard({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
 
   // Export-only watermark share & download handler
   const handleShare = async () => {
@@ -768,7 +770,10 @@ export default function ClipCard({
   }, [isVideo, clip.mediaUrl, isMuted]);
 
   return (
-    <div className={`flex flex-col w-full ${isNestedReply ? "pl-3 sm:pl-4 mt-2.5 border-l border-slate-800/40" : "bg-slate-900/40 backdrop-blur-md border border-slate-800/40 rounded-2xl p-2 sm:p-2.5 shadow-lg"}`}>
+    <div 
+      id={`clip-${clip.id}`}
+      className={`flex flex-col w-full scroll-mt-20 ${isNestedReply ? "pl-3 sm:pl-4 mt-2.5 border-l border-slate-800/40" : "bg-slate-900/40 backdrop-blur-md border border-slate-800/40 rounded-2xl p-2 sm:p-2.5 shadow-lg"}`}
+    >
       
       {/* Top Author Metadata Bar */}
       <div className="flex justify-between items-center mb-2 px-0.5">
@@ -1116,15 +1121,15 @@ export default function ClipCard({
             <span className="text-[10px] hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
           </button>
 
-          {/* Share Button (with export-only watermark) */}
+          {/* Share Button (opens ShareModal) */}
           <button 
-            onClick={handleShare}
-            disabled={isSharing}
+            type="button"
+            onClick={() => setIsShareModalOpen(true)}
             className="flex items-center gap-1 text-slate-500 hover:text-indigo-300 transition-colors cursor-pointer"
-            title="Export and share clip"
+            title="Share reaction via text, email, link, or download"
           >
-            <Share2 className={`w-3.5 h-3.5 ${isSharing ? "animate-spin text-indigo-400" : ""}`} />
-            <span className="text-[10px] hidden sm:inline">{isSharing ? "Exporting..." : "Share"}</span>
+            <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="text-[10px] hidden sm:inline">Share</span>
           </button>
 
           {/* Report Button */}
@@ -1247,6 +1252,15 @@ export default function ClipCard({
           )}
         </div>
       )}
+
+      {/* Direct Share Modal (SMS, Email, Copy Link, Native Share, Download) */}
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        clip={clip}
+        onDownloadWatermark={handleShare}
+        isGeneratingWatermark={isSharing}
+      />
 
     </div>
   );

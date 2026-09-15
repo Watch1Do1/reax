@@ -546,11 +546,12 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
     setError(null);
     const isHeic = isHeicFile(file);
+    const isGif = file.type === "image/gif" || file.name.toLowerCase().endsWith(".gif");
     const isVideo = file.type.startsWith("video/");
-    const isImage = file.type.startsWith("image/") || isHeic;
+    const isImage = file.type.startsWith("image/") || isHeic || isGif;
 
     if (!isVideo && !isImage) {
-      setError("Please upload a valid image or video file.");
+      setError("Please upload a valid image, GIF, or video file.");
       return;
     }
 
@@ -559,10 +560,10 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       return;
     }
 
-    // 4MB limit enforcement for standard files
-    const MAX_SIZE = 4 * 1024 * 1024; // 4MB
+    // Size limit: 16MB for GIFs and videos, 10MB for photos
+    const MAX_SIZE = (isGif || isVideo) ? 16 * 1024 * 1024 : 10 * 1024 * 1024;
     if (!isHeic && file.size > MAX_SIZE) {
-      setError("File is too large. Maximum size allowed is 4MB (Vercel serverless request limit).");
+      setError(`File is too large. Maximum size allowed is ${Math.round(MAX_SIZE / (1024 * 1024))}MB.`);
       return;
     }
 
@@ -619,12 +620,12 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
       videoElement.src = URL.createObjectURL(file);
     } else {
-      // Process image normally
+      // Process image or GIF normally
       const reader = new FileReader();
       reader.onload = () => {
         const mediaObj = {
           data: reader.result as string,
-          mimeType: file.type || "image/jpeg",
+          mimeType: isGif ? "image/gif" : (file.type || "image/jpeg"),
           isVideo: false
         };
         stopCamera();
@@ -967,7 +968,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       />
                       <input 
                         type="file" 
-                        accept="image/*,video/mp4,video/webm,.heic,.heif" 
+                        accept="image/*,image/gif,.gif,video/mp4,video/webm,.heic,.heif" 
                         className="hidden" 
                         id="modal-upload-file-input"
                         onChange={handleFileUpload}
@@ -2002,7 +2003,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                                 <Upload className="w-4 h-4 text-indigo-400" /> Upload File
                                 <input 
                                   type="file" 
-                                  accept="image/*,video/mp4,video/webm" 
+                                  accept="image/*,image/gif,.gif,video/mp4,video/webm" 
                                   className="hidden" 
                                   onChange={handleFileUpload}
                                 />
