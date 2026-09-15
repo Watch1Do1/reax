@@ -702,10 +702,12 @@ function mapClipToDb(clip: Clip) {
 
 class SupabaseStore implements Store {
   private client: any;
+  private adminClient: any;
   private fallbackContactMessages: ContactMessage[] = [];
 
-  constructor(client: any) {
+  constructor(client: any, adminClient?: any) {
     this.client = client;
+    this.adminClient = adminClient;
   }
 
   async getClips(includeDeleted = false): Promise<Clip[]> {
@@ -848,8 +850,9 @@ class SupabaseStore implements Store {
   }
 
   async updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number> {
+    const dbClient = this.adminClient || this.client;
     try {
-      let { data, error } = await this.client
+      let { data, error } = await dbClient
         .from("clips")
         .update({ author_name: newAuthorName })
         .or(`author_id.eq.${authorId},user_id.eq.${authorId}`)
@@ -857,7 +860,7 @@ class SupabaseStore implements Store {
 
       // In case user_id column does not exist on clips table, fallback to author_id
       if (error && (error.code === "42703" || error.message?.includes("user_id"))) {
-        const fallback = await this.client
+        const fallback = await dbClient
           .from("clips")
           .update({ author_name: newAuthorName })
           .eq("author_id", authorId)
@@ -1346,11 +1349,13 @@ class SupabaseStore implements Store {
 
     // Exact update filter: WHERE id = $userId
     const exactUpdateFilter = `WHERE id = '${profile.id}'`;
-    console.log(`[upsertUserProfile] Exact update filter: ${exactUpdateFilter} (payload username: '${profile.username}')`);
+    console.log(`[upsertUserProfile] Exact update filter: ${exactUpdateFilter} (payload username: '${profile.username}', adminClient: ${Boolean(this.adminClient)})`);
+
+    const dbClient = this.adminClient || this.client;
 
     try {
       // 1. UPDATE user_profiles SET username = $name WHERE id = $userId RETURNING *;
-      let { data: updatedRows, error: updateError } = await this.client
+      let { data: updatedRows, error: updateError } = await dbClient
         .from("user_profiles")
         .update(payload)
         .eq("id", profile.id)
@@ -1363,7 +1368,7 @@ class SupabaseStore implements Store {
         delete fallbackPayload.accepted_privacy_version;
         delete fallbackPayload.accepted_terms_at;
         delete fallbackPayload.accepted_privacy_at;
-        const retryRes = await this.client
+        const retryRes = await dbClient
           .from("user_profiles")
           .update(fallbackPayload)
           .eq("id", profile.id)
@@ -1389,7 +1394,7 @@ class SupabaseStore implements Store {
           id: profile.id,
           user_id: profile.id
         };
-        let { data: insertedRows, error: insertError } = await this.client
+        let { data: insertedRows, error: insertError } = await dbClient
           .from("user_profiles")
           .insert([insertPayload])
           .select("*");
@@ -1400,7 +1405,7 @@ class SupabaseStore implements Store {
           delete fallbackPayload.accepted_privacy_version;
           delete fallbackPayload.accepted_terms_at;
           delete fallbackPayload.accepted_privacy_at;
-          const retryRes = await this.client
+          const retryRes = await dbClient
             .from("user_profiles")
             .insert([fallbackPayload])
             .select("*");
@@ -1537,8 +1542,8 @@ class SupabaseStore implements Store {
 let store: Store | null = null;
 
 if (supabase) {
-  store = new SupabaseStore(supabase);
-  console.log("Persistence: SupabaseStore connected successfully.");
+  store = new SupabaseStore(supabaseAdmin || supabase, supabaseAdmin);
+  console.log(`Persistence: SupabaseStore connected successfully (service-role available: ${Boolean(supabaseAdmin)}).`);
 } else {
   if (isProduction) {
     console.error("FATAL: Supabase is unconfigured in production. Failing closed - all /api/* routes will return 503 database_unconfigured.");
@@ -2145,6 +2150,16 @@ app.post("/api/me", async (req, res) => {
       } catch (metaErr) {
         console.warn("Could not update auth user_metadata in POST /api/me:", metaErr);
       }
+    }
+
+    // POST /api/me upsertUserProfile must use the service-role client (supabaseAdmin / SUPABASE_SERVICE_ROLE_KEY), never the anon client.
+    // If supabaseAdmin is missing, return 503 database_unconfigured, do not insert with the user JWT.
+    if (!supabaseAdmin) {
+      console.error("[POST /api/me] supabaseAdmin is missing (SUPABASE_SERVICE_ROLE_KEY unconfigured). Returning 503 database_unconfigured.");
+      return res.status(503).json({
+        error: "database_unconfigured",
+        message: "Administrative database credentials (SUPABASE_SERVICE_ROLE_KEY) are required to update user profiles."
+      });
     }
 
     // 1. Upsert user_profiles.username for auth user id, then SELECT that row and return it.
