@@ -18,6 +18,7 @@ interface ClipCardProps {
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
   onRespondWithSaved?: (clip: Clip, reax: SavedReaction) => void;
   onViewThread: (id: string) => void;
+  onViewUser?: (username: string) => void;
   isNestedReply?: boolean;
   isTopReply?: boolean;
 }
@@ -34,6 +35,7 @@ export default function ClipCard({
   onRespondWithTone, 
   onRespondWithSaved,
   onViewThread, 
+  onViewUser,
   isNestedReply = false, 
   isTopReply = false 
 }: ClipCardProps) {
@@ -778,13 +780,23 @@ export default function ClipCard({
       
       {/* Top Author Metadata Bar */}
       <div className="flex justify-between items-center mb-2 px-0.5">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-200 font-bold font-mono text-xs flex items-center justify-center flex-shrink-0">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onViewUser?.(clip.authorName);
+          }}
+          className="flex items-center gap-2 group cursor-pointer text-left focus:outline-none"
+          title={`View @${clip.authorName}'s reactions & profile`}
+        >
+          <div className="w-7 h-7 rounded-full bg-slate-800 group-hover:bg-indigo-600 text-slate-200 group-hover:text-white font-bold font-mono text-xs flex items-center justify-center flex-shrink-0 transition-colors shadow-sm">
             {clip.authorName[0]?.toUpperCase()}
           </div>
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="font-semibold text-xs text-slate-100 block">@{clip.authorName}</span>
+              <span className="font-semibold text-xs text-slate-100 group-hover:text-indigo-300 transition-colors block">
+                @{clip.authorName}
+              </span>
               {clip.authorName.startsWith("~") ? (
                 <span className="text-[9px] px-1 bg-slate-950/60 border border-slate-800/80 rounded text-slate-500 font-bold font-mono">GUEST</span>
               ) : (
@@ -811,7 +823,7 @@ export default function ClipCard({
               </span>
             </div>
           </div>
-        </div>
+        </button>
 
         {/* Tone tag pills & Top Reaction Badge */}
         <div className="flex items-center gap-1.5">
@@ -1269,6 +1281,7 @@ export default function ClipCard({
                   onRespondWithTone={onRespondWithTone}
                   onRespondWithSaved={onRespondWithSaved}
                   onViewThread={onViewThread} 
+                  onViewUser={onViewUser}
                   isNestedReply={true} 
                   isTopReply={false}
                 />
@@ -1296,6 +1309,7 @@ export default function ClipCard({
               onRespondWithTone={onRespondWithTone}
               onRespondWithSaved={onRespondWithSaved}
               onViewThread={onViewThread} 
+              onViewUser={onViewUser}
               isNestedReply={true} 
               isTopReply={reply.id === topReplyId}
             />

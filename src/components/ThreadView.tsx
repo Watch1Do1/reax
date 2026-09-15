@@ -21,6 +21,7 @@ interface ThreadViewProps {
   onRespond: (clip: Clip) => void;
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
   onRespondWithSaved?: (clip: Clip, reax: SavedReaction) => void;
+  onViewUser?: (username: string) => void;
 }
 
 export default function ThreadView({ 
@@ -34,7 +35,8 @@ export default function ThreadView({
   onDelete,
   onRespond, 
   onRespondWithTone,
-  onRespondWithSaved
+  onRespondWithSaved,
+  onViewUser
 }: ThreadViewProps) {
   
   // Find ultimate root of this conversation tree
@@ -478,13 +480,18 @@ export default function ThreadView({
             
             {/* Header Meta of focused clip */}
             <div className="flex justify-between items-center mb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 bg-indigo-500/10 text-indigo-400 rounded-full flex items-center justify-center font-mono font-bold text-xs">
+              <button
+                type="button"
+                onClick={() => onViewUser?.(focusedClip.authorName)}
+                className="flex items-center gap-2 group cursor-pointer text-left focus:outline-none"
+                title={`View @${focusedClip.authorName}'s reactions`}
+              >
+                <div className="w-7 h-7 bg-indigo-500/10 group-hover:bg-indigo-600 text-indigo-400 group-hover:text-white rounded-full flex items-center justify-center font-mono font-bold text-xs transition-colors">
                   {focusedClip.authorName[0]?.toUpperCase()}
                 </div>
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-xs text-slate-200 block">@{focusedClip.authorName}</span>
+                    <span className="font-semibold text-xs text-slate-200 group-hover:text-indigo-300 transition-colors block">@{focusedClip.authorName}</span>
                     {focusedClip.authorName.startsWith("~") ? (
                       <span className="text-[8px] px-1 bg-slate-950/60 border border-slate-800 rounded text-slate-500 font-bold font-mono uppercase">Guest</span>
                     ) : (
@@ -497,7 +504,7 @@ export default function ThreadView({
                     {new Date(focusedClip.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
-              </div>
+              </button>
 
               <div className="flex items-center gap-1.5">
                 <span className={`px-2 py-0.5 rounded text-[9px] font-mono tracking-wider font-semibold capitalize ${
@@ -918,7 +925,17 @@ export default function ThreadView({
                         </div>
                         <div className="flex-1 min-w-0 sm:mt-1">
                           <div className="flex items-center justify-between gap-1">
-                            <p className="text-[10px] font-bold text-slate-200 truncate">@{reply.authorName}</p>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onViewUser?.(reply.authorName);
+                              }}
+                              className="text-[10px] font-bold text-slate-200 hover:text-indigo-300 truncate cursor-pointer hover:underline text-left"
+                              title={`View @${reply.authorName}'s reactions`}
+                            >
+                              @{reply.authorName}
+                            </button>
                             {hasAudio && (
                               <button
                                 type="button"

@@ -15,6 +15,8 @@ import OnboardingModal from "./components/OnboardingModal";
 import ResetPasswordModal from "./components/ResetPasswordModal";
 import ContactModal from "./components/ContactModal";
 import ProfilePanel from "./components/ProfilePanel";
+import UserProfileModal from "./components/UserProfileModal";
+import UserSearchBar from "./components/UserSearchBar";
 import AdminPanel from "./components/AdminPanel";
 import PolicyDocumentModal from "./components/PolicyDocumentModal";
 import PolicyReacceptModal from "./components/PolicyReacceptModal";
@@ -295,6 +297,11 @@ export default function App() {
   const [remixData, setRemixData] = useState<SavedReaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [feedType, setFeedType] = useState<"trending" | "latest" | "most_reacted" | "audio_hot">("trending");
+
+  // User Search & Public Profile State
+  const [selectedUserProfileUsername, setSelectedUserProfileUsername] = useState<string | null>(null);
+  const [activeUserFilter, setActiveUserFilter] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Fast Tap-to-Reax State
   const [fastReaxTarget, setFastReaxTarget] = useState<{ parentClip: Clip; tone: Clip["tone"] } | null>(null);
@@ -822,9 +829,55 @@ export default function App() {
     return latestTime;
   };
 
-  // Dynamically compute the feed based on active algorithm
+  // Dynamically compute the feed based on active algorithm, user filter, and search query
   const rootClips = React.useMemo(() => {
-    const baseRoots = clips.filter((c) => c.parentId === null);
+    let baseRoots = clips.filter((c) => c.parentId === null);
+
+    // Apply user filter (roots authored by user OR threads where user replied)
+    if (activeUserFilter) {
+      const filterClean = activeUserFilter.toLowerCase().replace(/^~/, "").replace(/^@/, "");
+      baseRoots = baseRoots.filter((root) => {
+        const rootAuthor = (root.authorName || "").toLowerCase().replace(/^~/, "").replace(/^@/, "");
+        if (rootAuthor === filterClean) return true;
+        
+        const findDescendants = (parentId: string): Clip[] => {
+          const direct = clips.filter(c => c.parentId === parentId);
+          let list = [...direct];
+          direct.forEach(child => {
+            list = [...list, ...findDescendants(child.id)];
+          });
+          return list;
+        };
+        const allDescendants = findDescendants(root.id);
+        return allDescendants.some(d => (d.authorName || "").toLowerCase().replace(/^~/, "").replace(/^@/, "") === filterClean);
+      });
+    }
+
+    // Apply text search query
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase().replace(/^@/, "");
+      baseRoots = baseRoots.filter((root) => {
+        const rootAuthor = (root.authorName || "").toLowerCase();
+        const overlay = (root.overlayText || "").toLowerCase();
+        const voice = (root.voiceText || "").toLowerCase();
+        if (rootAuthor.includes(q) || overlay.includes(q) || voice.includes(q)) return true;
+
+        const findDescendants = (parentId: string): Clip[] => {
+          const direct = clips.filter(c => c.parentId === parentId);
+          let list = [...direct];
+          direct.forEach(child => {
+            list = [...list, ...findDescendants(child.id)];
+          });
+          return list;
+        };
+        const allDescendants = findDescendants(root.id);
+        return allDescendants.some(d => 
+          (d.authorName || "").toLowerCase().includes(q) ||
+          (d.overlayText || "").toLowerCase().includes(q) ||
+          (d.voiceText || "").toLowerCase().includes(q)
+        );
+      });
+    }
     
     switch (feedType) {
       case "latest":
@@ -1023,6 +1076,20 @@ export default function App() {
           </div>
         )}
 
+        {/* User Search & Discovery Bar */}
+        {!loading && clips.length > 0 && (
+          <div className="pb-1">
+            <UserSearchBar
+              clips={clips}
+              activeUserFilter={activeUserFilter}
+              onSelectUserFilter={(u) => setActiveUserFilter(u)}
+              onOpenUserProfile={(u) => setSelectedUserProfileUsername(u)}
+              searchQuery={searchQuery}
+              onSearchQueryChange={(q) => setSearchQuery(q)}
+            />
+          </div>
+        )}
+
         {/* Minimal Feed Filter */}
         {!loading && clips.length > 0 && (
           <div className="flex items-center justify-center gap-3 text-xs font-medium text-slate-500 pb-1">
@@ -1124,6 +1191,7 @@ export default function App() {
                   onRespondWithTone={handleFastRespond}
                   onRespondWithSaved={(parentClip, reax) => handlePostSavedReaction(reax, parentClip.id)}
                   onViewThread={(id) => setSelectedThreadRootId(id)}
+                  onViewUser={(author) => setSelectedUserProfileUsername(author)}
                 />
               ))}
             </div>
@@ -1183,6 +1251,7 @@ export default function App() {
             onRespond={handleRespondToClip}
             onRespondWithTone={handleFastRespond}
             onRespondWithSaved={(parentClip, reax) => handlePostSavedReaction(reax, parentClip.id)}
+            onViewUser={(author) => setSelectedUserProfileUsername(author)}
           />
         )}
 
@@ -1427,6 +1496,22 @@ export default function App() {
         onRefreshClips={() => setRefreshTrigger(prev => prev + 1)}
         clips={clips}
         onClipSelect={(targetId) => setSelectedThreadRootId(targetId)}
+      />
+
+      {/* PUBLIC USER PROFILE & REACTIONS MODAL */}
+      <UserProfileModal
+        isOpen={!!selectedUserProfileUsername}
+        username={selectedUserProfileUsername}
+        onClose={() => setSelectedUserProfileUsername(null)}
+        allClips={clips}
+        onSelectClip={(targetId) => {
+          setSelectedUserProfileUsername(null);
+          setSelectedThreadRootId(targetId);
+        }}
+        onRespondToClip={(targetClip) => {
+          setSelectedUserProfileUsername(null);
+          handleRespondToClip(targetClip);
+        }}
       />
 
       {/* POLICY RE-ACCEPTANCE MODAL (BLOCKING FOR OUTDATED POLICY VERSIONS) */}
