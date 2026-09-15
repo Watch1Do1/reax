@@ -1272,22 +1272,24 @@ class SupabaseStore implements Store {
           .from("user_profiles")
           .select("*")
           .or(`id.eq.${query.id},user_id.eq.${query.id}`)
-          .maybeSingle();
+          .order("last_active", { ascending: false })
+          .limit(1);
 
-        if (!error && data) {
+        if (!error && data && data.length > 0) {
+          const row = data[0];
           return {
-            id: data.id,
-            username: data.username,
-            email: data.email,
-            createdAt: data.created_at,
-            lastActive: data.last_active,
-            reactionCount: data.reaction_count || 0,
-            suspended: data.suspended || false,
-            strikes: data.strikes || 0,
-            acceptedTermsVersion: data.accepted_terms_version || null,
-            acceptedPrivacyVersion: data.accepted_privacy_version || null,
-            acceptedTermsAt: data.accepted_terms_at || null,
-            acceptedPrivacyAt: data.accepted_privacy_at || null
+            id: row.id,
+            username: row.username,
+            email: row.email,
+            createdAt: row.created_at,
+            lastActive: row.last_active,
+            reactionCount: row.reaction_count || 0,
+            suspended: row.suspended || false,
+            strikes: row.strikes || 0,
+            acceptedTermsVersion: row.accepted_terms_version || null,
+            acceptedPrivacyVersion: row.accepted_privacy_version || null,
+            acceptedTermsAt: row.accepted_terms_at || null,
+            acceptedPrivacyAt: row.accepted_privacy_at || null
           };
         }
       }
@@ -1343,29 +1345,24 @@ class SupabaseStore implements Store {
     if (profile.acceptedPrivacyAt !== undefined) payload.accepted_privacy_at = profile.acceptedPrivacyAt;
 
     try {
-      // Check if row already exists for this user (by id or user_id)
-      const { data: existingRow } = await this.client
+      // 1. Check if row already exists for this user (by id or user_id)
+      const { data: existingRows } = await this.client
         .from("user_profiles")
         .select("id, user_id")
         .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
-        .maybeSingle();
+        .limit(1);
 
-      let data: any = null;
-      let error: any = null;
+      const existingRow = existingRows && existingRows.length > 0 ? existingRows[0] : null;
 
       if (existingRow) {
-        // Row exists - execute UPDATE (bypasses missing unique constraint on ON CONFLICT)
-        const updateRes = await this.client
+        // Execute UPDATE on existing row
+        let { error: updateError } = await this.client
           .from("user_profiles")
           .update(payload)
-          .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
-          .select()
-          .maybeSingle();
-        data = updateRes.data;
-        error = updateRes.error;
+          .or(`id.eq.${profile.id},user_id.eq.${profile.id}`);
 
         // Graceful fallback if policy columns are not created in Postgres yet
-        if (error && (error.message?.includes("accepted_terms_version") || error.code === "42703")) {
+        if (updateError && (updateError.message?.includes("accepted_terms_version") || updateError.code === "42703")) {
           const fallbackPayload: Record<string, any> = { ...payload };
           delete fallbackPayload.accepted_terms_version;
           delete fallbackPayload.accepted_privacy_version;
@@ -1374,29 +1371,26 @@ class SupabaseStore implements Store {
           const retryRes = await this.client
             .from("user_profiles")
             .update(fallbackPayload)
-            .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
-            .select()
-            .maybeSingle();
-          data = retryRes.data;
-          error = retryRes.error;
+            .or(`id.eq.${profile.id},user_id.eq.${profile.id}`);
+          updateError = retryRes.error;
+        }
+
+        if (updateError) {
+          console.error("upsertUserProfile UPDATE error:", updateError.message || updateError);
+          throw new Error(updateError.message || "Failed to update user profile row");
         }
       } else {
-        // Row does not exist - INSERT new profile with both id and user_id set
+        // Row does not exist - INSERT new profile
         const insertPayload: Record<string, any> = {
           ...payload,
           id: profile.id,
           user_id: profile.id
         };
-        const insertRes = await this.client
+        let { error: insertError } = await this.client
           .from("user_profiles")
-          .insert([insertPayload])
-          .select()
-          .maybeSingle();
-        data = insertRes.data;
-        error = insertRes.error;
+          .insert([insertPayload]);
 
-        // Graceful fallback if policy columns or user_id are not present
-        if (error && (error.message?.includes("accepted_terms_version") || error.code === "42703")) {
+        if (insertError && (insertError.message?.includes("accepted_terms_version") || insertError.code === "42703")) {
           const fallbackPayload: Record<string, any> = { ...insertPayload };
           delete fallbackPayload.accepted_terms_version;
           delete fallbackPayload.accepted_privacy_version;
@@ -1404,52 +1398,52 @@ class SupabaseStore implements Store {
           delete fallbackPayload.accepted_privacy_at;
           const retryRes = await this.client
             .from("user_profiles")
-            .insert([fallbackPayload])
-            .select()
-            .maybeSingle();
-          data = retryRes.data;
-          error = retryRes.error;
+            .insert([fallbackPayload]);
+          insertError = retryRes.error;
+        }
+
+        if (insertError) {
+          console.error("upsertUserProfile INSERT error:", insertError.message || insertError);
+          throw new Error(insertError.message || "Failed to insert user profile row");
         }
       }
 
-      if (error) {
-        console.warn("upsertUserProfile database error:", error.message || error);
+      // 2. Explicitly SELECT that row and return it
+      const { data: selectRows, error: selectErr } = await this.client
+        .from("user_profiles")
+        .select("*")
+        .or(`id.eq.${profile.id},user_id.eq.${profile.id}`)
+        .order("last_active", { ascending: false })
+        .limit(1);
+
+      if (selectErr) {
+        console.error("upsertUserProfile SELECT error:", selectErr.message || selectErr);
+        throw new Error(selectErr.message || "Failed to SELECT updated user profile");
       }
 
-      if (!error && data) {
-        return {
-          id: data.id,
-          username: data.username,
-          email: data.email,
-          createdAt: data.created_at,
-          lastActive: data.last_active,
-          reactionCount: data.reaction_count || 0,
-          suspended: data.suspended || false,
-          strikes: data.strikes || 0,
-          acceptedTermsVersion: data.accepted_terms_version || profile.acceptedTermsVersion || null,
-          acceptedPrivacyVersion: data.accepted_privacy_version || profile.acceptedPrivacyVersion || null,
-          acceptedTermsAt: data.accepted_terms_at || profile.acceptedTermsAt || null,
-          acceptedPrivacyAt: data.accepted_privacy_at || profile.acceptedPrivacyAt || null
-        };
+      if (!selectRows || selectRows.length === 0) {
+        throw new Error(`Profile row not found for user ${profile.id} after upsert.`);
       }
-    } catch (err) {
-      console.warn("upsertUserProfile exception:", err);
+
+      const row = selectRows[0];
+      return {
+        id: row.id,
+        username: row.username,
+        email: row.email,
+        createdAt: row.created_at,
+        lastActive: row.last_active,
+        reactionCount: row.reaction_count || 0,
+        suspended: row.suspended || false,
+        strikes: row.strikes || 0,
+        acceptedTermsVersion: row.accepted_terms_version || null,
+        acceptedPrivacyVersion: row.accepted_privacy_version || null,
+        acceptedTermsAt: row.accepted_terms_at || null,
+        acceptedPrivacyAt: row.accepted_privacy_at || null
+      };
+    } catch (err: any) {
+      console.error("upsertUserProfile exception:", err?.message || err);
+      throw err;
     }
-
-    return {
-      id: profile.id,
-      username: profile.username,
-      email: profile.email,
-      createdAt: new Date().toISOString(),
-      lastActive: profile.lastActive || new Date().toISOString(),
-      reactionCount: 0,
-      suspended: profile.suspended || false,
-      strikes: profile.strikes || 0,
-      acceptedTermsVersion: profile.acceptedTermsVersion || null,
-      acceptedPrivacyVersion: profile.acceptedPrivacyVersion || null,
-      acceptedTermsAt: profile.acceptedTermsAt || null,
-      acceptedPrivacyAt: profile.acceptedPrivacyAt || null
-    };
   }
 
   async upsertUser(user: Partial<UserProfile> & { username: string }): Promise<UserProfile> {
@@ -2079,7 +2073,11 @@ app.get("/api/me", async (req, res) => {
   if (authRes.ok === false) {
     return res.status(authRes.status).json({ error: authRes.error });
   }
-  const { user, profile } = authRes.auth;
+  const { user } = authRes.auth;
+  // Read the exact same row from database
+  const profile = (await store!.getUserProfile({ id: user.id })) || authRes.auth.profile;
+  console.log(`[GET /api/me] user=${user.id} profile.username="${profile.username}"`);
+
   const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
   const isAnonymous = Boolean(user.is_anonymous || !user.email);
   const emailConfirmed = Boolean(user.email_confirmed_at);
@@ -2147,8 +2145,9 @@ app.post("/api/me", async (req, res) => {
       }
     }
 
-    // 1. Upsert user_profiles.username for the Bearer user
-    const updatedProfile = await store!.upsertUserProfile({
+    // 1. Upsert user_profiles.username for auth user id, then SELECT that row and return it.
+    // Do not return the request body as profile if the SELECT is old.
+    const selectedProfile = await store!.upsertUserProfile({
       id: user.id,
       username: cleanUsername,
       email: user.email,
@@ -2163,15 +2162,25 @@ app.post("/api/me", async (req, res) => {
       } : {})
     });
 
-    if (acceptedTermsVersion) updatedProfile.acceptedTermsVersion = acceptedTermsVersion;
-    if (acceptedPrivacyVersion) updatedProfile.acceptedPrivacyVersion = acceptedPrivacyVersion;
+    if (!selectedProfile || selectedProfile.username.trim().toLowerCase() !== cleanUsername.toLowerCase()) {
+      const actualUname = selectedProfile?.username || "empty";
+      console.error(`[POST /api/me] SELECT is old or failed. Requested: "${cleanUsername}", Selected: "${actualUname}"`);
+      return res.status(500).json({
+        error: `Database profile row update failed: selected username is @${actualUname}, expected @${cleanUsername}.`
+      });
+    }
+
+    if (acceptedTermsVersion) selectedProfile.acceptedTermsVersion = acceptedTermsVersion;
+    if (acceptedPrivacyVersion) selectedProfile.acceptedPrivacyVersion = acceptedPrivacyVersion;
 
     // 2. Then UPDATE clips SET author_name = $username WHERE author_id = $userId OR user_id = $userId
     // Do not swallow that update.
-    const clipsUpdated = await store!.updateClipsAuthorName(user.id, cleanUsername);
+    const clipsUpdated = await store!.updateClipsAuthorName(user.id, selectedProfile.username);
+
+    console.log(`[POST /api/me] SUCCESS: user=${user.id} profile.username="${selectedProfile.username}" clipsUpdated=${clipsUpdated}`);
 
     const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
-    return res.json({ profile: updatedProfile, clipsUpdated, isAdmin });
+    return res.json({ profile: selectedProfile, clipsUpdated, isAdmin });
   } catch (err: any) {
     console.error("Error in POST /api/me:", err);
     return res.status(500).json({ error: err?.message || "Failed to update profile" });

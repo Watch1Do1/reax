@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, User, Mail, Lock, LogOut, Film, Sparkles, Check, 
@@ -53,35 +53,50 @@ export default function ProfilePanel({
   const [editedUsername, setEditedUsername] = useState(currentUsername);
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [isSavingUsername, setIsSavingUsername] = useState(false);
+  const savedUsernameRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      setEditedUsername(currentUsername);
-      setPasswordMsg(null);
-      setNewPassword("");
-      setConfirmPassword("");
-      setIsChangingPassword(false);
-      setIsEditingUsername(false);
+    if (!isOpen) {
+      savedUsernameRef.current = null;
+      return;
+    }
 
-      // Fetch user profile & email details
-      fetchMyProfile().then(({ profile }) => {
+    setEditedUsername(currentUsername);
+    setPasswordMsg(null);
+    setNewPassword("");
+    setConfirmPassword("");
+    setIsChangingPassword(false);
+    setIsEditingUsername(false);
+
+    let isCurrent = true;
+
+    // Fetch user profile & email details only when the panel opens
+    fetchMyProfile()
+      .then(({ profile }) => {
+        // Do not reset editedUsername from a stale GET, and do not overwrite if user already saved in this session
+        if (!isCurrent || savedUsernameRef.current) return;
         if (profile?.username) {
           setEditedUsername(profile.username);
           if (onUsernameUpdated && profile.username !== currentUsername) {
             onUsernameUpdated(profile.username);
           }
         }
-      }).catch(() => {});
+      })
+      .catch(() => {});
 
-      getCurrentSupabaseUser().then((user) => {
-        if (user) {
-          setEmail(user.email || null);
-          setUserId(user.id || null);
-          setCreatedAt(user.created_at || null);
-        }
-      });
-    }
-  }, [isOpen, currentUsername]);
+    getCurrentSupabaseUser().then((user) => {
+      if (!isCurrent) return;
+      if (user) {
+        setEmail(user.email || null);
+        setUserId(user.id || null);
+        setCreatedAt(user.created_at || null);
+      }
+    });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -146,8 +161,12 @@ export default function ProfilePanel({
         throw new Error("Server did not return a valid username.");
       }
 
-      // Do not keep a local-only name: update state with server-confirmed username
+      // Record saved username so any pending or background fetchMyProfile cannot overwrite it
+      savedUsernameRef.current = savedName;
+
+      // Update local state with the confirmed saved username
       setEditedUsername(savedName);
+
       if (onUsernameUpdated) {
         onUsernameUpdated(savedName);
       }
@@ -164,8 +183,7 @@ export default function ProfilePanel({
       // On save failure show the server message (taken / auth).
       const serverMsg = err?.message || "Could not save username.";
       setUsernameError(serverMsg);
-      // Do not keep a local-only name: revert back to current confirmed username
-      setEditedUsername(currentUsername);
+      // Do not reset editedUsername from a stale GET - keep what user typed
       window.dispatchEvent(
         new CustomEvent("reax_toast", {
           detail: { message: `Save failed: ${serverMsg}` }
@@ -259,7 +277,7 @@ export default function ProfilePanel({
                     type="button"
                     onClick={() => {
                       setIsEditingUsername(false);
-                      setEditedUsername(currentUsername);
+                      setEditedUsername(savedUsernameRef.current || currentUsername);
                       setUsernameError(null);
                     }}
                     className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono rounded-lg transition-colors cursor-pointer"
