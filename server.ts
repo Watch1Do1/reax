@@ -2659,6 +2659,105 @@ app.post("/api/clips/:id/user-delete", async (req, res) => {
   }
 });
 
+// API: Generate signed upload URL for direct-to-Supabase Storage upload
+// Bypasses Vercel & reverse-proxy 4.5MB payload limits for large files (GIFs/videos up to 50MB)
+app.post("/api/upload/sign", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+  const userId = user.id;
+
+  // Guest quota check: anonymous users capped at 3 clips
+  const isAnon = Boolean(user.is_anonymous || !user.email);
+  if (isAnon) {
+    const clipCount = await store!.countClipsByAuthor(user.id);
+    if (clipCount >= 3) {
+      return res.status(403).json({ error: "signup_required", clipCount: 3 });
+    }
+  }
+
+  const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
+  if (!storageClient) {
+    return res.status(503).json({ error: "storage_unconfigured" });
+  }
+
+  let contentType = (req.body.contentType || "").toLowerCase().trim();
+  let kind = (req.body.kind || "").toLowerCase().trim();
+
+  if (!kind) {
+    if (contentType.startsWith("audio/")) kind = "audio";
+    else if (contentType.startsWith("video/")) kind = "video";
+    else if (contentType.startsWith("image/")) kind = "image";
+    else kind = "image";
+  }
+
+  if (!contentType) {
+    if (kind === "audio") contentType = "audio/webm";
+    else if (kind === "video") contentType = "video/mp4";
+    else contentType = "image/gif";
+  }
+
+  let ext = "png";
+  if (kind === "audio") {
+    if (contentType.includes("mp4") || contentType.includes("m4a") || contentType.includes("aac")) ext = "mp4";
+    else if (contentType.includes("ogg")) ext = "ogg";
+    else if (contentType.includes("wav")) ext = "wav";
+    else ext = "webm";
+  } else if (kind === "image") {
+    const isGif = contentType === "image/gif" || contentType.includes("gif");
+    if (contentType === "image/jpg") contentType = "image/jpeg";
+    ext = isGif ? "gif" : contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+    if (isGif) contentType = "image/gif";
+  } else if (kind === "video") {
+    ext = contentType.includes("webm") ? "webm" : "mp4";
+  }
+
+  const now = new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(now.getUTCDate()).padStart(2, "0");
+  const dateStr = `${yyyy}-${mm}-${dd}`;
+  const fileUuid = crypto.randomUUID();
+  const storagePath = `${userId}/${dateStr}/${fileUuid}.${ext}`;
+
+  try {
+    let winningBucket = "media";
+    let signRes = await storageClient.storage.from("media").createSignedUploadUrl(storagePath, { upsert: true });
+
+    if (signRes.error) {
+      const errMsg = (signRes.error.message || "").toLowerCase();
+      if (errMsg.includes("not found") || errMsg.includes("bucket")) {
+        winningBucket = "reactions";
+        signRes = await storageClient.storage.from("reactions").createSignedUploadUrl(storagePath, { upsert: true });
+      }
+    }
+
+    if (signRes.error || !signRes.data) {
+      console.warn("createSignedUploadUrl error:", signRes.error?.message);
+      return res.status(400).json({ error: signRes.error?.message || "Failed to create signed upload URL" });
+    }
+
+    const { data: publicUrlData } = storageClient.storage
+      .from(winningBucket)
+      .getPublicUrl(storagePath);
+
+    return res.json({
+      signedUrl: signRes.data.signedUrl,
+      token: signRes.data.token,
+      path: storagePath,
+      bucket: winningBucket,
+      publicUrl: publicUrlData?.publicUrl,
+      contentType,
+      kind
+    });
+  } catch (err: any) {
+    console.error("Error creating signed upload URL:", err);
+    return res.status(500).json({ error: err?.message || "Failed to create signed upload URL" });
+  }
+});
+
 // API: Upload asset (audio, image, or video) to Supabase Storage (Protected)
 app.post("/api/upload", async (req, res) => {
   const authRes = await authenticateUser(req);
@@ -2747,7 +2846,7 @@ app.post("/api/upload", async (req, res) => {
         return res.status(400).json({ error: "Invalid image contentType. Supported formats: image/jpeg, image/png, image/webp, image/gif." });
       }
       const isGif = contentType === "image/gif";
-      const maxImgBytes = isGif ? 16 * 1024 * 1024 : 10 * 1024 * 1024;
+      const maxImgBytes = isGif ? 30 * 1024 * 1024 : 15 * 1024 * 1024;
       if (sizeInBytes > maxImgBytes) {
         return res.status(413).json({ error: `Image exceeds maximum allowed size of ${Math.round(maxImgBytes / (1024 * 1024))}MB.` });
       }
@@ -2760,8 +2859,8 @@ app.post("/api/upload", async (req, res) => {
       if (!isVideo) {
         return res.status(400).json({ error: "Invalid video contentType. Supported formats: video/mp4, video/webm." });
       }
-      if (sizeInBytes > 16 * 1024 * 1024) {
-        return res.status(413).json({ error: "Video exceeds maximum allowed size of 16MB." });
+      if (sizeInBytes > 30 * 1024 * 1024) {
+        return res.status(413).json({ error: "Video exceeds maximum allowed size of 30MB." });
       }
       ext = contentType.includes("webm") ? "webm" : "mp4";
     }

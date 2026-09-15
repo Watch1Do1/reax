@@ -950,20 +950,162 @@ export interface UploadResult {
 }
 
 /**
- * Uploads media (audio, image, or video) to /api/upload with Supabase Bearer Auth
+ * Converts a data URL to a binary Blob
+ */
+export function dataUrlToBlob(dataUrl: string): Blob {
+  try {
+    const parts = dataUrl.split(",");
+    const mimeMatch = parts[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+    const binaryStr = atob(parts[1]);
+    const len = binaryStr.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+  } catch (err) {
+    console.error("dataUrlToBlob failed:", err);
+    return new Blob([], { type: "application/octet-stream" });
+  }
+}
+
+/**
+ * Converts a Blob to a base64 Data URL
+ */
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Uploads media (audio, image, or video) to Supabase Storage.
+ * Prefers direct signed upload to completely bypass serverless 4.5MB payload limits.
  */
 export async function uploadMediaAsset({
   data,
+  file,
   kind,
   mimeType,
   filename
 }: {
-  data: string; // Base64 or Data URL
+  data?: string; // Base64 or Data URL
+  file?: Blob | File; // Raw File or Blob for zero base64 memory overhead
   kind: "audio" | "image" | "video";
   mimeType: string;
   filename?: string;
 }): Promise<UploadResult> {
   const token = await getAuthToken();
+
+  // Obtain binary blob
+  let blob: Blob;
+  if (file) {
+    blob = file;
+  } else if (data && data.startsWith("data:")) {
+    blob = dataUrlToBlob(data);
+  } else if (data) {
+    blob = dataUrlToBlob(`data:${mimeType};base64,${data}`);
+  } else {
+    throw new Error("No media provided for upload.");
+  }
+
+  // 1. ATTEMPT DIRECT SIGNED UPLOAD (Bypasses Vercel/reverse-proxy 4.5MB body limit)
+  try {
+    const signRes = await fetch("/api/upload/sign", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        contentType: mimeType,
+        kind,
+        filename: filename || `upload-${Date.now()}`
+      })
+    });
+
+    if (signRes.status === 403) {
+      const errData = await signRes.json().catch(() => ({}));
+      if (errData.error === "signup_required") {
+        const err = new Error("signup_required");
+        (err as any).signupRequired = true;
+        (err as any).status = 403;
+        (err as any).clipCount = errData.clipCount || 3;
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+            detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
+          }));
+        }
+        throw err;
+      }
+    }
+
+    if (signRes.ok) {
+      const signData = await signRes.json();
+      if (signData.signedUrl && signData.token && signData.path && signData.bucket) {
+        let uploadSuccess = false;
+
+        // Try Method A: browser Supabase client uploadToSignedUrl
+        const supabase = await getSupabaseClient();
+        if (supabase) {
+          try {
+            const { error: upErr } = await supabase.storage
+              .from(signData.bucket)
+              .uploadToSignedUrl(signData.path, signData.token, blob, {
+                contentType: mimeType,
+                upsert: true
+              });
+            if (!upErr) {
+              uploadSuccess = true;
+            } else {
+              console.warn("uploadToSignedUrl returned error, trying direct PUT fallback:", upErr.message);
+            }
+          } catch (sdkErr) {
+            console.warn("uploadToSignedUrl SDK exception:", sdkErr);
+          }
+        }
+
+        // Try Method B: direct HTTP PUT to signed URL
+        if (!uploadSuccess && signData.signedUrl) {
+          try {
+            const putRes = await fetch(signData.signedUrl, {
+              method: "PUT",
+              headers: {
+                "Content-Type": mimeType,
+                "x-upsert": "true"
+              },
+              body: blob
+            });
+            if (putRes.ok) {
+              uploadSuccess = true;
+            } else {
+              console.warn("Direct signed PUT failed with HTTP", putRes.status);
+            }
+          } catch (putErr) {
+            console.warn("Direct signed PUT network exception:", putErr);
+          }
+        }
+
+        if (uploadSuccess && signData.publicUrl) {
+          return {
+            url: signData.publicUrl,
+            path: signData.path,
+            mediaType: kind
+          };
+        }
+      }
+    }
+  } catch (signErr: any) {
+    if (signErr?.signupRequired) throw signErr;
+    console.warn("Signed upload flow error, falling back to /api/upload:", signErr);
+  }
+
+  // 2. FALLBACK: STANDARD /api/upload PROXY
+  const base64Data = data || await blobToDataUrl(blob);
 
   const res = await fetch("/api/upload", {
     method: "POST",
@@ -975,7 +1117,7 @@ export async function uploadMediaAsset({
       contentType: mimeType,
       kind,
       filename: filename || `upload-${Date.now()}`,
-      data
+      data: base64Data
     })
   });
 
@@ -992,6 +1134,9 @@ export async function uploadMediaAsset({
         }));
       }
       throw err;
+    }
+    if (res.status === 413) {
+      throw new Error("File exceeds maximum upload size allowed by the hosting server. Please choose a smaller GIF or video.");
     }
     throw new Error(errData.error || `Upload failed with HTTP ${res.status}`);
   }

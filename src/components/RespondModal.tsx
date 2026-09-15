@@ -38,7 +38,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   }, []);
   
   // Form State
-  const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean } | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean; file?: File } | null>(null);
   const [tone, setTone] = useState<Clip["tone"]>("funny");
   const [voiceStyle, setVoiceStyle] = useState<Clip["voiceStyle"]>("casual");
   const [guestAuthorName, setGuestAuthorName] = useState("");
@@ -560,8 +560,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       return;
     }
 
-    // Size limit: 16MB for GIFs and videos, 10MB for photos
-    const MAX_SIZE = (isGif || isVideo) ? 16 * 1024 * 1024 : 10 * 1024 * 1024;
+    // Size limit: 30MB for GIFs and videos, 15MB for photos
+    const MAX_SIZE = (isGif || isVideo) ? 30 * 1024 * 1024 : 15 * 1024 * 1024;
     if (!isHeic && file.size > MAX_SIZE) {
       setError(`File is too large. Maximum size allowed is ${Math.round(MAX_SIZE / (1024 * 1024))}MB.`);
       return;
@@ -574,7 +574,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         const mediaObj = {
           data: converted.data,
           mimeType: "image/jpeg",
-          isVideo: false
+          isVideo: false,
+          file: file
         };
         stopCamera();
         onMediaSelected(mediaObj);
@@ -606,7 +607,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           const mediaObj = {
             data: reader.result as string,
             mimeType: file.type,
-            isVideo: true
+            isVideo: true,
+            file: file
           };
           stopCamera();
           onMediaSelected(mediaObj);
@@ -626,7 +628,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         const mediaObj = {
           data: reader.result as string,
           mimeType: isGif ? "image/gif" : (file.type || "image/jpeg"),
-          isVideo: false
+          isVideo: false,
+          file: file
         };
         stopCamera();
         onMediaSelected(mediaObj);
@@ -682,6 +685,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           }
         }
         const uploadResult = await uploadMediaAsset({
+          file: selectedMedia.file,
           data: selectedMedia.data,
           kind: selectedMedia.isVideo ? "video" : "image",
           mimeType: uploadMimeType,
