@@ -39,6 +39,8 @@ export type UserProfile = {
   reactionCount: number;
   suspended: boolean;
   strikes: number;
+  isConfirmed?: boolean;
+  authSource?: string;
   acceptedTermsVersion?: string | null;
   acceptedPrivacyVersion?: string | null;
   acceptedTermsAt?: string | null;

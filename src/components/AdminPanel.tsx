@@ -62,6 +62,7 @@ type AdminUser = {
   suspended: boolean;
   strikes: number;
   isConfirmed?: boolean;
+  authSource?: string;
 };
 
 export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: AdminPanelProps) {
@@ -87,6 +88,12 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
   // Database Connection diagnostics state
   const [dbStatus, setDbStatus] = useState<any>(null);
   const [loadingDbStatus, setLoadingDbStatus] = useState(false);
+
+  // Supabase Auth synchronization state
+  const [isSyncingAuth, setIsSyncingAuth] = useState(false);
+  const [syncAuthResult, setSyncAuthResult] = useState<{ success: boolean; message: string; hasServiceRoleKey?: boolean; synced?: number; authCount?: number } | null>(null);
+  const [showSyncSqlModal, setShowSyncSqlModal] = useState(false);
+  const [copiedSyncSql, setCopiedSyncSql] = useState(false);
 
   // Check if running on localhost for optional developer sandbox tooling
   const isLocalhost = typeof window !== "undefined" && 
@@ -177,6 +184,94 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
       showToast("Error loading panel data.");
     } finally {
       if (!silent) setLoading(false);
+    }
+  };
+
+  const SYNC_AUTH_SQL = `-- 1. Link emails from Supabase Auth to existing user_profiles
+UPDATE public.user_profiles p
+SET 
+  email = u.email,
+  username = COALESCE(
+    NULLIF(p.username, ''),
+    NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+    NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
+    p.username
+  )
+FROM auth.users u
+WHERE (p.id = u.id OR p.user_id = u.id)
+  AND (p.email IS NULL OR p.email != u.email);
+
+-- 2. Insert any auth accounts missing from user_profiles
+INSERT INTO public.user_profiles (
+  id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
+)
+SELECT 
+  u.id,
+  u.id,
+  u.email,
+  COALESCE(
+    NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+    NULLIF(TRIM(u.raw_user_meta_data->>'user_name'), ''),
+    NULLIF(TRIM(u.raw_user_meta_data->>'display_name'), ''),
+    NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
+    'user_' || substr(u.id::text, 1, 8)
+  ),
+  false, 0, 0,
+  COALESCE(u.created_at, NOW()),
+  COALESCE(u.created_at, NOW())
+FROM auth.users u
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.user_profiles p WHERE p.id = u.id OR p.user_id = u.id
+)
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email;
+
+-- 3. Install RPC function so admin panel can query auth accounts directly
+CREATE OR REPLACE FUNCTION public.get_auth_users()
+RETURNS TABLE (
+  id UUID,
+  email TEXT,
+  created_at TIMESTAMPTZ,
+  confirmed_at TIMESTAMPTZ,
+  last_sign_in_at TIMESTAMPTZ,
+  raw_user_meta_data JSONB
+)
+SECURITY DEFINER
+SET search_path = public, auth
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    u.id,
+    u.email::TEXT,
+    u.created_at,
+    COALESCE(u.email_confirmed_at, u.confirmed_at),
+    u.last_sign_in_at,
+    u.raw_user_meta_data
+  FROM auth.users u;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, service_role;`;
+
+  const handleSyncAuthUsers = async () => {
+    setIsSyncingAuth(true);
+    try {
+      const res = await adminFetch("/api/admin/sync-auth-users", { method: "POST" });
+      const data = await res.json();
+      setSyncAuthResult(data);
+      if (data.synced > 0) {
+        showToast(data.message || `Synced ${data.synced} auth accounts.`);
+        await loadAdminData(true);
+      } else if (!data.hasServiceRoleKey) {
+        setShowSyncSqlModal(true);
+      } else {
+        showToast(data.message || "All Supabase Auth accounts are synchronized.");
+        await loadAdminData(true);
+      }
+    } catch (err: any) {
+      showToast("Error syncing auth users.");
+    } finally {
+      setIsSyncingAuth(false);
     }
   };
 
@@ -1100,26 +1195,61 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                       </button>
                     </div>
 
-                    {/* Search Bar */}
-                    <div className="relative flex-1 sm:max-w-xs">
-                      <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        type="text"
-                        value={userSearchQuery}
-                        onChange={(e) => setUserSearchQuery(e.target.value)}
-                        placeholder="Search by username or email..."
-                        className="w-full pl-8 pr-8 py-1.5 bg-[#0a0c10] border border-slate-900 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-slate-700 font-mono"
-                      />
-                      {userSearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setUserSearchQuery("")}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs"
-                        >
-                          ✕
-                        </button>
-                      )}
+                    {/* Sync Supabase Auth & Search Bar */}
+                    <div className="flex items-center gap-2 flex-1 sm:max-w-md justify-end">
+                      <button
+                        type="button"
+                        onClick={handleSyncAuthUsers}
+                        disabled={isSyncingAuth}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-bold transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                        title="Synchronize registered accounts from Supabase Authentication"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncingAuth ? "animate-spin" : ""}`} />
+                        <span>{isSyncingAuth ? "Syncing..." : "Sync Auth Users"}</span>
+                      </button>
+
+                      {/* Search Bar */}
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={userSearchQuery}
+                          onChange={(e) => setUserSearchQuery(e.target.value)}
+                          placeholder="Search username or email..."
+                          className="w-full pl-8 pr-8 py-1.5 bg-[#0a0c10] border border-slate-900 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-slate-700 font-mono"
+                        />
+                        {userSearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setUserSearchQuery("")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
                     </div>
+                  </div>
+
+                  {/* Supabase Auth Discrepancy Clarification Banner */}
+                  <div className="bg-cyan-950/20 border border-cyan-500/20 rounded-2xl p-3.5 text-xs text-slate-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-start sm:items-center gap-2.5">
+                      <Shield className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5 sm:mt-0" />
+                      <div>
+                        <span className="font-bold text-white mr-1.5">User Count Insight:</span>
+                        <span className="text-slate-300">
+                          Supabase stores authentication credentials in <code className="text-cyan-300 font-mono bg-cyan-950/60 px-1 py-0.5 rounded">auth.users</code>, whereas the app tracks profile records in <code className="text-cyan-300 font-mono bg-cyan-950/60 px-1 py-0.5 rounded">public.user_profiles</code>. 
+                          The <strong>"Confirmed Accounts"</strong> tab specifically filters for accounts with email verification ({confirmedUsersCount}).
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowSyncSqlModal(true)}
+                      className="text-cyan-400 hover:text-cyan-300 font-bold underline cursor-pointer text-xs whitespace-nowrap self-end sm:self-auto"
+                    >
+                      View SQL Sync Script
+                    </button>
                   </div>
                   
                   <div className="bg-slate-950 border border-slate-900 rounded-3xl overflow-hidden shadow-lg">
@@ -1276,6 +1406,75 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
                       </table>
                     </div>
                   </div>
+
+                  {/* Sync SQL Script Modal */}
+                  <AnimatePresence>
+                    {showSyncSqlModal && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.95 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.95 }}
+                          className="bg-slate-950 border border-slate-800 rounded-3xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl"
+                        >
+                          <div className="flex items-center justify-between pb-3 border-b border-slate-900">
+                            <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm">
+                              <Database className="w-4 h-4 text-cyan-400" />
+                              <span>Supabase Auth & Profiles Synchronization</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setShowSyncSqlModal(false)}
+                              className="p-1 rounded-lg hover:bg-slate-900 text-slate-400 hover:text-slate-200 cursor-pointer"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="space-y-3 text-xs text-slate-300">
+                            <p>
+                              In Supabase, user accounts created via email signup reside in <code className="text-cyan-300 font-mono bg-slate-900 px-1 py-0.5 rounded">auth.users</code>. 
+                              The application stores public display names and reaction counts in <code className="text-cyan-300 font-mono bg-slate-900 px-1 py-0.5 rounded">public.user_profiles</code>.
+                            </p>
+                            <p>
+                              If users signed up directly in Supabase or before profile triggers were set, their email addresses can be synchronized into <code className="text-cyan-300 font-mono bg-slate-900 px-1 py-0.5 rounded">user_profiles</code> by executing this 10-second script in your Supabase SQL Editor:
+                            </p>
+                          </div>
+
+                          <div className="relative">
+                            <pre className="p-4 bg-[#0a0c10] border border-slate-900 rounded-2xl text-[11px] font-mono text-slate-300 overflow-x-auto max-h-64 leading-relaxed select-all">
+                              {SYNC_AUTH_SQL}
+                            </pre>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(SYNC_AUTH_SQL);
+                                setCopiedSyncSql(true);
+                                setTimeout(() => setCopiedSyncSql(false), 2000);
+                              }}
+                              className="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold transition-all shadow-md cursor-pointer"
+                            >
+                              {copiedSyncSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                              <span>{copiedSyncSql ? "Copied!" : "Copy SQL"}</span>
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-2">
+                            <span className="text-[11px] text-slate-500 font-mono">
+                              💡 Once run, click "Sync Auth Users" or refresh this page.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowSyncSqlModal(false)}
+                              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-200 rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                            >
+                              Close
+                            </button>
+                          </div>
+                        </motion.div>
+                      </div>
+                    )}
+                  </AnimatePresence>
 
                 </div>
               )}

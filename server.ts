@@ -115,6 +115,8 @@ export type UserProfile = {
   reactionCount: number;
   suspended: boolean;
   strikes: number;
+  isConfirmed?: boolean;
+  authSource?: string;
   acceptedTermsVersion?: string | null;
   acceptedPrivacyVersion?: string | null;
   acceptedTermsAt?: string | null;
@@ -1217,51 +1219,145 @@ class SupabaseStore implements Store {
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (!error && data && Array.isArray(data)) {
-        // Query clips count to ensure reactionCount accurately reflects live reactions/clips
-        const clipCounts: Record<string, number> = {};
+      const rawProfiles: any[] = (!error && data && Array.isArray(data)) ? data : [];
+
+      // Query clips count to ensure reactionCount accurately reflects live reactions/clips
+      const clipCounts: Record<string, number> = {};
+      try {
+        const { data: clips } = await this.client
+          .from("clips")
+          .select("author_id, author_name")
+          .eq("deleted", false);
+        if (clips && Array.isArray(clips)) {
+          for (const c of clips) {
+            if (c.author_id) {
+              clipCounts[c.author_id] = (clipCounts[c.author_id] || 0) + 1;
+            }
+            if (c.author_name) {
+              const lower = c.author_name.toLowerCase();
+              clipCounts[lower] = (clipCounts[lower] || 0) + 1;
+            }
+          }
+        }
+      } catch {}
+
+      // Fetch all registered users from Supabase Auth if adminClient (service role) or RPC is available
+      const authUsersMap = new Map<string, any>();
+
+      if (this.adminClient?.auth?.admin?.listUsers) {
         try {
-          const { data: clips } = await this.client
-            .from("clips")
-            .select("author_id, author_name")
-            .eq("deleted", false);
-          if (clips && Array.isArray(clips)) {
-            for (const c of clips) {
-              if (c.author_id) {
-                clipCounts[c.author_id] = (clipCounts[c.author_id] || 0) + 1;
-              }
-              if (c.author_name) {
-                const lower = c.author_name.toLowerCase();
-                clipCounts[lower] = (clipCounts[lower] || 0) + 1;
-              }
+          const { data: authData, error: authErr } = await this.adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 });
+          if (!authErr && authData?.users && Array.isArray(authData.users)) {
+            for (const au of authData.users) {
+              if (au?.id) authUsersMap.set(au.id.toLowerCase(), au);
+            }
+          }
+        } catch (authListErr) {
+          console.warn("Could not query auth.admin.listUsers:", authListErr);
+        }
+      }
+
+      // If no admin client or 0 users found, try RPC fallback get_auth_users if installed in Supabase
+      if (authUsersMap.size === 0) {
+        try {
+          const { data: rpcUsers, error: rpcErr } = await this.client.rpc("get_auth_users");
+          if (!rpcErr && Array.isArray(rpcUsers) && rpcUsers.length > 0) {
+            for (const ru of rpcUsers) {
+              if (ru?.id) authUsersMap.set(ru.id.toLowerCase(), ru);
             }
           }
         } catch {}
+      }
 
-        return data.map((u: any) => {
-          const id = u.user_id || u.id;
-          const uname = u.username || (u.email ? u.email.split("@")[0] : `user_${(id || "").slice(0, 8)}`);
-          const clipsTotal = (id && clipCounts[id]) || (uname && clipCounts[uname.toLowerCase()]) || 0;
-          const reactionCount = typeof u.reaction_count === "number" && u.reaction_count > clipsTotal
-            ? u.reaction_count
-            : clipsTotal;
+      const mappedUserIds = new Set<string>();
+      const resultProfiles: UserProfile[] = [];
 
-          return {
-            id,
-            username: uname,
-            email: u.email || undefined,
-            createdAt: u.created_at || new Date().toISOString(),
-            lastActive: u.last_active || u.created_at || new Date().toISOString(),
-            reactionCount,
-            suspended: Boolean(u.suspended),
-            strikes: typeof u.strikes === "number" ? u.strikes : 0,
-            acceptedTermsVersion: u.accepted_terms_version || null,
-            acceptedPrivacyVersion: u.accepted_privacy_version || null,
-            acceptedTermsAt: u.accepted_terms_at || null,
-            acceptedPrivacyAt: u.accepted_privacy_at || null
-          };
+      for (const u of rawProfiles) {
+        const id = u.user_id || u.id;
+        const lowerId = (id || "").toLowerCase();
+        mappedUserIds.add(lowerId);
+
+        // Find matching Supabase Auth user if available
+        const authUser = authUsersMap.get(lowerId) || (u.email ? Array.from(authUsersMap.values()).find(a => (a.email || "").toLowerCase() === (u.email || "").toLowerCase()) : null);
+
+        const email = u.email || authUser?.email || undefined;
+        const uname = u.username || authUser?.user_metadata?.username || authUser?.user_metadata?.display_name || (email ? email.split("@")[0] : `user_${(id || "").slice(0, 8)}`);
+        const clipsTotal = (id && clipCounts[id]) || (uname && clipCounts[uname.toLowerCase()]) || 0;
+        const reactionCount = typeof u.reaction_count === "number" && u.reaction_count > clipsTotal
+          ? u.reaction_count
+          : clipsTotal;
+
+        const isConfirmed = Boolean(
+          authUser?.email_confirmed_at ||
+          authUser?.confirmed_at ||
+          u.is_confirmed ||
+          (email && email.includes("@"))
+        );
+
+        // Lazily update email in user_profiles table if found in Supabase Auth
+        if (!u.email && email && id) {
+          (this.adminClient || this.client).from("user_profiles").update({ email }).eq("id", id).catch(() => {});
+        }
+
+        resultProfiles.push({
+          id,
+          username: uname,
+          email,
+          createdAt: u.created_at || authUser?.created_at || new Date().toISOString(),
+          lastActive: u.last_active || authUser?.last_sign_in_at || u.created_at || new Date().toISOString(),
+          reactionCount,
+          suspended: Boolean(u.suspended || authUser?.banned_until),
+          strikes: typeof u.strikes === "number" ? u.strikes : 0,
+          isConfirmed,
+          authSource: authUser ? "supabase_auth" : (email ? "profile_email" : "guest"),
+          acceptedTermsVersion: u.accepted_terms_version || authUser?.user_metadata?.accepted_terms_version || null,
+          acceptedPrivacyVersion: u.accepted_privacy_version || authUser?.user_metadata?.accepted_privacy_version || null,
+          acceptedTermsAt: u.accepted_terms_at || authUser?.user_metadata?.accepted_terms_at || null,
+          acceptedPrivacyAt: u.accepted_privacy_at || authUser?.user_metadata?.accepted_privacy_at || null
         });
       }
+
+      // Add any Supabase Auth users not yet present in user_profiles table
+      for (const [authId, au] of authUsersMap.entries()) {
+        if (!mappedUserIds.has(authId)) {
+          mappedUserIds.add(authId);
+          const email = au.email || undefined;
+          const uname = au.user_metadata?.username || au.user_metadata?.display_name || (email ? email.split("@")[0] : `user_${authId.slice(0, 8)}`);
+          const clipsTotal = (clipCounts[authId] || 0) + (clipCounts[uname.toLowerCase()] || 0);
+
+          const newProfile: UserProfile = {
+            id: au.id,
+            username: uname,
+            email,
+            createdAt: au.created_at || new Date().toISOString(),
+            lastActive: au.last_sign_in_at || au.created_at || new Date().toISOString(),
+            reactionCount: clipsTotal,
+            suspended: Boolean(au.banned_until),
+            strikes: 0,
+            isConfirmed: Boolean(au.email_confirmed_at || au.confirmed_at || email),
+            authSource: "supabase_auth",
+            acceptedTermsVersion: au.user_metadata?.accepted_terms_version || null,
+            acceptedPrivacyVersion: au.user_metadata?.accepted_privacy_version || null,
+            acceptedTermsAt: au.user_metadata?.accepted_terms_at || null,
+            acceptedPrivacyAt: au.user_metadata?.accepted_privacy_at || null
+          };
+
+          resultProfiles.unshift(newProfile);
+
+          // Auto-backfill to user_profiles table
+          const insertClient = this.adminClient || this.client;
+          insertClient.from("user_profiles").insert({
+            id: au.id,
+            user_id: au.id,
+            email: au.email || null,
+            username: uname,
+            created_at: au.created_at || new Date().toISOString(),
+            last_active: au.last_sign_in_at || au.created_at || new Date().toISOString()
+          }).catch((e: any) => console.warn("Auto-backfill user_profile error:", e?.message || e));
+        }
+      }
+
+      return resultProfiles;
     } catch (err) {
       console.warn("getUsers query failed or table not present:", err);
     }
@@ -1680,6 +1776,18 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
           acceptedTermsAt: userData.user.user_metadata?.accepted_terms_at || null,
           acceptedPrivacyAt: userData.user.user_metadata?.accepted_privacy_at || null
         });
+      } else if (user.email && (!profile.email || profile.email !== user.email)) {
+        profile.email = user.email;
+        try {
+          await store!.upsertUserProfile({
+            id: user.id,
+            username: profile.username,
+            email: user.email,
+            lastActive: new Date().toISOString()
+          });
+        } catch (syncErr) {
+          console.warn("Could not sync auth user.email to profile:", syncErr);
+        }
       }
 
       // Reconcile policy acceptance: Check user_metadata and server-side cache if columns in table are empty
@@ -2015,49 +2123,72 @@ CREATE POLICY "Allow public likes" ON public.likes FOR ALL USING (true);
 CREATE POLICY "Allow public laughs" ON public.laughs FOR ALL USING (true);
 CREATE POLICY "Allow public reports" ON public.reports FOR ALL USING (true);
 
--- One-Time Backfill for existing auth.users:
-DO $$
-DECLARE
-  r RECORD;
-  base_uname TEXT;
-  final_uname TEXT;
-  suffix INTEGER;
-BEGIN
-  FOR r IN 
-    SELECT u.id, u.email, u.created_at, u.raw_user_meta_data
-    FROM auth.users u
-    LEFT JOIN public.user_profiles p ON (p.id = u.id OR p.user_id = u.id)
-    WHERE p.id IS NULL
-  LOOP
-    base_uname := COALESCE(
-      NULLIF(TRIM(r.raw_user_meta_data->>'username'), ''),
-      NULLIF(TRIM(r.raw_user_meta_data->>'user_name'), ''),
-      NULLIF(TRIM(r.raw_user_meta_data->>'full_name'), ''),
-      NULLIF(TRIM(r.raw_user_meta_data->>'name'), ''),
-      NULLIF(TRIM(split_part(r.email, '@', 1)), ''),
-      'user_' || substr(r.id::text, 1, 8)
-    );
-    base_uname := regexp_replace(base_uname, '[^a-zA-Z0-9_]', '_', 'g');
-    IF base_uname IS NULL OR base_uname = '' THEN
-      base_uname := 'user_' || substr(r.id::text, 1, 8);
-    END IF;
-    final_uname := base_uname;
-    suffix := 0;
-    WHILE EXISTS (SELECT 1 FROM public.user_profiles WHERE username = final_uname AND id != r.id) LOOP
-      suffix := suffix + 1;
-      final_uname := base_uname || '_' || suffix::text;
-    END LOOP;
+-- One-Time Backfill & Continuous Sync for existing auth.users:
+-- Step 1: Update existing user_profiles with matching auth user id to ensure email is populated
+UPDATE public.user_profiles p
+SET 
+  email = u.email,
+  username = COALESCE(
+    NULLIF(p.username, ''),
+    NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+    NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
+    p.username
+  )
+FROM auth.users u
+WHERE (p.id = u.id OR p.user_id = u.id)
+  AND (p.email IS NULL OR p.email != u.email);
 
-    INSERT INTO public.user_profiles (
-      id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
-    )
-    VALUES (
-      r.id, r.id, r.email, final_uname, false, 0, 0,
-      COALESCE(r.created_at, NOW()), COALESCE(r.created_at, NOW())
-    )
-    ON CONFLICT (id) DO NOTHING;
-  END LOOP;
-END $$;
+-- Step 2: Insert any auth.users that do not exist in user_profiles yet
+INSERT INTO public.user_profiles (
+  id, user_id, email, username, suspended, strikes, reaction_count, created_at, last_active
+)
+SELECT 
+  u.id,
+  u.id,
+  u.email,
+  COALESCE(
+    NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+    NULLIF(TRIM(u.raw_user_meta_data->>'user_name'), ''),
+    NULLIF(TRIM(u.raw_user_meta_data->>'display_name'), ''),
+    NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
+    'user_' || substr(u.id::text, 1, 8)
+  ),
+  false, 0, 0,
+  COALESCE(u.created_at, NOW()),
+  COALESCE(u.created_at, NOW())
+FROM auth.users u
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.user_profiles p WHERE p.id = u.id OR p.user_id = u.id
+)
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email;
+
+-- Step 3: RPC function so admin panel can query auth users directly
+CREATE OR REPLACE FUNCTION public.get_auth_users()
+RETURNS TABLE (
+  id UUID,
+  email TEXT,
+  created_at TIMESTAMPTZ,
+  confirmed_at TIMESTAMPTZ,
+  last_sign_in_at TIMESTAMPTZ,
+  raw_user_meta_data JSONB
+)
+SECURITY DEFINER
+SET search_path = public, auth
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT 
+    u.id,
+    u.email::TEXT,
+    u.created_at,
+    COALESCE(u.email_confirmed_at, u.confirmed_at),
+    u.last_sign_in_at,
+    u.raw_user_meta_data
+  FROM auth.users u;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, service_role;
 `
   });
 });
@@ -3300,12 +3431,103 @@ app.get("/api/admin/users", async (req, res) => {
       reactionCount: typeof u.reactionCount === "number" ? u.reactionCount : 0,
       suspended: Boolean(u.suspended),
       strikes: typeof u.strikes === "number" ? u.strikes : 0,
-      isConfirmed: Boolean(u.email)
+      isConfirmed: typeof u.isConfirmed === "boolean" ? u.isConfirmed : Boolean(u.email),
+      authSource: u.authSource || (u.email ? "profile_email" : "guest")
     }));
     res.json(formatted);
   } catch (err: any) {
     console.error("Error in /api/admin/users:", err);
     res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+// 8b. POST Sync Supabase Auth Users with user_profiles
+app.post("/api/admin/sync-auth-users", async (req, res) => {
+  try {
+    let synced = 0;
+    let authCount = 0;
+    const errors: string[] = [];
+
+    // Method 1: If supabaseAdmin exists, list users directly from auth.admin
+    if (supabaseAdmin?.auth?.admin?.listUsers) {
+      try {
+        const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        if (authErr) {
+          errors.push(`auth.admin.listUsers: ${authErr.message}`);
+        } else if (authData?.users && Array.isArray(authData.users)) {
+          authCount = authData.users.length;
+          for (const au of authData.users) {
+            const email = au.email || null;
+            const uname = au.user_metadata?.username || au.user_metadata?.display_name || (email ? email.split("@")[0] : `user_${au.id.slice(0, 8)}`);
+            try {
+              const { error: upsertErr } = await (supabaseAdmin || supabase)
+                .from("user_profiles")
+                .upsert({
+                  id: au.id,
+                  user_id: au.id,
+                  email,
+                  username: uname,
+                  created_at: au.created_at || new Date().toISOString(),
+                  last_active: au.last_sign_in_at || au.created_at || new Date().toISOString()
+                }, { onConflict: "id" });
+              if (!upsertErr) synced++;
+            } catch (e: any) {
+              errors.push(`upsert ${au.id}: ${e?.message}`);
+            }
+          }
+        }
+      } catch (adminListErr: any) {
+        errors.push(`admin client error: ${adminListErr?.message || adminListErr}`);
+      }
+    }
+
+    // Method 2: If supabaseAdmin is not present or 0 synced, try get_auth_users RPC
+    if (synced === 0 && supabase) {
+      try {
+        const { data: rpcUsers, error: rpcErr } = await supabase.rpc("get_auth_users");
+        if (!rpcErr && Array.isArray(rpcUsers) && rpcUsers.length > 0) {
+          authCount = rpcUsers.length;
+          for (const ru of rpcUsers) {
+            const email = ru.email || null;
+            const uname = ru.raw_user_meta_data?.username || (email ? email.split("@")[0] : `user_${ru.id.slice(0, 8)}`);
+            try {
+              const { error: upsertErr } = await supabase
+                .from("user_profiles")
+                .upsert({
+                  id: ru.id,
+                  user_id: ru.id,
+                  email,
+                  username: uname,
+                  created_at: ru.created_at || new Date().toISOString(),
+                  last_active: ru.last_sign_in_at || ru.created_at || new Date().toISOString()
+                }, { onConflict: "id" });
+              if (!upsertErr) synced++;
+            } catch (e: any) {
+              errors.push(`rpc upsert ${ru.id}: ${e?.message}`);
+            }
+          }
+        }
+      } catch (e: any) {
+        errors.push(`rpc get_auth_users: ${e?.message}`);
+      }
+    }
+
+    const hasServiceRoleKey = Boolean(supabaseAdmin);
+    return res.json({
+      success: synced > 0 || (authCount > 0),
+      hasServiceRoleKey,
+      authCount,
+      synced,
+      errors: errors.length > 0 ? errors : undefined,
+      message: synced > 0
+        ? `Successfully synchronized ${synced} user account${synced === 1 ? "" : "s"} from Supabase Authentication into user_profiles.`
+        : (hasServiceRoleKey 
+            ? "Supabase Auth accounts are already synchronized." 
+            : "To automatically sync all 7 Supabase Auth accounts via API, configure SUPABASE_SERVICE_ROLE_KEY in your environment, or run the SQL sync script in your Supabase SQL Editor.")
+    });
+  } catch (err: any) {
+    console.error("Error syncing auth users:", err);
+    return res.status(500).json({ error: err?.message || "Failed to sync auth users" });
   }
 });
 
