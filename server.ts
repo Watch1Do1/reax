@@ -1281,7 +1281,17 @@ class SupabaseStore implements Store {
         const authUser = authUsersMap.get(lowerId) || (u.email ? Array.from(authUsersMap.values()).find(a => (a.email || "").toLowerCase() === (u.email || "").toLowerCase()) : null);
 
         const email = u.email || authUser?.email || undefined;
-        const uname = u.username || authUser?.user_metadata?.username || authUser?.user_metadata?.display_name || (email ? email.split("@")[0] : `user_${(id || "").slice(0, 8)}`);
+        const authMetaUname = authUser?.user_metadata?.username || 
+                              authUser?.raw_user_meta_data?.username || 
+                              authUser?.user_metadata?.display_name || 
+                              authUser?.raw_user_meta_data?.display_name ||
+                              authUser?.user_metadata?.user_name ||
+                              authUser?.raw_user_meta_data?.user_name;
+        const isPlaceholderUname = !u.username || u.username.startsWith("user_") || u.username.startsWith("Reaxer_");
+        const uname = (authMetaUname && (isPlaceholderUname || !u.username))
+          ? authMetaUname
+          : (u.username || authMetaUname || (email ? email.split("@")[0] : `user_${(id || "").slice(0, 8)}`));
+
         const clipsTotal = (id && clipCounts[id]) || (uname && clipCounts[uname.toLowerCase()]) || 0;
         const reactionCount = typeof u.reaction_count === "number" && u.reaction_count > clipsTotal
           ? u.reaction_count
@@ -1294,9 +1304,12 @@ class SupabaseStore implements Store {
           (email && email.includes("@"))
         );
 
-        // Lazily update email in user_profiles table if found in Supabase Auth
-        if (!u.email && email && id) {
-          (this.adminClient || this.client).from("user_profiles").update({ email }).eq("id", id).catch(() => {});
+        // Lazily update email and username in user_profiles table if found in Supabase Auth
+        const updatePayload: Record<string, any> = {};
+        if (!u.email && email) updatePayload.email = email;
+        if (authMetaUname && isPlaceholderUname) updatePayload.username = authMetaUname;
+        if (Object.keys(updatePayload).length > 0 && id) {
+          (this.adminClient || this.client).from("user_profiles").update(updatePayload).eq("id", id).catch(() => {});
         }
 
         resultProfiles.push({
@@ -1776,17 +1789,31 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
           acceptedTermsAt: userData.user.user_metadata?.accepted_terms_at || null,
           acceptedPrivacyAt: userData.user.user_metadata?.accepted_privacy_at || null
         });
-      } else if (user.email && (!profile.email || profile.email !== user.email)) {
-        profile.email = user.email;
-        try {
-          await store!.upsertUserProfile({
-            id: user.id,
-            username: profile.username,
-            email: user.email,
-            lastActive: new Date().toISOString()
-          });
-        } catch (syncErr) {
-          console.warn("Could not sync auth user.email to profile:", syncErr);
+      } else {
+        let needsUpdate = false;
+        const metaUname = userData.user.user_metadata?.username || 
+                          userData.user.user_metadata?.display_name || 
+                          userData.user.user_metadata?.user_name;
+        const isPlaceholderUname = !profile.username || profile.username.startsWith("user_") || profile.username.startsWith("Reaxer_");
+        if (metaUname && isPlaceholderUname) {
+          profile.username = metaUname;
+          needsUpdate = true;
+        }
+        if (user.email && (!profile.email || profile.email !== user.email)) {
+          profile.email = user.email;
+          needsUpdate = true;
+        }
+        if (needsUpdate) {
+          try {
+            await store!.upsertUserProfile({
+              id: user.id,
+              username: profile.username,
+              email: profile.email || user.email,
+              lastActive: new Date().toISOString()
+            });
+          } catch (syncErr) {
+            console.warn("Could not sync auth user details to profile:", syncErr);
+          }
         }
       }
 
@@ -2124,19 +2151,27 @@ CREATE POLICY "Allow public laughs" ON public.laughs FOR ALL USING (true);
 CREATE POLICY "Allow public reports" ON public.reports FOR ALL USING (true);
 
 -- One-Time Backfill & Continuous Sync for existing auth.users:
--- Step 1: Update existing user_profiles with matching auth user id to ensure email is populated
+-- Step 1: Update existing user_profiles with matching auth user id to ensure email and display names are populated
 UPDATE public.user_profiles p
 SET 
   email = u.email,
-  username = COALESCE(
-    NULLIF(p.username, ''),
-    NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
-    NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
-    p.username
-  )
+  username = CASE 
+    WHEN p.username IS NULL OR p.username = '' OR p.username LIKE 'user_%' OR p.username LIKE 'Reaxer_%' THEN
+      COALESCE(
+        NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+        NULLIF(TRIM(u.raw_user_meta_data->>'display_name'), ''),
+        NULLIF(TRIM(u.raw_user_meta_data->>'user_name'), ''),
+        NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
+        p.username
+      )
+    ELSE COALESCE(
+      NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+      NULLIF(TRIM(u.raw_user_meta_data->>'display_name'), ''),
+      p.username
+    )
+  END
 FROM auth.users u
-WHERE (p.id = u.id OR p.user_id = u.id)
-  AND (p.email IS NULL OR p.email != u.email);
+WHERE (p.id = u.id OR p.user_id = u.id);
 
 -- Step 2: Insert any auth.users that do not exist in user_profiles yet
 INSERT INTO public.user_profiles (
@@ -3458,7 +3493,7 @@ app.post("/api/admin/sync-auth-users", async (req, res) => {
           authCount = authData.users.length;
           for (const au of authData.users) {
             const email = au.email || null;
-            const uname = au.user_metadata?.username || au.user_metadata?.display_name || (email ? email.split("@")[0] : `user_${au.id.slice(0, 8)}`);
+            const uname = au.user_metadata?.username || au.user_metadata?.display_name || au.user_metadata?.user_name || (email ? email.split("@")[0] : `user_${au.id.slice(0, 8)}`);
             try {
               const { error: upsertErr } = await (supabaseAdmin || supabase)
                 .from("user_profiles")
@@ -3489,7 +3524,10 @@ app.post("/api/admin/sync-auth-users", async (req, res) => {
           authCount = rpcUsers.length;
           for (const ru of rpcUsers) {
             const email = ru.email || null;
-            const uname = ru.raw_user_meta_data?.username || (email ? email.split("@")[0] : `user_${ru.id.slice(0, 8)}`);
+            const uname = ru.raw_user_meta_data?.username || 
+                          ru.raw_user_meta_data?.display_name || 
+                          ru.raw_user_meta_data?.user_name || 
+                          (email ? email.split("@")[0] : `user_${ru.id.slice(0, 8)}`);
             try {
               const { error: upsertErr } = await supabase
                 .from("user_profiles")

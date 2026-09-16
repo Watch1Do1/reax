@@ -187,19 +187,27 @@ export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: 
     }
   };
 
-  const SYNC_AUTH_SQL = `-- 1. Link emails from Supabase Auth to existing user_profiles
+  const SYNC_AUTH_SQL = `-- 1. Link emails and display names from Supabase Auth to existing user_profiles
 UPDATE public.user_profiles p
 SET 
   email = u.email,
-  username = COALESCE(
-    NULLIF(p.username, ''),
-    NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
-    NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
-    p.username
-  )
+  username = CASE 
+    WHEN p.username IS NULL OR p.username = '' OR p.username LIKE 'user_%' OR p.username LIKE 'Reaxer_%' THEN
+      COALESCE(
+        NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+        NULLIF(TRIM(u.raw_user_meta_data->>'display_name'), ''),
+        NULLIF(TRIM(u.raw_user_meta_data->>'user_name'), ''),
+        NULLIF(TRIM(split_part(u.email, '@', 1)), ''),
+        p.username
+      )
+    ELSE COALESCE(
+      NULLIF(TRIM(u.raw_user_meta_data->>'username'), ''),
+      NULLIF(TRIM(u.raw_user_meta_data->>'display_name'), ''),
+      p.username
+    )
+  END
 FROM auth.users u
-WHERE (p.id = u.id OR p.user_id = u.id)
-  AND (p.email IS NULL OR p.email != u.email);
+WHERE (p.id = u.id OR p.user_id = u.id);
 
 -- 2. Insert any auth accounts missing from user_profiles
 INSERT INTO public.user_profiles (
