@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag, Trash2, Share2 } from "lucide-react";
+import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag, Trash2, Share2, Copy, Check } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage } from "../utils/watermarkExporter";
 import ShareModal from "./ShareModal";
 
 interface ClipCardProps {
@@ -26,7 +27,7 @@ interface ClipCardProps {
 export default function ClipCard({ 
   clip, 
   allClips, 
-  onLaugh,
+  onLaugh, 
   onLike, 
   onUnlike,
   onUnlaugh,
@@ -44,336 +45,49 @@ export default function ClipCard({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [isCopyingPicture, setIsCopyingPicture] = useState(false);
+  const [copiedPicture, setCopiedPicture] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [showSubReplies, setShowSubReplies] = useState(false);
 
-  // Export-only watermark share & download handler
-  const handleShare = async () => {
+  const isVideo = clip.mediaType === "video" || 
+    clip.mediaUrl.endsWith(".mp4") || 
+    clip.mediaUrl.endsWith(".webm") || 
+    clip.mediaUrl.includes("mixkit-") || 
+    clip.mediaUrl.includes("uploads/clip-");
+
+  // High-res Watermark & Picture Exporter Handlers
+  const handleDownloadWatermark = async () => {
     if (isSharing) return;
     setIsSharing(true);
-
     try {
-      // 1. Draw a canvas from the clip image (or current video frame)
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Could not initialize canvas context");
-
-      let width = 640;
-      let height = 360;
-
-      if (isVideo && videoRef.current && videoRef.current.videoWidth > 0) {
-        width = videoRef.current.videoWidth;
-        height = videoRef.current.videoHeight;
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(videoRef.current, 0, 0, width, height);
-      } else {
-        // Load image source with CORS resilience
-        const loadImg = (): Promise<HTMLImageElement> => {
-          return new Promise(async (resolve, reject) => {
-            if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
-              try {
-                const testC = document.createElement("canvas");
-                testC.width = 1;
-                testC.height = 1;
-                const testCtx = testC.getContext("2d");
-                testCtx?.drawImage(imgRef.current, 0, 0, 1, 1);
-                testC.toDataURL();
-                return resolve(imgRef.current);
-              } catch {
-                // Image element is tainted, load freshly below
-              }
-            }
-
-            try {
-              const res = await fetch(clip.mediaUrl);
-              const blob = await res.blob();
-              const blobUrl = URL.createObjectURL(blob);
-              const image = new Image();
-              image.onload = () => resolve(image);
-              image.onerror = reject;
-              image.src = blobUrl;
-            } catch {
-              const image = new Image();
-              image.crossOrigin = "anonymous";
-              image.onload = () => resolve(image);
-              image.onerror = reject;
-              image.src = clip.mediaUrl;
-            }
-          });
-        };
-
-        const imageEl = await loadImg();
-        width = imageEl.naturalWidth || 640;
-        height = imageEl.naturalHeight || 360;
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(imageEl, 0, 0, width, height);
-      }
-
-      // Parse overlay text parameters
-      const [, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "bottom"] = (clip.effect || "zoom").split("|");
-
-      // 2. Draw overlayText with the same 9-position map and 2-line wrap
-      if (clip.overlayText && clip.overlayText.trim() && textStylePosition !== "none") {
-        const fontSize = Math.max(16, Math.round(height * 0.075));
-        const lineHeight = fontSize * 1.22;
-
-        let fontSpec = `900 ${fontSize}px sans-serif`;
-        if (textStylePreset === "comic") fontSpec = `italic 900 ${fontSize}px serif`;
-        else if (textStylePreset === "glitch") fontSpec = `900 ${fontSize}px monospace`;
-        else if (textStylePreset === "cinema") fontSpec = `300 ${fontSize}px serif`;
-        else if (textStylePreset === "bold") fontSpec = `800 ${fontSize}px sans-serif`;
-
-        ctx.font = fontSpec;
-
-        const colorMap: Record<string, string> = {
-          white: "#ffffff",
-          yellow: "#facc15",
-          red: "#f43f5e",
-          cyan: "#22d3ee",
-        };
-        const textFillColor = colorMap[textStyleColor] || "#ffffff";
-
-        let text = clip.overlayText.trim();
-        if (textStylePreset === "comic") {
-          text = text.toLowerCase();
-        } else {
-          text = text.toUpperCase();
-        }
-
-        // 2-line wrap
-        const maxTextWidth = width * 0.85;
-        const words = text.split(/\s+/);
-        const lines: string[] = [];
-        let curLine = "";
-
-        for (let i = 0; i < words.length; i++) {
-          const w = words[i];
-          const test = curLine ? `${curLine} ${w}` : w;
-          if (ctx.measureText(test).width > maxTextWidth && curLine) {
-            lines.push(curLine);
-            curLine = w;
-            if (lines.length === 2) break;
-          } else {
-            curLine = test;
-          }
-        }
-        if (curLine && lines.length < 2) {
-          lines.push(curLine);
-        }
-
-        // Clamp second line if still exceeding max width
-        if (lines.length === 2) {
-          while (ctx.measureText(lines[1] + "...").width > maxTextWidth && lines[1].length > 0) {
-            lines[1] = lines[1].slice(0, -1);
-          }
-          const wordCountInLines = lines[0].split(" ").length + lines[1].split(" ").length;
-          if (wordCountInLines < words.length) {
-            lines[1] = lines[1].trim() + "...";
-          }
-        }
-
-        // 9-position map horizontal alignment
-        let baseX = width / 2;
-        if (textStylePosition.includes("left")) {
-          ctx.textAlign = "left";
-          baseX = width * 0.05;
-        } else if (textStylePosition.includes("right")) {
-          ctx.textAlign = "right";
-          baseX = width * 0.95;
-        } else {
-          ctx.textAlign = "center";
-          baseX = width / 2;
-        }
-
-        // 9-position map vertical alignment
-        ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.16));
-        ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
-        ctx.fillStyle = textFillColor;
-        ctx.lineJoin = "round";
-
-        if (textStylePosition.startsWith("top")) {
-          ctx.textBaseline = "top";
-          // Extra top padding for top positions (top / top-left / top-right) matching top-8 CSS
-          const startY = Math.max(height * 0.12, 32 * (width / 640));
-          lines.forEach((line, i) => {
-            const y = startY + i * lineHeight;
-            ctx.strokeText(line, baseX, y);
-            ctx.fillText(line, baseX, y);
-          });
-        } else if (textStylePosition.startsWith("bottom")) {
-          ctx.textBaseline = "bottom";
-          const endY = height * 0.94;
-          if (lines.length === 1) {
-            ctx.strokeText(lines[0], baseX, endY);
-            ctx.fillText(lines[0], baseX, endY);
-          } else {
-            ctx.strokeText(lines[0], baseX, endY - lineHeight);
-            ctx.fillText(lines[0], baseX, endY - lineHeight);
-            ctx.strokeText(lines[1], baseX, endY);
-            ctx.fillText(lines[1], baseX, endY);
-          }
-        } else {
-          // center, left, right
-          ctx.textBaseline = "middle";
-          const totalH = lines.length * lineHeight;
-          const startY = (height - totalH) / 2 + lineHeight / 2;
-          lines.forEach((line, i) => {
-            const y = startY + i * lineHeight;
-            ctx.strokeText(line, baseX, y);
-            ctx.fillText(line, baseX, y);
-          });
-        }
-      }
-
-      // 3. Draw "getREAX.com" with dynamic contrast opposite the caption
-      const hasCaption = Boolean(clip.overlayText && clip.overlayText.trim() && textStylePosition !== "none");
-      const pos = hasCaption ? textStylePosition : "bottom-right";
-
-      const wmScale = Math.max(1, width / 640);
-      const wmFontSize = Math.max(11, Math.round(11 * wmScale));
-      const wmPadX = Math.round(width * 0.04);
-      const wmPadY = Math.round(height * 0.04);
-
-      let wmX = width - wmPadX;
-      let wmY = wmPadY;
-      let wmAlign: CanvasTextAlign = "right";
-      let wmBaseline: CanvasTextBaseline = "top";
-
-      // Calculate position opposite to caption:
-      // if bottom-right -> top-right; bottom -> top-right; bottom-left -> top-left;
-      // if top-right -> bottom-right; top -> bottom-right; top-left -> bottom-left;
-      // if left -> top-right; if right -> top-left; center/none -> bottom-right
-      if (pos === "bottom-right" || pos === "bottom") {
-        wmAlign = "right";
-        wmBaseline = "top";
-        wmX = width - wmPadX;
-        wmY = wmPadY;
-      } else if (pos === "bottom-left") {
-        wmAlign = "left";
-        wmBaseline = "top";
-        wmX = wmPadX;
-        wmY = wmPadY;
-      } else if (pos === "top-right" || pos === "top") {
-        wmAlign = "right";
-        wmBaseline = "bottom";
-        wmX = width - wmPadX;
-        wmY = height - wmPadY;
-      } else if (pos === "top-left") {
-        wmAlign = "left";
-        wmBaseline = "bottom";
-        wmX = wmPadX;
-        wmY = height - wmPadY;
-      } else if (pos === "left") {
-        wmAlign = "right";
-        wmBaseline = "top";
-        wmX = width - wmPadX;
-        wmY = wmPadY;
-      } else if (pos === "right") {
-        wmAlign = "left";
-        wmBaseline = "top";
-        wmX = wmPadX;
-        wmY = wmPadY;
-      } else {
-        wmAlign = "right";
-        wmBaseline = "bottom";
-        wmX = width - wmPadX;
-        wmY = height - wmPadY;
-      }
-
-      // Sample 24x24 patch around watermark location (clamped to canvas bounds)
-      let avg = 0;
-      try {
-        const patchSize = 24;
-        let patchX = Math.round(wmAlign === "right" ? wmX - patchSize : wmX);
-        let patchY = Math.round(wmBaseline === "bottom" ? wmY - patchSize : wmY);
-        patchX = Math.max(0, Math.min(width - Math.min(patchSize, width), patchX));
-        patchY = Math.max(0, Math.min(height - Math.min(patchSize, height), patchY));
-        const patchW = Math.max(1, Math.min(patchSize, width - patchX));
-        const patchH = Math.max(1, Math.min(patchSize, height - patchY));
-
-        const imgData = ctx.getImageData(patchX, patchY, patchW, patchH);
-        const data = imgData.data;
-        let totalLuminance = 0;
-        let pixelCount = 0;
-
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          // avg = 0.299*r + 0.587*g + 0.114*b
-          totalLuminance += 0.299 * r + 0.587 * g + 0.114 * b;
-          pixelCount++;
-        }
-        avg = pixelCount > 0 ? totalLuminance / pixelCount : 0;
-      } catch {
-        avg = 0;
-      }
-
-      // If avg > 140 use fill rgba(20,20,20,0.8) and stroke rgba(255,255,255,0.55)
-      // Else use fill rgba(255,255,255,0.8) and stroke rgba(0,0,0,0.55)
-      const isBright = avg > 140;
-      const fillColor = isBright ? "rgba(20, 20, 20, 0.8)" : "rgba(255, 255, 255, 0.8)";
-      const strokeColor = isBright ? "rgba(255, 255, 255, 0.55)" : "rgba(0, 0, 0, 0.55)";
-      const lineWidth = Math.max(1, Math.round(2 * wmScale));
-
-      ctx.save();
-      ctx.font = `600 ${wmFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-      ctx.textAlign = wmAlign;
-      ctx.textBaseline = wmBaseline;
-      ctx.lineJoin = "round";
-      ctx.lineWidth = lineWidth;
-      ctx.strokeStyle = strokeColor;
-      ctx.fillStyle = fillColor;
-      ctx.strokeText("getREAX.com", wmX, wmY);
-      ctx.fillText("getREAX.com", wmX, wmY);
-      ctx.restore();
-
-      // 4. Download as JPEG named reax-clip.jpg
-      // 5. If navigator.share exists, offer share of that file
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          setIsSharing(false);
-          return;
-        }
-
-        const fileName = "reax-clip.jpg";
-        const file = new File([blob], fileName, { type: "image/jpeg" });
-
-        const triggerDownload = () => {
-          const downloadUrl = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = downloadUrl;
-          link.download = fileName;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          setTimeout(() => URL.revokeObjectURL(downloadUrl), 3000);
-        };
-
-        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-          try {
-            await navigator.share({
-              files: [file],
-              title: "Reax Clip",
-              text: clip.overlayText ? `"${clip.overlayText}" on getREAX.com` : "getREAX.com",
-            });
-          } catch (shareErr: any) {
-            if (shareErr.name !== "AbortError") {
-              triggerDownload();
-            }
-          }
-        } else {
-          triggerDownload();
-        }
-
-        setIsSharing(false);
-      }, "image/jpeg", 0.92);
-
+      await downloadWatermarkedImage(clip, isVideo ? videoRef.current : imgRef.current);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Watermarked picture saved!" } }));
     } catch (err) {
-      console.error("Failed to export clip with watermark:", err);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Failed to save picture" } }));
+    } finally {
       setIsSharing(false);
+    }
+  };
+
+  const handleCopyPicture = async () => {
+    if (isCopyingPicture) return;
+    setIsCopyingPicture(true);
+    try {
+      const res = await copyWatermarkedImageToClipboard(clip, isVideo ? videoRef.current : imgRef.current);
+      if (res.success) {
+        setCopiedPicture(true);
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "📋 Picture copied to clipboard! Paste (Ctrl+V) into email or 9gag" } }));
+        setTimeout(() => setCopiedPicture(false), 3000);
+      } else if (res.fallbackDownloaded) {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Picture downloaded (ready to paste/attach in email or 9gag)" } }));
+      } else {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: res.error || "Failed to copy picture" } }));
+      }
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Could not copy picture" } }));
+    } finally {
+      setIsCopyingPicture(false);
     }
   };
 
@@ -734,8 +448,6 @@ export default function ClipCard({
     setIsMuted(nextMuted);
   };
 
-  const isVideo = clip.mediaUrl.endsWith(".mp4") || clip.mediaUrl.endsWith(".webm") || clip.mediaUrl.includes("mixkit-") || clip.mediaUrl.includes("uploads/clip-");
-
   // Autoplay video only when the card is mostly on screen (IntersectionObserver). Pause when scrolled off. Never autoplay sound.
   useEffect(() => {
     if (!isVideo) return;
@@ -956,7 +668,7 @@ export default function ClipCard({
                 <div className={positionClasses[textStylePosition] || positionClasses.bottom}>
                   <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} ${
                     textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
-                  } line-clamp-2 break-words leading-tight max-w-full`}>
+                  } break-words leading-tight max-w-full`}>
                     {clip.overlayText}
                   </h2>
                 </div>
@@ -965,9 +677,19 @@ export default function ClipCard({
           );
         })()}
 
+        {/* Visible Watermark Pill Stamp */}
+        <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none">
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-sm border border-white/20 text-white shadow-md">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+            <span className="text-[10px] font-mono font-bold tracking-wider text-slate-100">
+              getREAX.com
+            </span>
+          </div>
+        </div>
+
         {/* Playing audio visual wave badge */}
         {isAudioPlaying && (
-          <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[10px] font-mono font-bold shadow-lg animate-pulse backdrop-blur-md">
+          <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[10px] font-mono font-bold shadow-lg animate-pulse backdrop-blur-md">
             <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
             <span>PLAYING AUDIO</span>
           </div>
@@ -1132,6 +854,22 @@ export default function ClipCard({
           >
             <Star className={`w-3.5 h-3.5 ${isSaved ? "fill-amber-400 text-amber-400" : ""}`} />
             <span className="text-[10px] hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
+          </button>
+
+          {/* Quick Copy Picture Button */}
+          <button 
+            type="button"
+            onClick={handleCopyPicture}
+            disabled={isCopyingPicture}
+            className="flex items-center gap-1 text-slate-400 hover:text-cyan-300 transition-colors cursor-pointer"
+            title="Copy watermarked picture to clipboard (paste with Ctrl+V in email or 9gag)"
+          >
+            {copiedPicture ? (
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <Copy className="w-3.5 h-3.5 text-cyan-400" />
+            )}
+            <span className="text-[10px] hidden sm:inline">{copiedPicture ? "Copied!" : "Copy"}</span>
           </button>
 
           {/* Share Button (opens ShareModal) */}
@@ -1327,13 +1065,15 @@ export default function ClipCard({
         </div>
       )}
 
-      {/* Direct Share Modal (SMS, Email, Copy Link, Native Share, Download) */}
+      {/* Direct Share Modal (SMS, Email, Copy Link, Native Share, Download, Copy Picture) */}
       <ShareModal
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
         clip={clip}
-        onDownloadWatermark={handleShare}
+        onDownloadWatermark={handleDownloadWatermark}
         isGeneratingWatermark={isSharing}
+        onCopyPicture={handleCopyPicture}
+        isCopyingPicture={isCopyingPicture}
       />
 
     </div>
