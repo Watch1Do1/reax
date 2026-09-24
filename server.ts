@@ -16,12 +16,6 @@ import multer from "multer";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
-import ffmpegStatic from "ffmpeg-static";
-import ffprobeStatic from "ffprobe-static";
-
-// Resolve ffmpeg-static and ffprobe-static binary paths (never rely on /usr/bin or PATH)
-const ffmpegStaticPath: string = (ffmpegStatic as any)?.default || (typeof ffmpegStatic === "string" ? ffmpegStatic : "");
-const ffprobeStaticPath: string = (ffprobeStatic as any)?.path || (ffprobeStatic as any)?.default?.path || (typeof ffprobeStatic === "string" ? ffprobeStatic : "");
 
 dotenv.config();
 
@@ -2694,6 +2688,29 @@ const handleTrimUploadMiddleware = (req: express.Request, res: express.Response,
   });
 };
 
+// Safely resolve ffmpeg-static and ffprobe-static binaries on demand (never throw at module load)
+const getFFmpegStaticPath = (): string => {
+  try {
+    const ffmpegMod = require("ffmpeg-static");
+    const p = (ffmpegMod as any)?.default || (typeof ffmpegMod === "string" ? ffmpegMod : "");
+    if (p && typeof p === "string" && fs.existsSync(p)) return p;
+  } catch (err) {
+    console.warn("ffmpeg-static resolution failed:", err);
+  }
+  return "";
+};
+
+const getFFprobeStaticPath = (): string => {
+  try {
+    const ffprobeMod = require("ffprobe-static");
+    const p = (ffprobeMod as any)?.path || (ffprobeMod as any)?.default?.path || (typeof ffprobeMod === "string" ? ffprobeMod : "");
+    if (p && typeof p === "string" && fs.existsSync(p)) return p;
+  } catch (err) {
+    console.warn("ffprobe-static resolution failed:", err);
+  }
+  return "";
+};
+
 interface ProbeVideoResult {
   duration: number;
   hasVideo: boolean;
@@ -2706,11 +2723,12 @@ interface ProbeVideoResult {
 
 const probeVideoFile = (filePath: string): Promise<ProbeVideoResult> => {
   return new Promise((resolve, reject) => {
-    if (!ffprobeStaticPath || !fs.existsSync(ffprobeStaticPath)) {
+    const ffprobeBin = getFFprobeStaticPath();
+    if (!ffprobeBin) {
       return reject(new Error("Server video processing binary (ffprobe) is unavailable."));
     }
     execFile(
-      ffprobeStaticPath,
+      ffprobeBin,
       [
         "-v", "error",
         "-show_entries", "stream=codec_type,codec_name,width,height,duration:format=duration",
@@ -2775,7 +2793,8 @@ const trimVideoWithFFmpeg = ({
   timeoutMs?: number;
 }): Promise<{ timedOut: boolean; success: boolean; error?: string }> => {
   return new Promise((resolve) => {
-    if (!ffmpegStaticPath || !fs.existsSync(ffmpegStaticPath)) {
+    const ffmpegBin = getFFmpegStaticPath();
+    if (!ffmpegBin) {
       return resolve({ timedOut: false, success: false, error: "Server video processing binary (ffmpeg) is unavailable." });
     }
     // Scale long side to at most 720 and ensure even dimensions
@@ -2802,7 +2821,7 @@ const trimVideoWithFFmpeg = ({
     args.push("-movflags", "+faststart", outputPath);
 
     let isTimedOut = false;
-    const proc = execFile(ffmpegStaticPath, args, { timeout: timeoutMs }, (err) => {
+    const proc = execFile(ffmpegBin, args, { timeout: timeoutMs }, (err) => {
       if (err) {
         if ((err as any).killed || (err as any).signal === "SIGTERM" || (err as any).signal === "SIGKILL" || isTimedOut) {
           return resolve({ timedOut: true, success: false });
@@ -2841,7 +2860,8 @@ const fallbackWebmWithFFmpeg = ({
   timeoutMs?: number;
 }): Promise<{ timedOut: boolean; success: boolean; error?: string }> => {
   return new Promise((resolve) => {
-    if (!ffmpegStaticPath || !fs.existsSync(ffmpegStaticPath)) {
+    const ffmpegBin = getFFmpegStaticPath();
+    if (!ffmpegBin) {
       return resolve({ timedOut: false, success: false, error: "Server video processing binary (ffmpeg) is unavailable." });
     }
     const vf = "scale=if(gt(iw\\,ih)\\,min(720\\,iw)\\,-2):if(gt(iw\\,ih)\\,-2\\,min(720\\,ih)),scale=trunc(iw/2)*2:trunc(ih/2)*2";
@@ -2861,7 +2881,7 @@ const fallbackWebmWithFFmpeg = ({
     }
     args.push(outputPath);
 
-    execFile(ffmpegStaticPath, args, { timeout: timeoutMs }, (err) => {
+    execFile(ffmpegBin, args, { timeout: timeoutMs }, (err) => {
       if (err) {
         return resolve({ timedOut: false, success: false, error: err.message });
       }
@@ -2898,7 +2918,9 @@ app.post("/api/clips/trim-upload", handleTrimUploadMiddleware, async (req, res) 
   }
 
   // Ensure ffmpeg-static and ffprobe-static binaries are present
-  if (!ffmpegStaticPath || !fs.existsSync(ffmpegStaticPath) || !ffprobeStaticPath || !fs.existsSync(ffprobeStaticPath)) {
+  const ffmpegBin = getFFmpegStaticPath();
+  const ffprobeBin = getFFprobeStaticPath();
+  if (!ffmpegBin || !ffprobeBin) {
     if (req.file?.path && fs.existsSync(req.file.path)) {
       try { fs.unlinkSync(req.file.path); } catch {}
     }
