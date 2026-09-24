@@ -41,6 +41,10 @@ export default function ClipTimelineEditor({
   const [isAnalyzingAudio, setIsAnalyzingAudio] = useState<boolean>(false);
   const [audioPeakFound, setAudioPeakFound] = useState<boolean>(false);
 
+  // Real-time drag tracking refs (to prevent stale React state jump on pointer-up)
+  const windowStartRef = useRef<number>(safeInitialStart);
+  const windowEndRef = useRef<number>(safeInitialStart + safeInitialWindow);
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
@@ -55,6 +59,14 @@ export default function ClipTimelineEditor({
     initialDuration: 0
   });
 
+  // Sync refs when start or windowDuration updates outside active drag
+  useEffect(() => {
+    if (!dragRef.current.mode) {
+      windowStartRef.current = start;
+      windowEndRef.current = start + windowDuration;
+    }
+  }, [start, windowDuration]);
+
   // Keep video looped within [start, start + windowDuration] when previewLoop is on
   useEffect(() => {
     const video = videoRef.current;
@@ -63,9 +75,10 @@ export default function ClipTimelineEditor({
     const handleTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       if (previewLoop) {
-        const end = start + windowDuration;
-        if (video.currentTime >= end - 0.05 || video.currentTime < start) {
-          video.currentTime = start;
+        const loopStart = windowStartRef.current;
+        const loopEnd = windowEndRef.current;
+        if (video.currentTime >= loopEnd - 0.05 || video.currentTime < loopStart) {
+          video.currentTime = loopStart;
           if (video.paused && isPlaying) {
             video.play().catch(() => {});
           }
@@ -77,7 +90,7 @@ export default function ClipTimelineEditor({
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
     };
-  }, [start, windowDuration, previewLoop, isPlaying]);
+  }, [previewLoop, isPlaying]);
 
   // Initial video start position
   useEffect(() => {
@@ -98,8 +111,10 @@ export default function ClipTimelineEditor({
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
-      if (video.currentTime < start || video.currentTime >= start + windowDuration) {
-        video.currentTime = start;
+      const curStart = windowStartRef.current;
+      const curEnd = windowEndRef.current;
+      if (video.currentTime < curStart || video.currentTime >= curEnd) {
+        video.currentTime = curStart;
       }
       video.play().then(() => setIsPlaying(true)).catch(() => {});
     } else {
@@ -126,11 +141,14 @@ export default function ClipTimelineEditor({
       setIsPlaying(false);
     }
 
+    const currentRefStart = windowStartRef.current;
+    const currentRefDuration = windowEndRef.current - windowStartRef.current;
+
     dragRef.current = {
       mode,
       startX: e.clientX,
-      initialStart: start,
-      initialDuration: windowDuration
+      initialStart: currentRefStart,
+      initialDuration: currentRefDuration
     };
 
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -145,9 +163,20 @@ export default function ClipTimelineEditor({
 
       if (dragRef.current.mode === "move") {
         // Shift entire window, keeping windowDuration constant
-        const maxStart = Math.max(0, duration - dragRef.current.initialDuration);
+        const currentWinDuration = dragRef.current.initialDuration;
+        const maxStart = Math.max(0, duration - currentWinDuration);
         const newStart = Math.max(0, Math.min(maxStart, dragRef.current.initialStart + deltaSec));
+        const newEnd = newStart + currentWinDuration;
+
+        // Update these refs on every pointer-move
+        windowStartRef.current = newStart;
+        windowEndRef.current = newEnd;
+
+        // Keep React state for rendering only
         setStart(newStart);
+        setWindowDuration(currentWinDuration);
+
+        // Prevent preview jitter by updating currentTime inside the pointer-move handler
         if (videoRef.current) {
           videoRef.current.currentTime = newStart;
         }
@@ -167,8 +196,15 @@ export default function ClipTimelineEditor({
         proposedStart = Math.max(0, proposedStart);
         const newDuration = fixedEnd - proposedStart;
 
+        // Update these refs on every pointer-move
+        windowStartRef.current = proposedStart;
+        windowEndRef.current = fixedEnd;
+
+        // Keep React state for rendering only
         setStart(proposedStart);
         setWindowDuration(newDuration);
+
+        // Prevent preview jitter by updating currentTime inside the pointer-move handler
         if (videoRef.current) {
           videoRef.current.currentTime = proposedStart;
         }
@@ -184,10 +220,19 @@ export default function ClipTimelineEditor({
         if (fixedStart + proposedDuration > duration) {
           proposedDuration = duration - fixedStart;
         }
+        const newEnd = fixedStart + proposedDuration;
 
+        // Update these refs on every pointer-move
+        windowStartRef.current = fixedStart;
+        windowEndRef.current = newEnd;
+
+        // Keep React state for rendering only
+        setStart(fixedStart);
         setWindowDuration(proposedDuration);
+
+        // Prevent preview jitter by updating currentTime inside the pointer-move handler
         if (videoRef.current) {
-          videoRef.current.currentTime = fixedStart + proposedDuration;
+          videoRef.current.currentTime = newEnd;
         }
       }
     };
@@ -198,9 +243,12 @@ export default function ClipTimelineEditor({
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
 
-      // Resume preview if desired
+      // On pointer-up, use the ref values, not React state!
+      const finalStart = windowStartRef.current;
+
+      // Ensure video.currentTime updates using the latest ref values
       if (videoRef.current) {
-        videoRef.current.currentTime = start;
+        videoRef.current.currentTime = finalStart;
         videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
       }
     };
@@ -507,7 +555,7 @@ export default function ClipTimelineEditor({
 
         <button
           type="button"
-          onClick={() => onApplyTrim({ start, windowDuration })}
+          onClick={() => onApplyTrim({ start: windowStartRef.current, windowDuration: windowEndRef.current - windowStartRef.current })}
           className="w-2/3 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-amber-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
         >
           <Check className="w-4 h-4" />

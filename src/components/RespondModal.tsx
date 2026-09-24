@@ -51,6 +51,32 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean; file?: File } | null>(null);
   const [trimInfo, setTrimInfo] = useState<TrimInfo | null>(null);
   const [isTrimming, setIsTrimming] = useState(false);
+
+  // Track all created blob URLs to prevent memory leaks on cancel, unmount, or publish
+  const createdBlobUrlsRef = useRef<Set<string>>(new Set());
+
+  const revokeBlobUrl = (url?: string | null) => {
+    if (url && url.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+      createdBlobUrlsRef.current.delete(url);
+    }
+  };
+
+  const revokeAllBlobUrls = () => {
+    createdBlobUrlsRef.current.forEach(url => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    });
+    createdBlobUrlsRef.current.clear();
+  };
+
+  const handleModalClose = () => {
+    revokeAllBlobUrls();
+    onClose();
+  };
   const [tone, setTone] = useState<Clip["tone"]>("funny");
   const [voiceStyle, setVoiceStyle] = useState<Clip["voiceStyle"]>("casual");
   const [guestAuthorName, setGuestAuthorName] = useState("");
@@ -431,10 +457,11 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     }
   };
 
-  // Cleanup camera stream
+  // Cleanup camera stream and revoke all created blob URLs on unmount
   useEffect(() => {
     return () => {
       stopCamera();
+      revokeAllBlobUrls();
     };
   }, []);
 
@@ -555,11 +582,20 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
   /**
    * File input change handler for videos:
-   * Calculates the duration of the selected video file.
+   * Calculates the actual duration of the selected video file using a hidden video element.
    * If duration exceeds 60 seconds, displays: 'Video must be 60 seconds or less'.
+   * If duration <= 6 seconds, skips editor entirely and treats file as final loop.
+   * Only shows trim editor for videos > 6 seconds.
    */
   const processVideoFile = (file: File) => {
     setError(null);
+
+    // If an existing trim source URL was loaded, revoke it to avoid leaks
+    if (trimInfo?.sourceUrl) {
+      revokeBlobUrl(trimInfo.sourceUrl);
+      setTrimInfo(null);
+    }
+
     const isVideoExt = file.name.match(/\.(mp4|mov|webm)$/i);
     const isVideoMime = file.type.startsWith("video/") || file.type === "video/mp4" || file.type === "video/webm" || file.type === "video/quicktime";
 
@@ -575,27 +611,54 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     }
 
     const objectUrl = URL.createObjectURL(file);
-    const videoElement = document.createElement("video");
-    videoElement.preload = "metadata";
+    createdBlobUrlsRef.current.add(objectUrl);
 
-    const evaluateDuration = (duration: number) => {
+    // Hidden video element to read actual duration (cross-browser iOS/Android/Desktop)
+    const videoElement = document.createElement("video");
+    videoElement.preload = "auto";
+    videoElement.muted = true;
+    (videoElement as any).playsInline = true;
+    videoElement.style.position = "fixed";
+    videoElement.style.pointerEvents = "none";
+    videoElement.style.opacity = "0";
+    videoElement.style.width = "1px";
+    videoElement.style.height = "1px";
+
+    let resolved = false;
+    let fallbackTimer: any = null;
+
+    const cleanupVideo = () => {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      videoElement.onloadedmetadata = null;
+      videoElement.ondurationchange = null;
+      videoElement.oncanplay = null;
+      videoElement.ontimeupdate = null;
+      videoElement.onerror = null;
+      try {
+        videoElement.src = "";
+        videoElement.load();
+      } catch {}
+    };
+
+    const handleActualDuration = (duration: number) => {
       if (!duration || isNaN(duration) || duration <= 0) {
-        URL.revokeObjectURL(objectUrl);
+        revokeBlobUrl(objectUrl);
         setError("Could not read that video. Try an MP4.");
         return;
       }
 
-      // If video duration exceeds 60 seconds, display error
+      // If duration exceeds 60 seconds → reject with existing error message
       if (duration > 60) {
-        URL.revokeObjectURL(objectUrl);
+        revokeBlobUrl(objectUrl);
         setError("Video must be 60 seconds or less");
         return;
       }
 
+      // If duration ≤ 6 seconds → skip editor entirely and use existing upload path
       if (duration <= 6.0) {
-        // Source <= 6 seconds: Skip editor entirely and treat file as final loop!
         stopCamera();
         setTrimInfo(null);
+        revokeBlobUrl(objectUrl);
         const reader = new FileReader();
         reader.onload = () => {
           const mediaObj = {
@@ -605,13 +668,12 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
             file: file
           };
           onMediaSelected(mediaObj);
-          URL.revokeObjectURL(objectUrl);
         };
         reader.readAsDataURL(file);
         return;
       }
 
-      // Source > 6 seconds: Show the timeline trim editor!
+      // Only show the trim editor for videos > 6 seconds
       stopCamera();
       const defaultWindow = Math.min(6.0, duration);
       setTrimInfo({
@@ -624,25 +686,55 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       setStep("trim_editor");
     };
 
-    videoElement.onloadedmetadata = () => {
+    const checkActualDuration = () => {
+      if (resolved) return;
       let dur = videoElement.duration;
-      // Handle edge-case with some WebM files reporting Infinity
+      // Handle WebM containers with streaming/infinite duration
       if (dur === Infinity) {
         videoElement.currentTime = 1e101;
         videoElement.ontimeupdate = () => {
           videoElement.ontimeupdate = null;
           dur = videoElement.duration;
-          evaluateDuration(dur);
+          if (dur && !isNaN(dur) && dur > 0 && dur !== Infinity) {
+            resolved = true;
+            cleanupVideo();
+            handleActualDuration(dur);
+          }
         };
         return;
       }
-      evaluateDuration(dur);
+
+      if (dur && !isNaN(dur) && dur > 0) {
+        resolved = true;
+        cleanupVideo();
+        handleActualDuration(dur);
+      }
     };
 
+    videoElement.onloadedmetadata = checkActualDuration;
+    videoElement.ondurationchange = checkActualDuration;
+    videoElement.oncanplay = checkActualDuration;
+
     videoElement.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      setError("Could not read that video. Try an MP4.");
+      if (!resolved) {
+        resolved = true;
+        cleanupVideo();
+        revokeBlobUrl(objectUrl);
+        setError("Could not read that video. Try an MP4.");
+      }
     };
+
+    fallbackTimer = setTimeout(() => {
+      if (!resolved) {
+        checkActualDuration();
+        if (!resolved) {
+          resolved = true;
+          cleanupVideo();
+          revokeBlobUrl(objectUrl);
+          setError("Could not read that video. Try an MP4.");
+        }
+      }
+    }, 4500);
 
     videoElement.src = objectUrl;
   };
@@ -825,8 +917,9 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
         setLoading(false);
         setIsTrimming(false);
+        revokeAllBlobUrls();
         onSuccess();
-        onClose();
+        handleModalClose();
         return;
       } catch (err: any) {
         console.error("Trim and upload post error:", err);
@@ -949,12 +1042,13 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
             detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
           }));
-          onClose();
+          handleModalClose();
           return;
         }
         throw new Error(errData.error || "Failed to post clip");
       }
       window.dispatchEvent(new Event("reax_clip_posted"));
+      revokeAllBlobUrls();
       onSuccess();
     } catch (err: any) {
       console.error("Submit error:", err);
@@ -962,7 +1056,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
           detail: { reason: "post_limit", clipCount: 3 }
         }));
-        onClose();
+        handleModalClose();
         return;
       }
       setError(err?.message || "Failed to share your loop. Please try again.");
@@ -1007,7 +1101,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
             )}
           </div>
           <button 
-            onClick={onClose}
+            onClick={handleModalClose}
             className="p-1.5 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white"
           >
             <X className="w-5 h-5" />
@@ -1280,6 +1374,9 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                   initialStart={trimInfo.start}
                   initialWindowDuration={trimInfo.windowDuration}
                   onCancel={() => {
+                    revokeAllBlobUrls();
+                    setTrimInfo(null);
+                    setSelectedMedia(null);
                     setStep("upload_capture");
                   }}
                   onApplyTrim={({ start, windowDuration }) => {
@@ -1372,7 +1469,12 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 <div className="flex justify-between items-center pt-2">
                   <button
                     type="button"
-                    onClick={() => setStep("upload_capture")}
+                    onClick={() => {
+                      revokeAllBlobUrls();
+                      setTrimInfo(null);
+                      setSelectedMedia(null);
+                      setStep("upload_capture");
+                    }}
                     className="text-xs font-bold font-mono text-slate-400 hover:text-white px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl cursor-pointer"
                   >
                     ← Back to media

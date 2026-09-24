@@ -16,6 +16,12 @@ import multer from "multer";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+import ffmpegStatic from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
+
+// Resolve ffmpeg-static and ffprobe-static binary paths (never rely on /usr/bin or PATH)
+const ffmpegStaticPath: string = (ffmpegStatic as any)?.default || (typeof ffmpegStatic === "string" ? ffmpegStatic : "");
+const ffprobeStaticPath: string = (ffprobeStatic as any)?.path || (ffprobeStatic as any)?.default?.path || (typeof ffprobeStatic === "string" ? ffprobeStatic : "");
 
 dotenv.config();
 
@@ -2700,12 +2706,14 @@ interface ProbeVideoResult {
 
 const probeVideoFile = (filePath: string): Promise<ProbeVideoResult> => {
   return new Promise((resolve, reject) => {
-    const ffprobeBin = fs.existsSync("/usr/bin/ffprobe") ? "/usr/bin/ffprobe" : "ffprobe";
+    if (!ffprobeStaticPath || !fs.existsSync(ffprobeStaticPath)) {
+      return reject(new Error("Server video processing binary (ffprobe) is unavailable."));
+    }
     execFile(
-      ffprobeBin,
+      ffprobeStaticPath,
       [
         "-v", "error",
-        "-show_entries", "stream=codec_type,codec_name,width,height:format=duration",
+        "-show_entries", "stream=codec_type,codec_name,width,height,duration:format=duration",
         "-of", "json",
         filePath
       ],
@@ -2716,7 +2724,6 @@ const probeVideoFile = (filePath: string): Promise<ProbeVideoResult> => {
         }
         try {
           const data = JSON.parse(stdout);
-          const duration = parseFloat(data.format?.duration || "0");
           const streams = Array.isArray(data.streams) ? data.streams : [];
           const videoStream = streams.find((s: any) => s.codec_type === "video");
           const audioStream = streams.find((s: any) => s.codec_type === "audio");
@@ -2728,6 +2735,11 @@ const probeVideoFile = (filePath: string): Promise<ProbeVideoResult> => {
           const allowedVideoCodecs = ["h264", "hevc", "h265", "vp8", "vp9", "av1", "mpeg4", "mjpeg"];
           if (!allowedVideoCodecs.includes(videoStream.codec_name.toLowerCase())) {
             return reject(new Error("Could not read that video. Try an MP4."));
+          }
+
+          let duration = parseFloat(data.format?.duration || "0");
+          if ((!duration || isNaN(duration) || duration <= 0) && videoStream.duration) {
+            duration = parseFloat(videoStream.duration);
           }
 
           resolve({
@@ -2763,7 +2775,9 @@ const trimVideoWithFFmpeg = ({
   timeoutMs?: number;
 }): Promise<{ timedOut: boolean; success: boolean; error?: string }> => {
   return new Promise((resolve) => {
-    const ffmpegBin = fs.existsSync("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : "ffmpeg";
+    if (!ffmpegStaticPath || !fs.existsSync(ffmpegStaticPath)) {
+      return resolve({ timedOut: false, success: false, error: "Server video processing binary (ffmpeg) is unavailable." });
+    }
     // Scale long side to at most 720 and ensure even dimensions
     const vf = "scale=if(gt(iw\\,ih)\\,min(720\\,iw)\\,-2):if(gt(iw\\,ih)\\,-2\\,min(720\\,ih)),scale=trunc(iw/2)*2:trunc(ih/2)*2";
     
@@ -2788,7 +2802,7 @@ const trimVideoWithFFmpeg = ({
     args.push("-movflags", "+faststart", outputPath);
 
     let isTimedOut = false;
-    const proc = execFile(ffmpegBin, args, { timeout: timeoutMs }, (err) => {
+    const proc = execFile(ffmpegStaticPath, args, { timeout: timeoutMs }, (err) => {
       if (err) {
         if ((err as any).killed || (err as any).signal === "SIGTERM" || (err as any).signal === "SIGKILL" || isTimedOut) {
           return resolve({ timedOut: true, success: false });
@@ -2827,7 +2841,9 @@ const fallbackWebmWithFFmpeg = ({
   timeoutMs?: number;
 }): Promise<{ timedOut: boolean; success: boolean; error?: string }> => {
   return new Promise((resolve) => {
-    const ffmpegBin = fs.existsSync("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : "ffmpeg";
+    if (!ffmpegStaticPath || !fs.existsSync(ffmpegStaticPath)) {
+      return resolve({ timedOut: false, success: false, error: "Server video processing binary (ffmpeg) is unavailable." });
+    }
     const vf = "scale=if(gt(iw\\,ih)\\,min(720\\,iw)\\,-2):if(gt(iw\\,ih)\\,-2\\,min(720\\,ih)),scale=trunc(iw/2)*2:trunc(ih/2)*2";
     const args = [
       "-y",
@@ -2845,7 +2861,7 @@ const fallbackWebmWithFFmpeg = ({
     }
     args.push(outputPath);
 
-    execFile(ffmpegBin, args, { timeout: timeoutMs }, (err) => {
+    execFile(ffmpegStaticPath, args, { timeout: timeoutMs }, (err) => {
       if (err) {
         return resolve({ timedOut: false, success: false, error: err.message });
       }
@@ -2879,6 +2895,14 @@ app.post("/api/clips/trim-upload", handleTrimUploadMiddleware, async (req, res) 
 
   if (!req.file) {
     return res.status(400).json({ error: "No video file provided." });
+  }
+
+  // Ensure ffmpeg-static and ffprobe-static binaries are present
+  if (!ffmpegStaticPath || !fs.existsSync(ffmpegStaticPath) || !ffprobeStaticPath || !fs.existsSync(ffprobeStaticPath)) {
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+    }
+    return res.status(500).json({ error: "Trim failed. Server video processing tools are unavailable." });
   }
 
   let finalOutputPath: string | null = null;
