@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/index.ts": {
-      "includeFiles": "{dist/**,node_modules/ffmpeg-static/**,node_modules/ffprobe-static/**}",
+      "includeFiles": "dist/**",
       "maxDuration": 60,
       "memory": 1024
     }

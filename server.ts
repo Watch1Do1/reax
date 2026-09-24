@@ -12,7 +12,6 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { execFile } from "child_process";
-import multer from "multer";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
@@ -2668,16 +2667,34 @@ app.post("/api/clips", async (req, res) => {
 // ----------------------------------------------------
 // Video Trim & Upload Endpoint (Choose Clip Flow)
 // ----------------------------------------------------
-const trimUploadMulter = multer({
-  dest: "/tmp",
-  limits: {
-    fileSize: 52 * 1024 * 1024, // 50MB + small margin for multipart overhead
-    files: 1
+let cachedTrimMulter: any = null;
+const getTrimMulter = () => {
+  if (cachedTrimMulter) return cachedTrimMulter;
+  try {
+    const multerLib = require("multer");
+    const multerFn = typeof multerLib === "function" ? multerLib : multerLib?.default || multerLib;
+    if (typeof multerFn === "function") {
+      cachedTrimMulter = multerFn({
+        dest: "/tmp",
+        limits: {
+          fileSize: 52 * 1024 * 1024, // 50MB + small margin for multipart overhead
+          files: 1
+        }
+      });
+      return cachedTrimMulter;
+    }
+  } catch (err) {
+    console.warn("Multer is unavailable:", err);
   }
-});
+  return null;
+};
 
 const handleTrimUploadMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  trimUploadMulter.single("file")(req, res, (err: any) => {
+  const upload = getTrimMulter();
+  if (!upload) {
+    return res.status(500).json({ error: "Server upload middleware is temporarily unavailable." });
+  }
+  upload.single("file")(req, res, (err: any) => {
     if (err) {
       if (err.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ error: "Video exceeds maximum allowed size of 50MB." });
