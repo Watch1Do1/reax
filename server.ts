@@ -11,6 +11,8 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import { execFile } from "child_process";
+import multer from "multer";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
@@ -2660,6 +2662,422 @@ app.post("/api/clips", async (req, res) => {
   } catch (err: any) {
     console.error("Error inserting clip:", err);
     res.status(500).json({ error: "Failed to save reaction" });
+  }
+});
+
+// ----------------------------------------------------
+// Video Trim & Upload Endpoint (Choose Clip Flow)
+// ----------------------------------------------------
+const trimUploadMulter = multer({
+  dest: "/tmp",
+  limits: {
+    fileSize: 52 * 1024 * 1024, // 50MB + small margin for multipart overhead
+    files: 1
+  }
+});
+
+const handleTrimUploadMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  trimUploadMulter.single("file")(req, res, (err: any) => {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "Video exceeds maximum allowed size of 50MB." });
+      }
+      return res.status(400).json({ error: "Could not read that video. Try an MP4." });
+    }
+    next();
+  });
+};
+
+interface ProbeVideoResult {
+  duration: number;
+  hasVideo: boolean;
+  hasAudio: boolean;
+  videoCodec?: string;
+  audioCodec?: string;
+  width?: number;
+  height?: number;
+}
+
+const probeVideoFile = (filePath: string): Promise<ProbeVideoResult> => {
+  return new Promise((resolve, reject) => {
+    const ffprobeBin = fs.existsSync("/usr/bin/ffprobe") ? "/usr/bin/ffprobe" : "ffprobe";
+    execFile(
+      ffprobeBin,
+      [
+        "-v", "error",
+        "-show_entries", "stream=codec_type,codec_name,width,height:format=duration",
+        "-of", "json",
+        filePath
+      ],
+      { timeout: 15000 },
+      (err, stdout) => {
+        if (err) {
+          return reject(new Error("Could not read that video. Try an MP4."));
+        }
+        try {
+          const data = JSON.parse(stdout);
+          const duration = parseFloat(data.format?.duration || "0");
+          const streams = Array.isArray(data.streams) ? data.streams : [];
+          const videoStream = streams.find((s: any) => s.codec_type === "video");
+          const audioStream = streams.find((s: any) => s.codec_type === "audio");
+
+          if (!videoStream || !videoStream.codec_name) {
+            return reject(new Error("Could not read that video. Try an MP4."));
+          }
+
+          const allowedVideoCodecs = ["h264", "hevc", "h265", "vp8", "vp9", "av1", "mpeg4", "mjpeg"];
+          if (!allowedVideoCodecs.includes(videoStream.codec_name.toLowerCase())) {
+            return reject(new Error("Could not read that video. Try an MP4."));
+          }
+
+          resolve({
+            duration,
+            hasVideo: true,
+            hasAudio: !!audioStream,
+            videoCodec: videoStream.codec_name,
+            audioCodec: audioStream?.codec_name,
+            width: videoStream.width,
+            height: videoStream.height
+          });
+        } catch {
+          reject(new Error("Could not read that video. Try an MP4."));
+        }
+      }
+    );
+  });
+};
+
+const trimVideoWithFFmpeg = ({
+  inputPath,
+  outputPath,
+  startSec,
+  durationSec,
+  hasAudio,
+  timeoutMs = 45000
+}: {
+  inputPath: string;
+  outputPath: string;
+  startSec: number;
+  durationSec: number;
+  hasAudio: boolean;
+  timeoutMs?: number;
+}): Promise<{ timedOut: boolean; success: boolean; error?: string }> => {
+  return new Promise((resolve) => {
+    const ffmpegBin = fs.existsSync("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : "ffmpeg";
+    // Scale long side to at most 720 and ensure even dimensions
+    const vf = "scale=if(gt(iw\\,ih)\\,min(720\\,iw)\\,-2):if(gt(iw\\,ih)\\,-2\\,min(720\\,ih)),scale=trunc(iw/2)*2:trunc(ih/2)*2";
+    
+    const args = [
+      "-y",
+      "-ss", startSec.toFixed(3),
+      "-i", inputPath,
+      "-t", durationSec.toFixed(3),
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "23",
+      "-pix_fmt", "yuv420p",
+      "-vf", vf
+    ];
+
+    if (hasAudio) {
+      args.push("-c:a", "aac", "-b:a", "128k", "-ac", "2");
+    } else {
+      args.push("-an");
+    }
+
+    args.push("-movflags", "+faststart", outputPath);
+
+    let isTimedOut = false;
+    const proc = execFile(ffmpegBin, args, { timeout: timeoutMs }, (err) => {
+      if (err) {
+        if ((err as any).killed || (err as any).signal === "SIGTERM" || (err as any).signal === "SIGKILL" || isTimedOut) {
+          return resolve({ timedOut: true, success: false });
+        }
+        return resolve({ timedOut: false, success: false, error: err.message });
+      }
+      resolve({ timedOut: false, success: true });
+    });
+
+    const timer = setTimeout(() => {
+      isTimedOut = true;
+      try {
+        proc.kill("SIGKILL");
+      } catch {}
+    }, timeoutMs);
+
+    proc.on("close", () => {
+      clearTimeout(timer);
+    });
+  });
+};
+
+const fallbackWebmWithFFmpeg = ({
+  inputPath,
+  outputPath,
+  startSec,
+  durationSec,
+  hasAudio,
+  timeoutMs = 45000
+}: {
+  inputPath: string;
+  outputPath: string;
+  startSec: number;
+  durationSec: number;
+  hasAudio: boolean;
+  timeoutMs?: number;
+}): Promise<{ timedOut: boolean; success: boolean; error?: string }> => {
+  return new Promise((resolve) => {
+    const ffmpegBin = fs.existsSync("/usr/bin/ffmpeg") ? "/usr/bin/ffmpeg" : "ffmpeg";
+    const vf = "scale=if(gt(iw\\,ih)\\,min(720\\,iw)\\,-2):if(gt(iw\\,ih)\\,-2\\,min(720\\,ih)),scale=trunc(iw/2)*2:trunc(ih/2)*2";
+    const args = [
+      "-y",
+      "-ss", startSec.toFixed(3),
+      "-i", inputPath,
+      "-t", durationSec.toFixed(3),
+      "-c:v", "libvpx-vp9",
+      "-b:v", "1M",
+      "-vf", vf
+    ];
+    if (hasAudio) {
+      args.push("-c:a", "libopus");
+    } else {
+      args.push("-an");
+    }
+    args.push(outputPath);
+
+    execFile(ffmpegBin, args, { timeout: timeoutMs }, (err) => {
+      if (err) {
+        return resolve({ timedOut: false, success: false, error: err.message });
+      }
+      resolve({ timedOut: false, success: true });
+    });
+  });
+};
+
+app.post("/api/clips/trim-upload", handleTrimUploadMiddleware, async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    if (req.file?.path && fs.existsSync(req.file.path)) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+    }
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user, profile } = authRes.auth;
+  const userId = user.id;
+
+  // Guest quota check
+  const isAnon = Boolean(user.is_anonymous || !user.email);
+  if (isAnon) {
+    const clipCount = await store!.countClipsByAuthor(user.id);
+    if (clipCount >= 3) {
+      if (req.file?.path && fs.existsSync(req.file.path)) {
+        try { fs.unlinkSync(req.file.path); } catch {}
+      }
+      return res.status(403).json({ error: "signup_required", clipCount: 3 });
+    }
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: "No video file provided." });
+  }
+
+  let finalOutputPath: string | null = null;
+  const inputPath = path.resolve(req.file.path);
+
+  try {
+    // 1. Path traversal security validation
+    if (!inputPath.startsWith("/tmp")) {
+      return res.status(400).json({ error: "Invalid file location." });
+    }
+
+    // 2. MIME allowlist & extension validation
+    const allowedMimes = ["video/mp4", "video/quicktime", "video/webm"];
+    const originalExt = path.extname(req.file.originalname || "").toLowerCase();
+    const allowedExts = [".mp4", ".mov", ".webm"];
+    const fileMime = (req.file.mimetype || "").toLowerCase();
+
+    if (!allowedMimes.includes(fileMime) && !allowedExts.includes(originalExt)) {
+      return res.status(400).json({ error: "Could not read that video. Try an MP4." });
+    }
+
+    // 3. File size limit validation (max 50MB)
+    if (req.file.size > 50 * 1024 * 1024) {
+      return res.status(413).json({ error: "Video exceeds maximum allowed size of 50MB." });
+    }
+
+    // 4. Parse trim parameters
+    const trimStartMs = parseInt(req.body.trimStartMs, 10);
+    const trimDurationMs = parseInt(req.body.trimDurationMs, 10);
+
+    if (isNaN(trimStartMs) || trimStartMs < 0) {
+      return res.status(400).json({ error: "Select a moment inside the video" });
+    }
+    if (isNaN(trimDurationMs) || trimDurationMs < 1000 || trimDurationMs > 6050) {
+      return res.status(400).json({ error: "Output duration must be between 1.0s and 6.0s." });
+    }
+
+    // 5. Probe video duration and codecs with ffprobe
+    let probe: ProbeVideoResult;
+    try {
+      probe = await probeVideoFile(inputPath);
+    } catch (probeErr: any) {
+      return res.status(400).json({ error: probeErr.message || "Could not read that video. Try an MP4." });
+    }
+
+    if (!probe.duration || isNaN(probe.duration) || probe.duration <= 0) {
+      return res.status(400).json({ error: "Could not read that video. Try an MP4." });
+    }
+
+    if (probe.duration > 60.5) {
+      return res.status(400).json({ error: "Video must be 60 seconds or less" });
+    }
+
+    if (trimStartMs + trimDurationMs > Math.round(probe.duration * 1000) + 50) {
+      return res.status(400).json({ error: "Select a moment inside the video" });
+    }
+
+    // 6. Transcode with ffmpeg
+    const trimmedUuid = crypto.randomUUID();
+    let trimmedExt = "mp4";
+    let outputPath = `/tmp/${trimmedUuid}.mp4`;
+    finalOutputPath = outputPath;
+    const startSec = trimStartMs / 1000;
+    const durationSec = trimDurationMs / 1000;
+
+    const trimRes = await trimVideoWithFFmpeg({
+      inputPath,
+      outputPath,
+      startSec,
+      durationSec,
+      hasAudio: probe.hasAudio,
+      timeoutMs: 45000
+    });
+
+    if (trimRes.timedOut) {
+      return res.status(504).json({ error: "Video processing timed out. Try a shorter clip." });
+    }
+
+    if (!trimRes.success || !fs.existsSync(outputPath)) {
+      // Fallback to WebM if MP4 failed
+      trimmedExt = "webm";
+      outputPath = `/tmp/${trimmedUuid}.webm`;
+      finalOutputPath = outputPath;
+      const fbRes = await fallbackWebmWithFFmpeg({
+        inputPath,
+        outputPath,
+        startSec,
+        durationSec,
+        hasAudio: probe.hasAudio,
+        timeoutMs: 45000
+      });
+
+      if (!fbRes.success || !fs.existsSync(outputPath)) {
+        return res.status(500).json({ error: "Trim failed. Try a shorter clip or Record instead." });
+      }
+    }
+
+    // 7. Upload trimmed file only to Supabase Storage
+    const trimmedBuffer = fs.readFileSync(finalOutputPath);
+    const contentType = trimmedExt === "webm" ? "video/webm" : "video/mp4";
+    const storagePath = `clips/${userId}/${trimmedUuid}.${trimmedExt}`;
+
+    let finalMediaUrl = "";
+    const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
+
+    if (storageClient) {
+      let winningBucket = "media";
+      let uploadResult = await storageClient.storage
+        .from("media")
+        .upload(storagePath, trimmedBuffer, {
+          contentType,
+          cacheControl: "3600",
+          upsert: true
+        });
+
+      if (uploadResult.error) {
+        const fallbackRes = await storageClient.storage
+          .from("reactions")
+          .upload(storagePath, trimmedBuffer, {
+            contentType,
+            cacheControl: "3600",
+            upsert: true
+          });
+
+        if (fallbackRes.error) {
+          throw new Error(fallbackRes.error.message || "Failed to upload trimmed video to Supabase Storage");
+        }
+        winningBucket = "reactions";
+      }
+
+      const { data: publicUrlData } = storageClient.storage
+        .from(winningBucket)
+        .getPublicUrl(storagePath);
+
+      finalMediaUrl = publicUrlData?.publicUrl || "";
+    } else if (!isProduction && process.env.DEV_MEMORY_STORE === "true") {
+      const localFileName = `${trimmedUuid}.${trimmedExt}`;
+      fs.writeFileSync(path.join(UPLOADS_DIR, localFileName), trimmedBuffer);
+      finalMediaUrl = `/uploads/${localFileName}`;
+    }
+
+    if (!finalMediaUrl) {
+      return res.status(500).json({ error: "Could not retrieve public URL for trimmed video." });
+    }
+
+    // 8. Insert clip row into database
+    const { parentId, tone, voiceText, voiceAudioUrl, voiceStyle, effect, overlayText, originalAuthor, remixedFrom, authorName } = req.body;
+
+    const newClip: Clip = {
+      id: crypto.randomUUID(),
+      parentId: parentId || null,
+      mediaUrl: finalMediaUrl,
+      mediaType: "video",
+      voiceText: voiceText || undefined,
+      voiceAudioUrl: typeof voiceAudioUrl === "string" && voiceAudioUrl ? voiceAudioUrl : undefined,
+      voiceStyle: voiceStyle || undefined,
+      tone: tone || "funny",
+      userId: user.id,
+      authorId: user.id,
+      authorName: profile.username || (typeof authorName === "string" && authorName ? authorName : "Reaxer"),
+      createdAt: new Date().toISOString(),
+      likesCount: 0,
+      laughsCount: 0,
+      effect: effect || "zoom",
+      overlayText: typeof overlayText === "string" ? overlayText.slice(0, 48) : (overlayText || undefined),
+      originalAuthor: originalAuthor || undefined,
+      remixedFrom: remixedFrom || undefined,
+      deleted: false,
+      reportCount: 0
+    };
+
+    const inserted = await store!.insertClip(newClip);
+    await store!.upsertUserProfile({
+      id: user.id,
+      username: profile.username,
+      email: user.email,
+      lastActive: new Date().toISOString()
+    });
+    await store!.incrementFunnel("posted_reaction");
+    if (voiceText || voiceAudioUrl) {
+      await store!.incrementFunnel("posted_voice_reaction");
+    }
+
+    return res.json({
+      ...inserted,
+      url: finalMediaUrl,
+      durationMs: trimDurationMs
+    });
+  } catch (err: any) {
+    console.error("Trim and upload error:", err);
+    return res.status(500).json({ error: "Trim failed. Try a shorter clip or Record instead." });
+  } finally {
+    // 9. Clean up all temporary files: source input and trimmed output
+    if (inputPath && fs.existsSync(inputPath)) {
+      try { fs.unlinkSync(inputPath); } catch {}
+    }
+    if (finalOutputPath && fs.existsSync(finalOutputPath)) {
+      try { fs.unlinkSync(finalOutputPath); } catch {}
+    }
   }
 });
 

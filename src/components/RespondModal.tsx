@@ -3,13 +3,14 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Camera, Upload, Film, Sparkles, Volume2, VolumeX, RefreshCw, CheckCircle, 
   Image as ImageIcon, ChevronDown, ChevronUp, Settings2, Sliders, Star, Mic, MicOff,
-  CornerDownRight
+  CornerDownRight, Scissors
 } from "lucide-react";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { Clip, SavedReaction } from "../types";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { uploadMediaAsset, getAuthToken } from "../utils/supabaseClient";
 import { convertHeicToJpeg, isHeicFile } from "../utils/imageUtils";
+import ClipTimelineEditor from "./ClipTimelineEditor";
 
 interface RespondModalProps {
   key?: string;
@@ -22,8 +23,16 @@ interface RespondModalProps {
   remixData?: SavedReaction | null;
 }
 
+export interface TrimInfo {
+  file: File;
+  sourceUrl: string;
+  duration: number;
+  start: number;
+  windowDuration: number;
+}
+
 export default function RespondModal({ parentId, parentClip, initialTone = null, onClose, onSuccess, username, remixData = null }: RespondModalProps) {
-  const [step, setStep] = useState<"upload_capture" | "choose_tone" | "ai_generate" | "preview">(
+  const [step, setStep] = useState<"upload_capture" | "choose_tone" | "ai_generate" | "preview" | "trim_editor">(
     "upload_capture"
   );
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -40,9 +49,12 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   
   // Form State
   const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean; file?: File } | null>(null);
+  const [trimInfo, setTrimInfo] = useState<TrimInfo | null>(null);
+  const [isTrimming, setIsTrimming] = useState(false);
   const [tone, setTone] = useState<Clip["tone"]>("funny");
   const [voiceStyle, setVoiceStyle] = useState<Clip["voiceStyle"]>("casual");
   const [guestAuthorName, setGuestAuthorName] = useState("");
+  const chooseClipInputRef = useRef<HTMLInputElement | null>(null);
   
   // Audio configuration & recording states
   const [audioMode, setAudioMode] = useState<"record" | "tts" | "none">("none");
@@ -541,28 +553,136 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     }
   };
 
+  /**
+   * File input change handler for videos:
+   * Calculates the duration of the selected video file.
+   * If duration exceeds 60 seconds, displays: 'Video must be 60 seconds or less'.
+   */
+  const processVideoFile = (file: File) => {
+    setError(null);
+    const isVideoExt = file.name.match(/\.(mp4|mov|webm)$/i);
+    const isVideoMime = file.type.startsWith("video/") || file.type === "video/mp4" || file.type === "video/webm" || file.type === "video/quicktime";
+
+    if (!isVideoExt && !isVideoMime) {
+      setError("Could not read that video. Try an MP4.");
+      return;
+    }
+
+    // 50MB max file size
+    if (file.size > 50 * 1024 * 1024) {
+      setError("File is too large. Maximum size allowed is 50MB.");
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    const videoElement = document.createElement("video");
+    videoElement.preload = "metadata";
+
+    const evaluateDuration = (duration: number) => {
+      if (!duration || isNaN(duration) || duration <= 0) {
+        URL.revokeObjectURL(objectUrl);
+        setError("Could not read that video. Try an MP4.");
+        return;
+      }
+
+      // If video duration exceeds 60 seconds, display error
+      if (duration > 60) {
+        URL.revokeObjectURL(objectUrl);
+        setError("Video must be 60 seconds or less");
+        return;
+      }
+
+      if (duration <= 6.0) {
+        // Source <= 6 seconds: Skip editor entirely and treat file as final loop!
+        stopCamera();
+        setTrimInfo(null);
+        const reader = new FileReader();
+        reader.onload = () => {
+          const mediaObj = {
+            data: reader.result as string,
+            mimeType: file.type || "video/mp4",
+            isVideo: true,
+            file: file
+          };
+          onMediaSelected(mediaObj);
+          URL.revokeObjectURL(objectUrl);
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      // Source > 6 seconds: Show the timeline trim editor!
+      stopCamera();
+      const defaultWindow = Math.min(6.0, duration);
+      setTrimInfo({
+        file,
+        sourceUrl: objectUrl,
+        duration,
+        start: 0,
+        windowDuration: defaultWindow
+      });
+      setStep("trim_editor");
+    };
+
+    videoElement.onloadedmetadata = () => {
+      let dur = videoElement.duration;
+      // Handle edge-case with some WebM files reporting Infinity
+      if (dur === Infinity) {
+        videoElement.currentTime = 1e101;
+        videoElement.ontimeupdate = () => {
+          videoElement.ontimeupdate = null;
+          dur = videoElement.duration;
+          evaluateDuration(dur);
+        };
+        return;
+      }
+      evaluateDuration(dur);
+    };
+
+    videoElement.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      setError("Could not read that video. Try an MP4.");
+    };
+
+    videoElement.src = objectUrl;
+  };
+
+  /**
+   * File input change handler that calculates the duration of the selected video.
+   * If it exceeds 60 seconds, displays error 'Video must be 60 seconds or less'.
+   */
+  const handleVideoInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    processVideoFile(file);
+  };
+
+  const handleChooseClipSelect = handleVideoInputChange;
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
 
     setError(null);
     const isHeic = isHeicFile(file);
     const isGif = file.type === "image/gif" || file.name.toLowerCase().endsWith(".gif");
-    const isVideo = file.type.startsWith("video/");
+    const isVideo = file.type.startsWith("video/") || file.name.match(/\.(mp4|mov|webm)$/i);
     const isImage = file.type.startsWith("image/") || isHeic || isGif;
 
-    if (!isVideo && !isImage) {
+    if (isVideo) {
+      processVideoFile(file);
+      return;
+    }
+
+    if (!isImage) {
       setError("Please upload a valid image, GIF, or video file.");
       return;
     }
 
-    if (isVideo && file.type !== "video/mp4" && file.type !== "video/webm") {
-      setError("Only MP4 and WebM video formats are supported.");
-      return;
-    }
-
-    // Size limit: 30MB for GIFs and videos, 15MB for photos
-    const MAX_SIZE = (isGif || isVideo) ? 30 * 1024 * 1024 : 15 * 1024 * 1024;
+    // Size limit: 30MB for GIFs, 15MB for photos
+    const MAX_SIZE = isGif ? 30 * 1024 * 1024 : 15 * 1024 * 1024;
     if (!isHeic && file.size > MAX_SIZE) {
       setError(`File is too large. Maximum size allowed is ${Math.round(MAX_SIZE / (1024 * 1024))}MB.`);
       return;
@@ -579,6 +699,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           file: file
         };
         stopCamera();
+        setTrimInfo(null);
         onMediaSelected(mediaObj);
       } catch (err) {
         console.error("HEIC conversion failed:", err);
@@ -588,55 +709,20 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       return;
     }
 
-    if (isVideo) {
-      // Create a temporary video element to check duration before upload
-      const videoElement = document.createElement("video");
-      videoElement.preload = "metadata";
-      
-      videoElement.onloadedmetadata = () => {
-        window.URL.revokeObjectURL(videoElement.src);
-        const duration = videoElement.duration;
-        console.log("Validated video duration:", duration);
-        if (duration > 5.1) {
-          setError(`Video duration is too long (${duration.toFixed(1)}s). Maximum allowed is 5.0 seconds.`);
-          return;
-        }
-
-        // Proceed with loading
-        const reader = new FileReader();
-        reader.onload = () => {
-          const mediaObj = {
-            data: reader.result as string,
-            mimeType: file.type,
-            isVideo: true,
-            file: file
-          };
-          stopCamera();
-          onMediaSelected(mediaObj);
-        };
-        reader.readAsDataURL(file);
+    // Process image or GIF normally
+    const reader = new FileReader();
+    reader.onload = () => {
+      const mediaObj = {
+        data: reader.result as string,
+        mimeType: isGif ? "image/gif" : (file.type || "image/jpeg"),
+        isVideo: false,
+        file: file
       };
-
-      videoElement.onerror = () => {
-        setError("Unable to read video file or duration. Ensure it is a valid MP4 or WebM.");
-      };
-
-      videoElement.src = URL.createObjectURL(file);
-    } else {
-      // Process image or GIF normally
-      const reader = new FileReader();
-      reader.onload = () => {
-        const mediaObj = {
-          data: reader.result as string,
-          mimeType: isGif ? "image/gif" : (file.type || "image/jpeg"),
-          isVideo: false,
-          file: file
-        };
-        stopCamera();
-        onMediaSelected(mediaObj);
-      };
-      reader.readAsDataURL(file);
-    }
+      stopCamera();
+      setTrimInfo(null);
+      onMediaSelected(mediaObj);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleCustomToneChange = (newTone: Clip["tone"]) => {
@@ -646,7 +732,111 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
   // Complete submission
   const handlePostClip = async () => {
-    if (!selectedMedia && !voiceAudioData) return;
+    if (!selectedMedia && !voiceAudioData && !trimInfo) return;
+    setError(null);
+
+    // If trimmed video workflow is active
+    if (trimInfo) {
+      if (trimInfo.start < 0 || trimInfo.windowDuration < 1.0 || trimInfo.windowDuration > 6.05) {
+        setError("Select a moment inside the video");
+        return;
+      }
+
+      setIsTrimming(true);
+      setLoading(true);
+
+      try {
+        let uploadedVoiceUrl = "";
+        if (audioMode === "record" && voiceAudioData && voiceAudioData.startsWith("data:")) {
+          try {
+            let audioMime = "audio/webm";
+            const mimeMatch = voiceAudioData.match(/^data:([^;]+);base64,/);
+            if (mimeMatch && mimeMatch[1]) audioMime = mimeMatch[1].toLowerCase();
+            const voiceUploadResult = await uploadMediaAsset({
+              data: voiceAudioData,
+              kind: "audio",
+              mimeType: audioMime,
+              filename: `voice-note-${Date.now()}`
+            });
+            uploadedVoiceUrl = voiceUploadResult.url;
+          } catch (voiceUploadErr: any) {
+            console.error("Failed to upload voice note:", voiceUploadErr);
+          }
+        }
+
+        const isEditedFromRemix = remixData && (
+          voiceText !== (remixData.voiceText || "") ||
+          overlayText !== (remixData.overlayText || "") ||
+          tone !== remixData.tone ||
+          visualEffect !== remixData.effect
+        );
+
+        const originalAuthorVal = remixData 
+          ? (remixData.originalAuthor || remixData.authorName) 
+          : undefined;
+
+        const remixedFromVal = remixData
+          ? (isEditedFromRemix ? remixData.authorName : remixData.remixedFrom)
+          : undefined;
+
+        const formData = new FormData();
+        formData.append("file", trimInfo.file);
+        formData.append("trimStartMs", Math.round(trimInfo.start * 1000).toString());
+        formData.append("trimDurationMs", Math.round(trimInfo.windowDuration * 1000).toString());
+        if (parentId) formData.append("parentId", parentId);
+        formData.append("tone", tone);
+        if (audioMode === "tts" && voiceText) {
+          formData.append("voiceText", voiceText.slice(0, 200));
+        } else if (uploadedVoiceUrl) {
+          formData.append("voiceText", `audio_url:${uploadedVoiceUrl}`);
+        }
+        if (uploadedVoiceUrl) formData.append("voiceAudioUrl", uploadedVoiceUrl);
+        if (voiceStyle) formData.append("voiceStyle", voiceStyle);
+        formData.append("effect", `${visualEffect}|${textStyle}|${textColor}|${textPosition}`);
+        if (overlayText) formData.append("overlayText", overlayText);
+        if (originalAuthorVal) formData.append("originalAuthor", originalAuthorVal);
+        if (remixedFromVal) formData.append("remixedFrom", remixedFromVal);
+        formData.append("authorName", username ? username.trim() : (guestAuthorName.trim() || "Guest"));
+
+        const token = await getAuthToken();
+        const res = await fetch("/api/clips/trim-upload", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`
+          },
+          body: formData
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          if (res.status === 403 && errData.error === "signup_required") {
+            window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+              detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
+            }));
+            setError("Guest quota reached (3 reactions). Sign up to post unlimited!");
+          } else {
+            setError(errData.error || "Trim failed. Try a shorter clip or Record instead.");
+          }
+          // Preserve local file and window on failure - do not clear draft
+          setLoading(false);
+          setIsTrimming(false);
+          return;
+        }
+
+        setLoading(false);
+        setIsTrimming(false);
+        onSuccess();
+        onClose();
+        return;
+      } catch (err: any) {
+        console.error("Trim and upload post error:", err);
+        setError(err?.message || "Trim failed. Try a shorter clip or Record instead.");
+        setLoading(false);
+        setIsTrimming(false);
+        return;
+      }
+    }
+
     setLoading(true);
     setError(null);
 
@@ -977,7 +1167,15 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                         capture="user" 
                         className="hidden" 
                         ref={videoInputRef}
-                        onChange={handleFileUpload}
+                        onChange={handleVideoInputChange}
+                      />
+                      {/* Choose Clip input (allows camera roll, up to 60s) */}
+                      <input 
+                        type="file" 
+                        accept="video/*" 
+                        className="hidden" 
+                        ref={chooseClipInputRef}
+                        onChange={handleChooseClipSelect}
                       />
                       <input 
                         type="file" 
@@ -987,15 +1185,45 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                         onChange={handleFileUpload}
                       />
 
-                      <div className="grid grid-cols-2 gap-3">
-                        {/* 1. Take photo */}
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {/* 1. Record (existing camera flow, max 6s) */}
+                        <button
+                          type="button"
+                          onClick={() => handleCaptureOptionClick("video")}
+                          className="flex flex-col items-center justify-center p-4 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-rose-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-400 group-hover/opt:scale-110 transition-transform mb-2">
+                            <Film className="w-5 h-5" />
+                          </div>
+                          <span className="text-xs font-black text-white">Record</span>
+                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">
+                            {isMobileDevice ? "3-5s Camera" : "Webcam Video"}
+                          </span>
+                        </button>
+
+                        {/* 2. Choose Clip (video up to 60s, trim 1-6s) */}
+                        <button
+                          type="button"
+                          onClick={() => chooseClipInputRef.current?.click()}
+                          className="flex flex-col items-center justify-center p-4 bg-slate-950/40 hover:bg-slate-900 border border-amber-500/30 hover:border-amber-400/80 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer bg-gradient-to-b from-amber-500/10 to-transparent ring-1 ring-amber-500/20"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-400 group-hover/opt:scale-110 transition-transform mb-2">
+                            <Scissors className="w-5 h-5" />
+                          </div>
+                          <span className="text-xs font-black text-white flex items-center gap-1">
+                            Choose Clip
+                          </span>
+                          <span className="text-[9px] text-amber-400/80 font-mono mt-0.5">Up to 60s • Trim 1–6s</span>
+                        </button>
+
+                        {/* 3. Take photo */}
                         <button
                           type="button"
                           onClick={() => handleCaptureOptionClick("photo")}
-                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-emerald-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
+                          className="flex flex-col items-center justify-center p-3.5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-emerald-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
                         >
-                          <div className="w-11 h-11 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Camera className="w-6 h-6" />
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-400 group-hover/opt:scale-110 transition-transform mb-1.5">
+                            <Camera className="w-4 h-4" />
                           </div>
                           <span className="text-xs font-black text-white">Take photo</span>
                           <span className="text-[9px] text-slate-500 font-mono mt-0.5">
@@ -1003,49 +1231,70 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                           </span>
                         </button>
 
-                        {/* 2. Upload */}
+                        {/* 4. Upload */}
                         <label 
                           htmlFor="modal-upload-file-input"
-                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-indigo-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer text-center"
+                          className="flex flex-col items-center justify-center p-3.5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-indigo-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer text-center"
                         >
-                          <div className="w-11 h-11 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Upload className="w-6 h-6" />
+                          <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 group-hover/opt:scale-110 transition-transform mb-1.5">
+                            <Upload className="w-4 h-4" />
                           </div>
                           <span className="text-xs font-black text-white">Upload</span>
-                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">Image / Video / HEIC</span>
+                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">Photo / GIF</span>
                         </label>
-
-                        {/* 3. Record video */}
-                        <button
-                          type="button"
-                          onClick={() => handleCaptureOptionClick("video")}
-                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-rose-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
-                        >
-                          <div className="w-11 h-11 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Film className="w-6 h-6" />
-                          </div>
-                          <span className="text-xs font-black text-white">Record video</span>
-                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">
-                            {isMobileDevice ? "3-5s Clip" : "Webcam Video"}
-                          </span>
-                        </button>
-
-                        {/* 4. Record voice */}
-                        <button
-                          type="button"
-                          onClick={startAudioRecording}
-                          className="flex flex-col items-center justify-center p-5 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-2xl transition-all group/opt active:scale-95 cursor-pointer"
-                        >
-                          <div className="w-11 h-11 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400 group-hover/opt:scale-110 transition-transform mb-3">
-                            <Mic className="w-6 h-6" />
-                          </div>
-                          <span className="text-xs font-black text-white">Record voice</span>
-                          <span className="text-[9px] text-slate-500 font-mono mt-0.5">6s Voice Note</span>
-                        </button>
                       </div>
+
+                      {/* 5. Record voice */}
+                      <button
+                        type="button"
+                        onClick={startAudioRecording}
+                        className="w-full flex items-center justify-center gap-2.5 py-3 px-4 bg-slate-950/40 hover:bg-slate-900 border border-slate-800 hover:border-amber-500/40 rounded-2xl transition-all active:scale-98 cursor-pointer mt-1"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-400 shrink-0">
+                          <Mic className="w-4 h-4" />
+                        </div>
+                        <div className="text-left">
+                          <div className="text-xs font-black text-white">Record voice note</div>
+                          <div className="text-[9px] text-slate-500 font-mono">6s Audio Reaction</div>
+                        </div>
+                      </button>
                     </>
                   )}
                 </div>
+              </motion.div>
+            )}
+
+            {/* STEP: TRIM EDITOR (Choose Clip flow for videos > 6s) */}
+            {step === "trim_editor" && trimInfo && (
+              <motion.div
+                key="trim_editor"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                className="py-1 text-left"
+              >
+                <ClipTimelineEditor
+                  file={trimInfo.file}
+                  sourceUrl={trimInfo.sourceUrl}
+                  duration={trimInfo.duration}
+                  initialStart={trimInfo.start}
+                  initialWindowDuration={trimInfo.windowDuration}
+                  onCancel={() => {
+                    setStep("upload_capture");
+                  }}
+                  onApplyTrim={({ start, windowDuration }) => {
+                    setTrimInfo(prev => prev ? { ...prev, start, windowDuration } : null);
+                    setSelectedMedia({
+                      data: trimInfo.sourceUrl,
+                      mimeType: trimInfo.file.type || "video/mp4",
+                      isVideo: true,
+                      file: trimInfo.file
+                    });
+                    setVoiceText("");
+                    setOverlayText("");
+                    setStep("preview");
+                  }}
+                />
               </motion.div>
             )}
 
@@ -1181,10 +1430,40 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                           src={selectedMedia.data} 
                           className="w-full h-full object-cover"
                           autoPlay 
-                          loop 
+                          loop={!trimInfo} 
                           muted={previewMuted}
                           playsInline
+                          onLoadedMetadata={(e) => {
+                            if (trimInfo) {
+                              e.currentTarget.currentTime = trimInfo.start;
+                              e.currentTarget.play().catch(() => {});
+                            }
+                          }}
+                          onTimeUpdate={(e) => {
+                            if (trimInfo) {
+                              const vid = e.currentTarget;
+                              const end = trimInfo.start + trimInfo.windowDuration;
+                              if (vid.currentTime >= end - 0.05 || vid.currentTime < trimInfo.start) {
+                                vid.currentTime = trimInfo.start;
+                                if (vid.paused) vid.play().catch(() => {});
+                              }
+                            }
+                          }}
                         />
+                        {trimInfo && (
+                          <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur-md border border-amber-500/40 text-[10px] font-mono text-amber-300 shadow">
+                            <Scissors className="w-3 h-3 text-amber-400" />
+                            <span>{trimInfo.start.toFixed(1)}s – {(trimInfo.start + trimInfo.windowDuration).toFixed(1)}s ({trimInfo.windowDuration.toFixed(1)}s)</span>
+                            <button
+                              type="button"
+                              onClick={() => setStep("trim_editor")}
+                              className="ml-1 underline font-bold hover:text-white cursor-pointer"
+                              title="Adjust 1-6s trim window"
+                            >
+                              Edit Trim
+                            </button>
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => setPreviewMuted(!previewMuted)}
@@ -1745,9 +2024,15 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black text-sm rounded-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 uppercase tracking-wider cursor-pointer"
                   >
                     {loading ? (
-                      <>
-                        <RefreshCw className="w-5 h-5 animate-spin" /> SENDING REACTION...
-                      </>
+                      isTrimming ? (
+                        <>
+                          <RefreshCw className="w-5 h-5 animate-spin" /> Trimming on server…
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-5 h-5 animate-spin" /> SENDING REACTION...
+                        </>
+                      )
                     ) : (
                       <>
                         ⚡ SEND REACTION <Sparkles className="w-4 h-4" />
@@ -1987,11 +2272,21 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                               capture="user" 
                               className="hidden" 
                               ref={videoInputRef}
-                              onChange={handleFileUpload}
+                              onChange={handleVideoInputChange}
                             />
 
                             <div className="grid grid-cols-2 gap-2">
-                              {/* 1. Take Photo (Mobile native camera capture) */}
+                              {/* 1. Choose Clip (Camera Roll / File up to 60s) */}
+                              <button
+                                type="button"
+                                onClick={() => chooseClipInputRef.current?.click()}
+                                className="flex items-center justify-center gap-1.5 py-2.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-xl text-xs font-semibold text-amber-300 cursor-pointer active:scale-95 transition-all col-span-2"
+                                title="Upload a video up to 60s and trim a 1–6s loop"
+                              >
+                                <Scissors className="w-4 h-4 text-amber-400" /> Choose Clip (Trim 1–6s)
+                              </button>
+
+                              {/* 2. Take Photo (Mobile native camera capture) */}
                               <button
                                 type="button"
                                 onClick={() => photoInputRef.current?.click()}
@@ -2001,7 +2296,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                                 <Camera className="w-4 h-4 text-emerald-400" /> Take Photo
                               </button>
 
-                              {/* 2. Record Clip (Mobile native video capture) */}
+                              {/* 3. Record Clip (Mobile native video capture) */}
                               <button
                                 type="button"
                                 onClick={() => videoInputRef.current?.click()}
@@ -2011,7 +2306,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                                 <Film className="w-4 h-4 text-rose-400" /> Record Clip
                               </button>
 
-                              {/* 3. Upload File */}
+                              {/* 4. Upload File */}
                               <label className="flex items-center justify-center gap-1.5 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-xs font-semibold text-slate-200 cursor-pointer active:scale-95 transition-all">
                                 <Upload className="w-4 h-4 text-indigo-400" /> Upload File
                                 <input 
@@ -2022,7 +2317,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                                 />
                               </label>
 
-                              {/* 4. Live Webcam (Inline browser capture fallback) */}
+                              {/* 5. Live Webcam (Inline browser capture fallback) */}
                               <button
                                 type="button"
                                 onClick={startCamera}
