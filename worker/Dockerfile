@@ -1,6 +1,6 @@
 FROM node:20-alpine
 
-# Install ffmpeg and ffprobe
+# Install system ffmpeg and ffprobe
 RUN apk add --no-cache ffmpeg ca-certificates curl
 
 WORKDIR /app
