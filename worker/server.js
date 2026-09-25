@@ -8,25 +8,50 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// Global crash handlers to guarantee error details appear in Cloud Run logs
+process.on("uncaughtException", (err) => {
+  console.error("[Worker Uncaught Exception]:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[Worker Unhandled Rejection]:", reason);
+});
+
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 
-const PORT = process.env.PORT || 8080;
-const WORKER_SECRET = process.env.WORKER_SECRET;
+// Cloud Run supplies PORT (typically 8080)
+const PORT = parseInt(process.env.PORT || "8080", 10);
+const WORKER_SECRET = process.env.WORKER_SECRET || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "";
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.warn("[Worker Warning] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.");
+  console.warn("[Worker Warning] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing from environment variables.");
 }
 
-const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
-  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
-  : null;
+let supabase = null;
+try {
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    supabase = createClient(SUPABASE_URL.trim(), SUPABASE_SERVICE_ROLE_KEY.trim(), {
+      auth: { persistSession: false }
+    });
+  }
+} catch (sbErr) {
+  console.error("[Worker Error] Failed to initialize Supabase client:", sbErr);
+}
 
-// Health check endpoint
+// Health check endpoint (Cloud Run startup and liveness probes)
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    supabaseConfigured: Boolean(supabase),
+    secretConfigured: Boolean(WORKER_SECRET)
+  });
+});
+
+app.get("/", (req, res) => {
+  res.send("Reax FFmpeg Worker is running.");
 });
 
 // Helper: Run ffprobe to get video duration and stream info
@@ -277,6 +302,7 @@ app.post("/trim", async (req, res) => {
   }
 });
 
+// Bind to 0.0.0.0 on PORT so Cloud Run health check succeeds immediately
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Reax FFmpeg Worker running on port ${PORT}`);
+  console.log(`Reax FFmpeg Worker listening on 0.0.0.0:${PORT}`);
 });
