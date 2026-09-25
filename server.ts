@@ -2908,47 +2908,27 @@ const fallbackWebmWithFFmpeg = ({
 };
 
 // ----------------------------------------------------
-// Cloud Run / Async Trim Job Registry & Handlers
+// Cloud Run / Synchronous Video Trim & Clip Creation
 // ----------------------------------------------------
-interface TrimJob {
-  id: string;
-  status: "queued" | "processing" | "completed" | "failed";
-  userId: string;
-  authorName: string;
-  rawUrl: string;
+
+// Local fallback trimmer for dev / local testing when external Cloud Run worker is not set
+async function executeLocalTrim({
+  rawBucket,
+  rawPath,
+  rawUrl,
+  trimStartMs,
+  trimDurationMs,
+  stripAudio,
+  userId
+}: {
+  rawBucket: string;
+  rawPath?: string;
+  rawUrl?: string;
   trimStartMs: number;
   trimDurationMs: number;
   stripAudio: boolean;
-  caption: string;
-  tone: string;
-  overlay: string;
-  parentId: string | null;
-  voiceAudioUrl: string | null;
-  voiceStyle: string;
-  effect: string;
-  clip?: any;
-  error?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-const trimJobs = new Map<string, TrimJob>();
-
-// Cleanup stale jobs after 30 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, job] of trimJobs.entries()) {
-    if (now - job.createdAt > 30 * 60 * 1000) {
-      trimJobs.delete(id);
-    }
-  }
-}, 5 * 60 * 1000);
-
-// Local fallback runner for dev / local environments when external Cloud Run worker is not set
-async function executeLocalTrimJob(job: TrimJob) {
-  job.status = "processing";
-  job.updatedAt = Date.now();
-
+  userId: string;
+}): Promise<string> {
   const tempId = crypto.randomUUID();
   const inputPath = path.join("/tmp", `input-${tempId}.mp4`);
   const outputPath = path.join("/tmp", `output-${tempId}.mp4`);
@@ -2958,13 +2938,26 @@ async function executeLocalTrimJob(job: TrimJob) {
     try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
   };
 
+  const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
+
   try {
-    const response = await fetch(job.rawUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to download raw video: HTTP ${response.status}`);
+    if (rawPath && storageClient) {
+      const { data: blobData, error: dlErr } = await storageClient.storage
+        .from(rawBucket)
+        .download(rawPath);
+      if (dlErr || !blobData) {
+        throw new Error(`Failed to download raw video from storage: ${dlErr?.message || "Not found"}`);
+      }
+      fs.writeFileSync(inputPath, Buffer.from(await blobData.arrayBuffer()));
+    } else if (rawUrl) {
+      const response = await fetch(rawUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to download raw video: HTTP ${response.status}`);
+      }
+      fs.writeFileSync(inputPath, Buffer.from(await response.arrayBuffer()));
+    } else {
+      throw new Error("No rawPath or rawUrl provided");
     }
-    const buf = Buffer.from(await response.arrayBuffer());
-    fs.writeFileSync(inputPath, buf);
 
     const probe = await probeVideoFile(inputPath);
     const duration = probe.duration;
@@ -2975,15 +2968,15 @@ async function executeLocalTrimJob(job: TrimJob) {
       throw new Error("Video must be 60 seconds or less.");
     }
 
-    const startSec = Math.max(0, job.trimStartMs / 1000);
-    const windowSec = Math.min(6.0, Math.max(1.0, job.trimDurationMs / 1000));
+    const startSec = Math.max(0, trimStartMs / 1000);
+    const windowSec = Math.min(6.0, Math.max(1.0, trimDurationMs / 1000));
 
     const trimRes = await trimVideoWithFFmpeg({
       inputPath,
       outputPath,
       startSec,
       durationSec: windowSec,
-      hasAudio: probe.hasAudio && !job.stripAudio,
+      hasAudio: probe.hasAudio && !stripAudio,
       timeoutMs: 60000
     });
 
@@ -2991,13 +2984,12 @@ async function executeLocalTrimJob(job: TrimJob) {
       throw new Error(trimRes.error || "Processing failed. Try again.");
     }
 
-    const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
     if (!storageClient) {
       throw new Error("Supabase storage client unavailable");
     }
 
     const trimmedUuid = crypto.randomUUID();
-    const trimmedStoragePath = `clips/${job.userId}/${trimmedUuid}.mp4`;
+    const trimmedStoragePath = `clips/${userId}/${trimmedUuid}.mp4`;
     const trimmedBuffer = fs.readFileSync(outputPath);
 
     const { error: upErr } = await storageClient.storage
@@ -3020,51 +3012,31 @@ async function executeLocalTrimJob(job: TrimJob) {
       throw new Error("Failed to get public URL for trimmed video");
     }
 
-    // Attempt to delete raw file
+    // Delete raw file using exact bucket and path
     try {
-      const rawMatch = job.rawUrl.match(/\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/);
-      if (rawMatch) {
-        const bucket = rawMatch[1];
-        const rawObjectPath = decodeURIComponent(rawMatch[2]);
-        await storageClient.storage.from(bucket).remove([rawObjectPath]);
+      let bucketToDelete = rawBucket;
+      let pathToDelete = rawPath;
+      if (!pathToDelete && rawUrl) {
+        const rawMatch = rawUrl.match(/\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/);
+        if (rawMatch) {
+          bucketToDelete = rawMatch[1];
+          pathToDelete = decodeURIComponent(rawMatch[2]);
+        }
+      }
+      if (pathToDelete) {
+        await storageClient.storage.from(bucketToDelete).remove([pathToDelete]);
       }
     } catch {}
 
-    const inserted = await store!.insertClip({
-      id: crypto.randomUUID(),
-      parentId: job.parentId || null,
-      mediaUrl: trimmedUrl,
-      mediaType: "video",
-      voiceStyle: (job.voiceStyle as any) || "casual",
-      overlayText: job.overlay || undefined,
-      tone: (job.tone as any) || "funny",
-      effect: job.effect || "zoom|classic|white|bottom",
-      userId: job.userId,
-      authorId: job.userId,
-      authorName: job.authorName,
-      voiceText: job.caption || undefined,
-      voiceAudioUrl: job.voiceAudioUrl || undefined,
-      createdAt: new Date().toISOString(),
-      likesCount: 0,
-      laughsCount: 0,
-      deleted: false,
-      reportCount: 0
-    });
-
-    job.status = "completed";
-    job.clip = inserted;
-    job.updatedAt = Date.now();
     cleanTempFiles();
+    return trimmedUrl;
   } catch (err: any) {
-    console.error(`[LocalTrimWorker] Error processing job ${job.id}:`, err);
-    job.status = "failed";
-    job.error = err.message || "Processing failed. Try again.";
-    job.updatedAt = Date.now();
     cleanTempFiles();
+    throw err;
   }
 }
 
-// 1. Queue a Trim Job (Triggered by client on Send)
+// Trim & Create Clip Endpoint (Synchronous, single insert in Vercel)
 app.post("/api/clips/queue-trim", async (req, res) => {
   const authRes = await authenticateUser(req);
   if (authRes.ok === false) {
@@ -3082,6 +3054,8 @@ app.post("/api/clips/queue-trim", async (req, res) => {
   }
 
   const {
+    rawBucket = "media",
+    rawPath,
     rawUrl,
     trimStartMs = 0,
     trimDurationMs = 6000,
@@ -3095,139 +3069,86 @@ app.post("/api/clips/queue-trim", async (req, res) => {
     effect = "zoom|classic|white|bottom"
   } = req.body;
 
-  if (!rawUrl || typeof rawUrl !== "string") {
-    return res.status(400).json({ error: "rawUrl is required" });
+  if (!rawPath && !rawUrl) {
+    return res.status(400).json({ error: "rawPath or rawUrl is required" });
   }
 
-  const jobId = crypto.randomUUID();
-  const job: TrimJob = {
-    id: jobId,
-    status: "queued",
-    userId: user.id,
-    authorName: profile.username || "Anonymous",
-    rawUrl,
-    trimStartMs: Math.max(0, parseInt(trimStartMs, 10) || 0),
-    trimDurationMs: Math.min(6050, Math.max(1000, parseInt(trimDurationMs, 10) || 6000)),
-    stripAudio: Boolean(stripAudio),
-    caption: caption || "",
-    tone: tone || "funny",
-    overlay: overlay || "",
-    parentId: parentId || null,
-    voiceAudioUrl: voiceAudioUrl || null,
-    voiceStyle: voiceStyle || "casual",
-    effect: effect || "zoom|classic|white|bottom",
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  };
+  const safeStartMs = Math.max(0, parseInt(trimStartMs, 10) || 0);
+  const safeDurationMs = Math.min(6050, Math.max(1000, parseInt(trimDurationMs, 10) || 6000));
+  const safeStripAudio = Boolean(stripAudio);
 
-  trimJobs.set(jobId, job);
+  let trimmedUrl = "";
 
-  // If Cloud Run worker URL is configured, forward to Cloud Run
   const workerBaseUrl = process.env.CLOUD_RUN_WORKER_URL || process.env.FFMPEG_WORKER_URL;
   if (workerBaseUrl) {
-    job.status = "processing";
-    (async () => {
-      try {
-        const protocol = req.headers["x-forwarded-proto"] || "http";
-        const host = req.headers["host"] || `localhost:${PORT}`;
-        const callbackUrl = `${protocol}://${host}/api/clips/finalize`;
-        const workerSecret = process.env.WORKER_SECRET || "reax-worker-secret-internal";
+    const workerSecret = process.env.WORKER_SECRET || "";
+    try {
+      const workerRes = await fetch(`${workerBaseUrl.replace(/\/$/, "")}/trim`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-worker-secret": workerSecret
+        },
+        body: JSON.stringify({
+          rawBucket,
+          rawPath,
+          rawUrl,
+          trimStartMs: safeStartMs,
+          trimDurationMs: safeDurationMs,
+          stripAudio: safeStripAudio,
+          userId: user.id // Always session user.id, never client-provided
+        })
+      });
 
-        const workerRes = await fetch(`${workerBaseUrl.replace(/\/$/, "")}/trim`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-worker-secret": workerSecret
-          },
-          body: JSON.stringify({
-            jobId,
-            rawUrl,
-            trimStartMs: job.trimStartMs,
-            trimDurationMs: job.trimDurationMs,
-            stripAudio: job.stripAudio,
-            userId: job.userId,
-            authorName: job.authorName,
-            caption: job.caption,
-            tone: job.tone,
-            overlay: job.overlay,
-            parentId: job.parentId,
-            voiceAudioUrl: job.voiceAudioUrl,
-            voiceStyle: job.voiceStyle,
-            effect: job.effect,
-            callbackUrl,
-            workerSecret
-          })
+      if (!workerRes.ok) {
+        const errData = await workerRes.json().catch(() => ({}));
+        return res.status(workerRes.status || 500).json({
+          error: errData.error || "Processing failed. Try again."
         });
-
-        if (!workerRes.ok) {
-          const errData = await workerRes.json().catch(() => ({}));
-          job.status = "failed";
-          job.error = errData.error || "Processing failed. Try again.";
-          job.updatedAt = Date.now();
-        }
-      } catch (err: any) {
-        console.error("[QueueTrim] Error calling Cloud Run worker:", err);
-        job.status = "failed";
-        job.error = "Processing failed. Try again.";
-        job.updatedAt = Date.now();
       }
-    })();
+
+      const workerData = await workerRes.json();
+      trimmedUrl = workerData.trimmedUrl;
+    } catch (workerErr: any) {
+      console.error("[QueueTrim] Error calling Cloud Run worker:", workerErr);
+      return res.status(500).json({ error: "Processing failed. Try again." });
+    }
   } else {
     // Local / Dev server fallback worker processor
-    executeLocalTrimJob(job);
-  }
-
-  return res.json({ status: "queued", jobId });
-});
-
-// 2. Finalize a Clip (Called by Cloud Run worker upon completion)
-app.post("/api/clips/finalize", async (req, res) => {
-  const {
-    jobId,
-    trimmedUrl,
-    userId,
-    authorName,
-    caption,
-    tone,
-    overlay,
-    parentId,
-    voiceAudioUrl,
-    voiceStyle,
-    effect
-  } = req.body;
-
-  const workerSecret = process.env.WORKER_SECRET || "reax-worker-secret-internal";
-  const incomingSecret = req.headers["x-worker-secret"];
-  let authorized = Boolean(incomingSecret && incomingSecret === workerSecret);
-
-  if (!authorized) {
-    const authRes = await authenticateUser(req);
-    if (authRes.ok) {
-      authorized = true;
+    try {
+      trimmedUrl = await executeLocalTrim({
+        rawBucket,
+        rawPath,
+        rawUrl,
+        trimStartMs: safeStartMs,
+        trimDurationMs: safeDurationMs,
+        stripAudio: safeStripAudio,
+        userId: user.id
+      });
+    } catch (localErr: any) {
+      console.error("[QueueTrim] Error during local fallback trim:", localErr);
+      return res.status(500).json({ error: localErr.message || "Processing failed. Try again." });
     }
   }
 
-  if (!authorized) {
-    return res.status(401).json({ error: "Unauthorized finalize request." });
+  if (!trimmedUrl) {
+    return res.status(500).json({ error: "Processing failed. Try again." });
   }
 
-  if (!trimmedUrl || !userId) {
-    return res.status(400).json({ error: "Missing trimmedUrl or userId" });
-  }
-
+  // Insert the clip in ONE place (Vercel)
   try {
-    const inserted = await store!.insertClip({
+    const newClip: Clip = {
       id: crypto.randomUUID(),
       parentId: parentId || null,
       mediaUrl: trimmedUrl,
       mediaType: "video",
       voiceStyle: (voiceStyle as any) || "casual",
-      overlayText: overlay || undefined,
+      overlayText: typeof overlay === "string" ? overlay.slice(0, 48) : undefined,
       tone: (tone as any) || "funny",
       effect: effect || "zoom|classic|white|bottom",
-      userId: userId,
-      authorId: userId,
-      authorName: authorName || "Anonymous",
+      userId: user.id,
+      authorId: user.id,
+      authorName: profile.username || "Anonymous",
       voiceText: caption || undefined,
       voiceAudioUrl: voiceAudioUrl || undefined,
       createdAt: new Date().toISOString(),
@@ -3235,45 +3156,25 @@ app.post("/api/clips/finalize", async (req, res) => {
       laughsCount: 0,
       deleted: false,
       reportCount: 0
+    };
+
+    const inserted = await store!.insertClip(newClip);
+    await store!.upsertUserProfile({
+      id: user.id,
+      username: profile.username,
+      email: user.email,
+      lastActive: new Date().toISOString()
     });
-
-    if (jobId && trimJobs.has(jobId)) {
-      const job = trimJobs.get(jobId)!;
-      job.status = "completed";
-      job.clip = inserted;
-      job.updatedAt = Date.now();
+    await store!.incrementFunnel("posted_reaction");
+    if (caption || voiceAudioUrl) {
+      await store!.incrementFunnel("posted_voice_reaction");
     }
 
-    res.json({ success: true, clip: inserted });
-  } catch (err: any) {
-    console.error("Error finalizing clip:", err);
-    if (jobId && trimJobs.has(jobId)) {
-      const job = trimJobs.get(jobId)!;
-      job.status = "failed";
-      job.error = "Processing failed. Try again.";
-      job.updatedAt = Date.now();
-    }
-    res.status(500).json({ error: "Processing failed. Try again." });
+    return res.json(inserted);
+  } catch (dbErr: any) {
+    console.error("[QueueTrim] Database insert failed:", dbErr);
+    return res.status(500).json({ error: "Processing failed. Try again." });
   }
-});
-
-// 3. Poll Clip Trim Status
-app.get("/api/clips/status", (req, res) => {
-  const jobId = req.query.id as string;
-  if (!jobId) {
-    return res.status(400).json({ error: "Missing job id parameter" });
-  }
-
-  const job = trimJobs.get(jobId);
-  if (!job) {
-    return res.status(404).json({ error: "Job not found or expired" });
-  }
-
-  res.json({
-    status: job.status,
-    clip: job.clip || null,
-    error: job.error || null
-  });
 });
 
 app.post("/api/clips/trim-upload", handleTrimUploadMiddleware, async (req, res) => {

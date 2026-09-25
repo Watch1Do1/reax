@@ -607,9 +607,9 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       return;
     }
 
-    // 200MB max file size
-    if (file.size > 200 * 1024 * 1024) {
-      setError("Video must be 200MB or less.");
+    // 50MB max file size to prevent worker/browser memory exhaustion
+    if (file.size > 50 * 1024 * 1024) {
+      setError("Video must be 50MB or less.");
       return;
     }
 
@@ -915,6 +915,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
             Authorization: `Bearer ${token}`
           },
           body: JSON.stringify({
+            rawBucket: rawUploadResult.bucket || "media",
+            rawPath: rawUploadResult.path,
             rawUrl: rawUploadResult.url,
             trimStartMs: Math.round(trimInfo.start * 1000),
             trimDurationMs: Math.round(trimInfo.windowDuration * 1000),
@@ -945,45 +947,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           return;
         }
 
-        const { jobId } = await queueRes.json();
-
-        // 3. Poll /api/clips/status?id=...
-        let pollAttempts = 0;
-        const maxPollAttempts = 90; // up to 90 seconds
-        let finalClip = null;
-
-        while (pollAttempts < maxPollAttempts) {
-          await new Promise((r) => setTimeout(r, 1000));
-          pollAttempts++;
-
-          try {
-            const statusRes = await fetch(`/api/clips/status?id=${jobId}`, {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            if (statusRes.ok) {
-              const statusData = await statusRes.json();
-              if (statusData.status === "completed" && statusData.clip) {
-                finalClip = statusData.clip;
-                break;
-              } else if (statusData.status === "failed") {
-                throw new Error(statusData.error || "Processing failed. Try again.");
-              }
-            }
-          } catch (pollErr: any) {
-            if (
-              pollErr.message === "Processing failed. Try again." ||
-              pollErr.message?.includes("Video must be") ||
-              pollErr.message?.includes("Could not read")
-            ) {
-              throw pollErr;
-            }
-          }
-        }
-
-        if (!finalClip && pollAttempts >= maxPollAttempts) {
-          throw new Error("Processing failed. Try again.");
-        }
-
+        // Synchronous clip creation complete!
         setLoading(false);
         setIsTrimming(false);
         setStatusMessage("");

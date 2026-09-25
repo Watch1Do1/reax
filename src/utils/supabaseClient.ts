@@ -946,6 +946,7 @@ export async function fetchMyProfile(): Promise<{
 export interface UploadResult {
   url: string;
   path: string;
+  bucket?: string;
   mediaType: "audio" | "image" | "video" | string;
 }
 
@@ -1077,6 +1078,7 @@ export async function uploadRawClipAsset({
   return {
     url: signData.publicUrl,
     path: signData.path,
+    bucket: signData.bucket,
     mediaType: "video"
   };
 }

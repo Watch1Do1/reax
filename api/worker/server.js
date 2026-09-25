@@ -12,31 +12,22 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 
 const PORT = process.env.PORT || 8080;
-const WORKER_SECRET = process.env.WORKER_SECRET || "";
+const WORKER_SECRET = process.env.WORKER_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "";
 
-let supabase = null;
-if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
-  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false }
-  });
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn("[Worker Warning] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing.");
 }
+
+const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+  : null;
 
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
-
-// Helper: Download a remote URL to local temporary file
-async function downloadToFile(url, destPath) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download source file: HTTP ${response.status}`);
-  }
-  const arrayBuffer = await response.arrayBuffer();
-  fs.writeFileSync(destPath, Buffer.from(arrayBuffer));
-}
 
 // Helper: Run ffprobe to get video duration and stream info
 function probeVideo(filePath) {
@@ -82,44 +73,27 @@ function probeVideo(filePath) {
   });
 }
 
-// Helper: Execute FFmpeg trim
-function trimVideo({ inputPath, outputPath, startSec, durationSec, stripAudio, hasAudio, voiceAudioPath }) {
+// Helper: Execute FFmpeg trim (clean: -an vs AAC, no amix overhead)
+function trimVideo({ inputPath, outputPath, startSec, durationSec, stripAudio, hasAudio }) {
   return new Promise((resolve, reject) => {
     const vf = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
 
     const args = [
       "-y",
       "-ss", startSec.toFixed(3),
-      "-i", inputPath
+      "-i", inputPath,
+      "-t", durationSec.toFixed(3),
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-crf", "23",
+      "-pix_fmt", "yuv420p",
+      "-vf", vf
     ];
 
-    let hasVoice = Boolean(voiceAudioPath && fs.existsSync(voiceAudioPath));
-    if (hasVoice) {
-      args.push("-i", voiceAudioPath);
-    }
-
-    args.push("-t", durationSec.toFixed(3));
-    args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-vf", vf);
-
-    if (stripAudio && !hasVoice) {
+    if (stripAudio || !hasAudio) {
       args.push("-an");
-    } else if (hasVoice && (!hasAudio || stripAudio)) {
-      // Use voice audio only
-      args.push("-c:a", "aac", "-b:a", "128k", "-ac", "2", "-map", "0:v:0", "-map", "1:a:0");
-    } else if (hasVoice && hasAudio) {
-      // Mix video audio with voice over
-      args.push(
-        "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-        "-map", "0:v:0",
-        "-map", "[aout]",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ac", "2"
-      );
-    } else if (hasAudio) {
-      args.push("-c:a", "aac", "-b:a", "128k", "-ac", "2");
     } else {
-      args.push("-an");
+      args.push("-c:a", "aac", "-b:a", "128k", "-ac", "2");
     }
 
     args.push("-movflags", "+faststart", outputPath);
@@ -133,69 +107,77 @@ function trimVideo({ inputPath, outputPath, startSec, durationSec, stripAudio, h
   });
 }
 
-// Trim Endpoint: Triggered by Vercel
+// Trim Endpoint: Called by Vercel
 app.post("/trim", async (req, res) => {
-  // Optional worker secret check
-  if (WORKER_SECRET) {
-    const incomingSecret = req.headers["x-worker-secret"] || req.body.workerSecret;
-    if (incomingSecret !== WORKER_SECRET) {
-      return res.status(401).json({ error: "Unauthorized worker request" });
-    }
+  // 1. Mandatory WORKER_SECRET check
+  if (!WORKER_SECRET) {
+    console.error("[Worker] WORKER_SECRET is not configured on this instance.");
+    return res.status(500).json({ error: "Server misconfiguration: WORKER_SECRET is not configured." });
+  }
+
+  const incomingSecret = req.headers["x-worker-secret"] || req.body?.workerSecret;
+  if (!incomingSecret || incomingSecret !== WORKER_SECRET) {
+    console.warn("[Worker] Rejected unauthorized request: invalid or missing x-worker-secret.");
+    return res.status(401).json({ error: "Unauthorized worker request" });
   }
 
   const {
     jobId,
+    rawBucket = "media",
+    rawPath,
     rawUrl,
     trimStartMs = 0,
     trimDurationMs = 6000,
     stripAudio = false,
-    userId,
-    authorName,
-    caption = "",
-    tone = "funny",
-    overlay = "",
-    parentId = null,
-    voiceAudioUrl = null,
-    voiceStyle = "casual",
-    effect = "zoom|classic|white|bottom",
-    callbackUrl = null
+    userId
   } = req.body;
 
-  if (!rawUrl || !userId) {
-    return res.status(400).json({ error: "Missing required parameters (rawUrl, userId)" });
+  if (!userId || (!rawPath && !rawUrl)) {
+    return res.status(400).json({ error: "Missing required parameters (userId, rawPath or rawUrl)" });
+  }
+
+  if (!supabase) {
+    return res.status(500).json({ error: "Supabase client is not configured on worker." });
   }
 
   const tempId = crypto.randomUUID();
   const inputPath = path.join("/tmp", `input-${tempId}.mp4`);
-  const voicePath = path.join("/tmp", `voice-${tempId}.mp3`);
   const outputPath = path.join("/tmp", `output-${tempId}.mp4`);
 
   const cleanTempFiles = () => {
     try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
-    try { if (fs.existsSync(voicePath)) fs.unlinkSync(voicePath); } catch {}
     try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
   };
 
   try {
-    console.log(`[Worker] Starting job ${jobId} for user ${userId}`);
+    console.log(`[Worker] Starting trim job ${jobId || tempId} for user ${userId}`);
 
-    // 1. Download raw video from Supabase Storage
-    await downloadToFile(rawUrl, inputPath);
+    // 2. Download raw video from Supabase Storage
+    if (rawPath) {
+      console.log(`[Worker] Downloading ${rawBucket}/${rawPath}`);
+      const { data: blobData, error: dlErr } = await supabase.storage
+        .from(rawBucket)
+        .download(rawPath);
 
-    // If voiceOverUrl exists, download voice audio
-    if (voiceAudioUrl) {
-      try {
-        await downloadToFile(voiceAudioUrl, voicePath);
-      } catch (voiceErr) {
-        console.warn(`[Worker] Failed to download voiceAudioUrl, continuing without voice mix:`, voiceErr);
+      if (dlErr || !blobData) {
+        throw new Error(`Failed to download raw video from Supabase: ${dlErr?.message || "Not found"}`);
       }
+      const arrayBuf = await blobData.arrayBuffer();
+      fs.writeFileSync(inputPath, Buffer.from(arrayBuf));
+    } else if (rawUrl) {
+      console.log(`[Worker] Downloading via URL: ${rawUrl}`);
+      const dlRes = await fetch(rawUrl);
+      if (!dlRes.ok) {
+        throw new Error(`Failed to download raw video via URL: HTTP ${dlRes.status}`);
+      }
+      const arrayBuf = await dlRes.arrayBuffer();
+      fs.writeFileSync(inputPath, Buffer.from(arrayBuf));
     }
 
-    // 2. Probe duration with ffprobe
+    // 3. Probe duration with ffprobe
     const probe = await probeVideo(inputPath);
     const durationSec = probe.duration;
 
-    // Validate: duration > 0, duration <= 60.5s
     if (!durationSec || isNaN(durationSec) || durationSec <= 0) {
       cleanTempFiles();
       return res.status(400).json({ error: "Could not read that video." });
@@ -214,7 +196,7 @@ app.post("/trim", async (req, res) => {
       return res.status(400).json({ error: "Requested trim window exceeds video duration." });
     }
 
-    // 3. Run ffmpeg trim
+    // 4. Run ffmpeg trim
     console.log(`[Worker] Running ffmpeg: start=${startSec.toFixed(3)}s, duration=${windowSec.toFixed(3)}s, stripAudio=${stripAudio}`);
     await trimVideo({
       inputPath,
@@ -222,19 +204,14 @@ app.post("/trim", async (req, res) => {
       startSec,
       durationSec: windowSec,
       stripAudio,
-      hasAudio: probe.hasAudio,
-      voiceAudioPath: fs.existsSync(voicePath) ? voicePath : null
+      hasAudio: probe.hasAudio
     });
 
     if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
       throw new Error("FFmpeg produced empty output file");
     }
 
-    // 4. Upload trimmed file to Supabase Storage: clips/{userId}/{uuid}.mp4
-    if (!supabase) {
-      throw new Error("Supabase client is not configured on worker.");
-    }
-
+    // 5. Upload trimmed file to Supabase Storage: clips/{userId}/{uuid}.mp4
     const trimmedFileUuid = crypto.randomUUID();
     const trimmedStoragePath = `clips/${userId}/${trimmedFileUuid}.mp4`;
     const trimmedBuffer = fs.readFileSync(outputPath);
@@ -261,66 +238,37 @@ app.post("/trim", async (req, res) => {
 
     console.log(`[Worker] Trimmed file uploaded successfully: ${trimmedPublicUrl}`);
 
-    // 5. Delete raw file from Supabase Storage
+    // 6. Delete raw file using exact bucket and path
     try {
-      // Extract storage path from rawUrl
-      const rawMatch = rawUrl.match(/\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/);
-      if (rawMatch) {
-        const bucket = rawMatch[1];
-        const rawObjectPath = decodeURIComponent(rawMatch[2]);
-        console.log(`[Worker] Deleting raw file: ${bucket}/${rawObjectPath}`);
-        await supabase.storage.from(bucket).remove([rawObjectPath]);
+      let bucketToDelete = rawBucket;
+      let pathToDelete = rawPath;
+
+      if (!pathToDelete && rawUrl) {
+        const rawMatch = rawUrl.match(/\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/);
+        if (rawMatch) {
+          bucketToDelete = rawMatch[1];
+          pathToDelete = decodeURIComponent(rawMatch[2]);
+        }
+      }
+
+      if (pathToDelete) {
+        console.log(`[Worker] Deleting raw file: ${bucketToDelete}/${pathToDelete}`);
+        await supabase.storage.from(bucketToDelete).remove([pathToDelete]);
       }
     } catch (delErr) {
       console.warn("[Worker] Non-critical: Could not delete raw file from storage:", delErr);
     }
 
-    // 6. Call Vercel to finalize the clip row
-    let finalizedClip = null;
-    if (callbackUrl) {
-      try {
-        console.log(`[Worker] Calling callback to finalize clip: ${callbackUrl}`);
-        const finalizeRes = await fetch(callbackUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-worker-secret": WORKER_SECRET || "reax-worker-secret-internal"
-          },
-          body: JSON.stringify({
-            jobId,
-            trimmedUrl: trimmedPublicUrl,
-            userId,
-            authorName,
-            caption,
-            tone,
-            overlay,
-            parentId,
-            voiceAudioUrl,
-            voiceStyle,
-            effect
-          })
-        });
-        if (finalizeRes.ok) {
-          const finalizeData = await finalizeRes.json();
-          finalizedClip = finalizeData.clip || finalizeData;
-        } else {
-          console.warn(`[Worker] Callback returned HTTP ${finalizeRes.status}`);
-        }
-      } catch (cbErr) {
-        console.warn(`[Worker] Callback execution failed:`, cbErr);
-      }
-    }
-
     cleanTempFiles();
 
+    // 7. Return trimmed URL directly to caller (Vercel)
     return res.json({
       status: "success",
       trimmedUrl: trimmedPublicUrl,
-      jobId,
-      clip: finalizedClip
+      jobId
     });
   } catch (error) {
-    console.error(`[Worker] Error processing trim job ${jobId}:`, error);
+    console.error(`[Worker] Error processing trim job ${jobId || tempId}:`, error);
     cleanTempFiles();
     return res.status(500).json({
       error: "Processing failed. Try again.",
