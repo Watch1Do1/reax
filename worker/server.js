@@ -23,6 +23,11 @@ app.use(express.json({ limit: "10mb" }));
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const WORKER_SECRET = (process.env.WORKER_SECRET || "").trim();
 
+// Polyfill WebSocket for headless Node.js container environments where Realtime is unused
+if (typeof globalThis.WebSocket === "undefined") {
+  globalThis.WebSocket = class DummyWebSocket {};
+}
+
 let _supabaseClient = null;
 function getSupabase() {
   if (_supabaseClient) return _supabaseClient;
@@ -40,6 +45,9 @@ function getSupabase() {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false
+      },
+      realtime: {
+        transport: null
       }
     });
     return _supabaseClient;
