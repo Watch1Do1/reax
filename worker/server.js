@@ -21,23 +21,32 @@ app.use(express.json({ limit: "10mb" }));
 
 // Cloud Run supplies PORT (typically 8080)
 const PORT = parseInt(process.env.PORT || "8080", 10);
-const WORKER_SECRET = process.env.WORKER_SECRET || "";
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "";
+const WORKER_SECRET = (process.env.WORKER_SECRET || "").trim();
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.warn("[Worker Warning] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing from environment variables.");
-}
-
-let supabase = null;
-try {
-  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
-    supabase = createClient(SUPABASE_URL.trim(), SUPABASE_SERVICE_ROLE_KEY.trim(), {
-      auth: { persistSession: false }
-    });
+let _supabaseClient = null;
+function getSupabase() {
+  if (_supabaseClient) return _supabaseClient;
+  let url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
+  // Automatically strip accidental /rest/v1 or trailing slashes
+  url = url.replace(/\/rest\/v1\/?$/, "").replace(/\/+$/, "");
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "").trim();
+  if (!url || !key) {
+    console.warn("[Worker Warning] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing from environment variables.");
+    return null;
   }
-} catch (sbErr) {
-  console.error("[Worker Error] Failed to initialize Supabase client:", sbErr);
+  try {
+    _supabaseClient = createClient(url, key, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false
+      }
+    });
+    return _supabaseClient;
+  } catch (err) {
+    console.error("[Worker] Failed to create Supabase client:", err);
+    return null;
+  }
 }
 
 // Health check endpoint (Cloud Run startup and liveness probes)
@@ -45,7 +54,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
-    supabaseConfigured: Boolean(supabase),
+    supabaseConfigured: Boolean(getSupabase()),
     secretConfigured: Boolean(WORKER_SECRET)
   });
 });
@@ -161,6 +170,7 @@ app.post("/trim", async (req, res) => {
     return res.status(400).json({ error: "Missing required parameters (userId, rawPath or rawUrl)" });
   }
 
+  const supabase = getSupabase();
   if (!supabase) {
     return res.status(500).json({ error: "Supabase client is not configured on worker." });
   }
@@ -302,7 +312,11 @@ app.post("/trim", async (req, res) => {
   }
 });
 
-// Bind to 0.0.0.0 on PORT so Cloud Run health check succeeds immediately
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Reax FFmpeg Worker listening on 0.0.0.0:${PORT}`);
+// Start listening immediately
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Reax FFmpeg Worker running on port ${PORT}`);
+});
+
+server.on("error", (err) => {
+  console.error(`[Worker Server Error]: Failed to bind to port ${PORT}:`, err);
 });
