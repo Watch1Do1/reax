@@ -7,7 +7,8 @@ interface ClipTimelineEditorProps {
   duration: number; // in seconds
   initialStart?: number;
   initialWindowDuration?: number;
-  onApplyTrim: (trim: { start: number; windowDuration: number }) => void;
+  initialStripAudio?: boolean;
+  onApplyTrim: (trim: { start: number; windowDuration: number; stripAudio?: boolean }) => void;
   onCancel: () => void;
 }
 
@@ -25,6 +26,7 @@ export default function ClipTimelineEditor({
   duration,
   initialStart = 0,
   initialWindowDuration = 6.0,
+  initialStripAudio = false,
   onApplyTrim,
   onCancel
 }: ClipTimelineEditorProps) {
@@ -36,7 +38,7 @@ export default function ClipTimelineEditor({
   const [windowDuration, setWindowDuration] = useState<number>(safeInitialWindow);
   const [currentTime, setCurrentTime] = useState<number>(safeInitialStart);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
-  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isMuted, setIsMuted] = useState<boolean>(initialStripAudio);
   const [previewLoop, setPreviewLoop] = useState<boolean>(true);
   const [isAnalyzingAudio, setIsAnalyzingAudio] = useState<boolean>(false);
   const [audioPeakFound, setAudioPeakFound] = useState<boolean>(false);
@@ -527,6 +529,25 @@ export default function ClipTimelineEditor({
           <span>{isAnalyzingAudio ? "Analyzing..." : audioPeakFound ? "Moment Snapped" : "Snap to Moment"}</span>
         </button>
 
+        {/* Audio Strip Toggle */}
+        <button
+          type="button"
+          onClick={() => {
+            const nextMuted = !isMuted;
+            setIsMuted(nextMuted);
+            if (videoRef.current) videoRef.current.muted = nextMuted;
+          }}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer ${
+            isMuted
+              ? "bg-rose-500/10 border-rose-500/30 text-rose-300"
+              : "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+          }`}
+          title="Mute or keep video audio"
+        >
+          {isMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
+          <span>Audio: {isMuted ? "MUTED" : "ON"}</span>
+        </button>
+
         {/* Preview Loop Toggle */}
         <button
           type="button"
@@ -539,7 +560,7 @@ export default function ClipTimelineEditor({
           title="Loop the active 1-6s window during preview"
         >
           <RotateCcw className="w-3.5 h-3.5" />
-          <span>Preview Loop: {previewLoop ? "ON" : "OFF"}</span>
+          <span>Loop: {previewLoop ? "ON" : "OFF"}</span>
         </button>
       </div>
 
@@ -555,7 +576,11 @@ export default function ClipTimelineEditor({
 
         <button
           type="button"
-          onClick={() => onApplyTrim({ start: windowStartRef.current, windowDuration: windowEndRef.current - windowStartRef.current })}
+          onClick={() => onApplyTrim({
+            start: windowStartRef.current,
+            windowDuration: windowEndRef.current - windowStartRef.current,
+            stripAudio: isMuted
+          })}
           className="w-2/3 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-amber-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
         >
           <Check className="w-4 h-4" />

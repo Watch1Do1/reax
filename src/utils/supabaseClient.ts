@@ -983,6 +983,105 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 /**
+ * Uploads a full raw video file directly to Supabase Storage under raw-clips/{userId}/{uuid}.{ext}
+ * Bypasses Vercel and serverless payload limits completely.
+ */
+export async function uploadRawClipAsset({
+  file,
+  mimeType,
+  filename
+}: {
+  file: Blob | File;
+  mimeType: string;
+  filename?: string;
+}): Promise<UploadResult> {
+  const token = await getAuthToken();
+
+  const signRes = await fetch("/api/upload/sign", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      contentType: mimeType,
+      kind: "video",
+      category: "raw_clip",
+      filename: filename || `raw-${Date.now()}`
+    })
+  });
+
+  if (signRes.status === 403) {
+    const errData = await signRes.json().catch(() => ({}));
+    if (errData.error === "signup_required") {
+      const err = new Error("signup_required");
+      (err as any).signupRequired = true;
+      (err as any).status = 403;
+      (err as any).clipCount = errData.clipCount || 3;
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
+          detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
+        }));
+      }
+      throw err;
+    }
+  }
+
+  if (!signRes.ok) {
+    throw new Error("Upload failed. Check your connection.");
+  }
+
+  const signData = await signRes.json();
+  if (!signData.signedUrl || !signData.token || !signData.path || !signData.bucket) {
+    throw new Error("Upload failed. Check your connection.");
+  }
+
+  let uploadSuccess = false;
+
+  // Direct upload to Supabase bucket
+  const supabase = await getSupabaseClient();
+  if (supabase) {
+    try {
+      const { error: upErr } = await supabase.storage
+        .from(signData.bucket)
+        .uploadToSignedUrl(signData.path, signData.token, file, {
+          contentType: mimeType,
+          upsert: true
+        });
+      if (!upErr) {
+        uploadSuccess = true;
+      }
+    } catch {}
+  }
+
+  if (!uploadSuccess && signData.signedUrl) {
+    try {
+      const putRes = await fetch(signData.signedUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": mimeType,
+          "x-upsert": "true"
+        },
+        body: file
+      });
+      if (putRes.ok) {
+        uploadSuccess = true;
+      }
+    } catch {}
+  }
+
+  if (!uploadSuccess || !signData.publicUrl) {
+    throw new Error("Upload failed. Check your connection.");
+  }
+
+  return {
+    url: signData.publicUrl,
+    path: signData.path,
+    mediaType: "video"
+  };
+}
+
+/**
  * Uploads media (audio, image, or video) to Supabase Storage.
  * Prefers direct signed upload to completely bypass serverless 4.5MB payload limits.
  */

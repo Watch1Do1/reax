@@ -8,7 +8,7 @@ import {
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { Clip, SavedReaction } from "../types";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
-import { uploadMediaAsset, getAuthToken } from "../utils/supabaseClient";
+import { uploadMediaAsset, uploadRawClipAsset, getAuthToken } from "../utils/supabaseClient";
 import { convertHeicToJpeg, isHeicFile } from "../utils/imageUtils";
 import ClipTimelineEditor from "./ClipTimelineEditor";
 
@@ -29,6 +29,7 @@ export interface TrimInfo {
   duration: number;
   start: number;
   windowDuration: number;
+  stripAudio?: boolean;
 }
 
 export default function RespondModal({ parentId, parentClip, initialTone = null, onClose, onSuccess, username, remixData = null }: RespondModalProps) {
@@ -51,6 +52,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean; file?: File } | null>(null);
   const [trimInfo, setTrimInfo] = useState<TrimInfo | null>(null);
   const [isTrimming, setIsTrimming] = useState(false);
+  const [stripAudio, setStripAudio] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
 
   // Track all created blob URLs to prevent memory leaks on cancel, unmount, or publish
   const createdBlobUrlsRef = useRef<Set<string>>(new Set());
@@ -604,9 +607,9 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       return;
     }
 
-    // 50MB max file size
-    if (file.size > 50 * 1024 * 1024) {
-      setError("File is too large. Maximum size allowed is 50MB.");
+    // 200MB max file size
+    if (file.size > 200 * 1024 * 1024) {
+      setError("Video must be 200MB or less.");
       return;
     }
 
@@ -643,14 +646,14 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     const handleActualDuration = (duration: number) => {
       if (!duration || isNaN(duration) || duration <= 0) {
         revokeBlobUrl(objectUrl);
-        setError("Could not read that video. Try an MP4.");
+        setError("Could not read that video.");
         return;
       }
 
-      // If duration exceeds 60 seconds → reject with existing error message
+      // If duration exceeds 60 seconds → reject with exact error message
       if (duration > 60) {
         revokeBlobUrl(objectUrl);
-        setError("Video must be 60 seconds or less");
+        setError("Video must be 60 seconds or less.");
         return;
       }
 
@@ -676,12 +679,14 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       // Only show the trim editor for videos > 6 seconds
       stopCamera();
       const defaultWindow = Math.min(6.0, duration);
+      setStripAudio(false);
       setTrimInfo({
         file,
         sourceUrl: objectUrl,
         duration,
         start: 0,
-        windowDuration: defaultWindow
+        windowDuration: defaultWindow,
+        stripAudio: false
       });
       setStep("trim_editor");
     };
@@ -871,61 +876,128 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           ? (isEditedFromRemix ? remixData.authorName : remixData.remixedFrom)
           : undefined;
 
-        const formData = new FormData();
-        formData.append("file", trimInfo.file);
-        formData.append("trimStartMs", Math.round(trimInfo.start * 1000).toString());
-        formData.append("trimDurationMs", Math.round(trimInfo.windowDuration * 1000).toString());
-        if (parentId) formData.append("parentId", parentId);
-        formData.append("tone", tone);
-        if (audioMode === "tts" && voiceText) {
-          formData.append("voiceText", voiceText.slice(0, 200));
-        } else if (uploadedVoiceUrl) {
-          formData.append("voiceText", `audio_url:${uploadedVoiceUrl}`);
+        // 1. Direct Upload full raw video to Supabase Storage (bypasses Vercel payload limit)
+        setStatusMessage("Uploading video…");
+        let rawUploadResult;
+        try {
+          rawUploadResult = await uploadRawClipAsset({
+            file: trimInfo.file,
+            mimeType: trimInfo.file.type || "video/mp4",
+            filename: `raw-${Date.now()}`
+          });
+        } catch (upErr: any) {
+          if (upErr?.signupRequired) {
+            setLoading(false);
+            setIsTrimming(false);
+            setStatusMessage("");
+            return;
+          }
+          throw new Error("Upload failed. Check your connection.");
         }
-        if (uploadedVoiceUrl) formData.append("voiceAudioUrl", uploadedVoiceUrl);
-        if (voiceStyle) formData.append("voiceStyle", voiceStyle);
-        formData.append("effect", `${visualEffect}|${textStyle}|${textColor}|${textPosition}`);
-        if (overlayText) formData.append("overlayText", overlayText);
-        if (originalAuthorVal) formData.append("originalAuthor", originalAuthorVal);
-        if (remixedFromVal) formData.append("remixedFrom", remixedFromVal);
-        formData.append("authorName", username ? username.trim() : (guestAuthorName.trim() || "Guest"));
 
+        // 2. Queue the trim job via Vercel -> Cloud Run
+        setStatusMessage("Processing clip…");
         const token = await getAuthToken();
-        const res = await fetch("/api/clips/trim-upload", {
+
+        let captionText = "";
+        if (audioMode === "tts" && voiceText) {
+          captionText = voiceText.slice(0, 200);
+        } else if (uploadedVoiceUrl) {
+          captionText = `audio_url:${uploadedVoiceUrl}`;
+        } else if (voiceText) {
+          captionText = voiceText;
+        }
+
+        const queueRes = await fetch("/api/clips/queue-trim", {
           method: "POST",
           headers: {
+            "Content-Type": "application/json",
             Authorization: `Bearer ${token}`
           },
-          body: formData
+          body: JSON.stringify({
+            rawUrl: rawUploadResult.url,
+            trimStartMs: Math.round(trimInfo.start * 1000),
+            trimDurationMs: Math.round(trimInfo.windowDuration * 1000),
+            stripAudio: Boolean(stripAudio),
+            caption: captionText,
+            tone: tone,
+            overlay: overlayText || "",
+            parentId: parentId || null,
+            voiceAudioUrl: uploadedVoiceUrl || null,
+            voiceStyle: voiceStyle,
+            effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`
+          })
         });
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          if (res.status === 403 && errData.error === "signup_required") {
+        if (!queueRes.ok) {
+          const errData = await queueRes.json().catch(() => ({}));
+          if (queueRes.status === 403 && errData.error === "signup_required") {
             window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", {
               detail: { reason: "post_limit", clipCount: errData.clipCount || 3 }
             }));
             setError("Guest quota reached (3 reactions). Sign up to post unlimited!");
           } else {
-            setError(errData.error || "Trim failed. Try a shorter clip or Record instead.");
+            setError(errData.error || "Processing failed. Try again.");
           }
-          // Preserve local file and window on failure - do not clear draft
           setLoading(false);
           setIsTrimming(false);
+          setStatusMessage("");
           return;
+        }
+
+        const { jobId } = await queueRes.json();
+
+        // 3. Poll /api/clips/status?id=...
+        let pollAttempts = 0;
+        const maxPollAttempts = 90; // up to 90 seconds
+        let finalClip = null;
+
+        while (pollAttempts < maxPollAttempts) {
+          await new Promise((r) => setTimeout(r, 1000));
+          pollAttempts++;
+
+          try {
+            const statusRes = await fetch(`/api/clips/status?id=${jobId}`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (statusRes.ok) {
+              const statusData = await statusRes.json();
+              if (statusData.status === "completed" && statusData.clip) {
+                finalClip = statusData.clip;
+                break;
+              } else if (statusData.status === "failed") {
+                throw new Error(statusData.error || "Processing failed. Try again.");
+              }
+            }
+          } catch (pollErr: any) {
+            if (
+              pollErr.message === "Processing failed. Try again." ||
+              pollErr.message?.includes("Video must be") ||
+              pollErr.message?.includes("Could not read")
+            ) {
+              throw pollErr;
+            }
+          }
+        }
+
+        if (!finalClip && pollAttempts >= maxPollAttempts) {
+          throw new Error("Processing failed. Try again.");
         }
 
         setLoading(false);
         setIsTrimming(false);
+        setStatusMessage("");
         revokeAllBlobUrls();
+        window.dispatchEvent(new Event("reax_clip_posted"));
         onSuccess();
         handleModalClose();
         return;
       } catch (err: any) {
         console.error("Trim and upload post error:", err);
-        setError(err?.message || "Trim failed. Try a shorter clip or Record instead.");
+        setError(err?.message || "Processing failed. Try again.");
         setLoading(false);
         setIsTrimming(false);
+        setStatusMessage("");
         return;
       }
     }
@@ -1373,14 +1445,18 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                   duration={trimInfo.duration}
                   initialStart={trimInfo.start}
                   initialWindowDuration={trimInfo.windowDuration}
+                  initialStripAudio={stripAudio}
                   onCancel={() => {
                     revokeAllBlobUrls();
                     setTrimInfo(null);
                     setSelectedMedia(null);
                     setStep("upload_capture");
                   }}
-                  onApplyTrim={({ start, windowDuration }) => {
-                    setTrimInfo(prev => prev ? { ...prev, start, windowDuration } : null);
+                  onApplyTrim={({ start, windowDuration, stripAudio: newStripAudio }) => {
+                    const isMuted = Boolean(newStripAudio);
+                    setStripAudio(isMuted);
+                    setPreviewMuted(isMuted);
+                    setTrimInfo(prev => prev ? { ...prev, start, windowDuration, stripAudio: isMuted } : null);
                     setSelectedMedia({
                       data: trimInfo.sourceUrl,
                       mimeType: trimInfo.file.type || "video/mp4",
@@ -1565,6 +1641,25 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                               Edit Trim
                             </button>
                           </div>
+                        )}
+                        {trimInfo && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextMuted = !stripAudio;
+                              setStripAudio(nextMuted);
+                              setPreviewMuted(nextMuted);
+                            }}
+                            className={`absolute bottom-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full backdrop-blur-md text-[10px] font-mono font-bold transition-all z-20 cursor-pointer border ${
+                              stripAudio
+                                ? "bg-rose-950/80 border-rose-500/40 text-rose-300"
+                                : "bg-emerald-950/80 border-emerald-500/40 text-emerald-300"
+                            }`}
+                            title="Toggle whether to strip audio or keep audio in output"
+                          >
+                            {stripAudio ? <VolumeX className="w-3 h-3 text-rose-400" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
+                            <span>Audio: {stripAudio ? "Muted" : "On"}</span>
+                          </button>
                         )}
                         <button
                           type="button"
@@ -2128,7 +2223,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     {loading ? (
                       isTrimming ? (
                         <>
-                          <RefreshCw className="w-5 h-5 animate-spin" /> Trimming on server…
+                          <RefreshCw className="w-5 h-5 animate-spin" /> {statusMessage || "Preparing clip…"}
                         </>
                       ) : (
                         <>
