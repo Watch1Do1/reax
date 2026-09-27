@@ -348,7 +348,7 @@ export function triggerFileDownload(blob: Blob, filename: string) {
 }
 
 /**
- * Copy watermarked image directly into system clipboard (ready for Ctrl+V in email, 9gag, Slack, etc.).
+ * Copy watermarked image directly into system clipboard (ready for Ctrl+V in email, Slack, etc.).
  * Automatically falls back to file download if browser clipboard image write is blocked or unsupported.
  */
 export async function copyWatermarkedImageToClipboard(

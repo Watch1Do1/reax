@@ -168,7 +168,7 @@ export default function ShareModal({
 
         {/* Primary Action Buttons */}
         <div className="space-y-2.5">
-          {/* 1. Copy Picture (Paste directly into Email / 9gag / Slack / Discord) */}
+          {/* 1. Copy Picture (Paste directly into Email / Slack / Discord) */}
           {onCopyPicture && (
             <button
               type="button"
@@ -188,7 +188,7 @@ export default function ShareModal({
                     </span>
                   </div>
                   <div className="text-xs text-slate-300">
-                    Paste directly into Email, 9gag, Discord, or Chats
+                    Paste directly into Email, Discord, Slack, or Chats
                   </div>
                 </div>
               </div>

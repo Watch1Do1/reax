@@ -77,10 +77,10 @@ export default function ClipCard({
       const res = await copyWatermarkedImageToClipboard(clip, isVideo ? videoRef.current : imgRef.current);
       if (res.success) {
         setCopiedPicture(true);
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "📋 Picture copied to clipboard! Paste (Ctrl+V) into email or 9gag" } }));
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "📋 Copied to clipboard!" } }));
         setTimeout(() => setCopiedPicture(false), 3000);
       } else if (res.fallbackDownloaded) {
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Picture downloaded (ready to paste/attach in email or 9gag)" } }));
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Picture downloaded" } }));
       } else {
         window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: res.error || "Failed to copy picture" } }));
       }
@@ -862,7 +862,7 @@ export default function ClipCard({
             onClick={handleCopyPicture}
             disabled={isCopyingPicture}
             className="flex items-center gap-1 text-slate-400 hover:text-cyan-300 transition-colors cursor-pointer"
-            title="Copy watermarked picture to clipboard (paste with Ctrl+V in email or 9gag)"
+            title="Copy watermarked picture to clipboard"
           >
             {copiedPicture ? (
               <Check className="w-3.5 h-3.5 text-emerald-400" />
