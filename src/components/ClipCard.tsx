@@ -3,7 +3,7 @@ import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Pla
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
-import { copyWatermarkedImageToClipboard, downloadWatermarkedImage } from "../utils/watermarkExporter";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, downloadWatermarkedVideo } from "../utils/watermarkExporter";
 import ShareModal from "./ShareModal";
 
 interface ClipCardProps {
@@ -49,6 +49,8 @@ export default function ClipCard({
   const [copiedPicture, setCopiedPicture] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [showSubReplies, setShowSubReplies] = useState(false);
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
+  const [videoProgress, setVideoProgress] = useState(0);
 
   const isVideo = clip.mediaType === "video" || 
     clip.mediaUrl.endsWith(".mp4") || 
@@ -56,7 +58,25 @@ export default function ClipCard({
     clip.mediaUrl.includes("mixkit-") || 
     clip.mediaUrl.includes("uploads/clip-");
 
-  // High-res Watermark & Picture Exporter Handlers
+  // High-res Watermark & Video Exporter Handlers
+  const handleDownloadVideo = async () => {
+    if (isGeneratingVideo) return;
+    setIsGeneratingVideo(true);
+    setVideoProgress(0);
+    try {
+      const res = await downloadWatermarkedVideo(clip, (pct) => setVideoProgress(pct));
+      if (res.success) {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Watermarked video downloaded!" } }));
+      } else {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: res.error || "Failed to download video" } }));
+      }
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Could not export video" } }));
+    } finally {
+      setIsGeneratingVideo(false);
+      setVideoProgress(0);
+    }
+  };
   const handleDownloadWatermark = async () => {
     if (isSharing) return;
     setIsSharing(true);
@@ -1065,11 +1085,14 @@ export default function ClipCard({
         </div>
       )}
 
-      {/* Direct Share Modal (SMS, Email, Copy Link, Native Share, Download, Copy Picture) */}
+      {/* Direct Share Modal (Video Download, SMS, Email, Copy Link, Native Share, Download, Copy Picture) */}
       <ShareModal
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}
         clip={clip}
+        onDownloadVideo={handleDownloadVideo}
+        isGeneratingVideo={isGeneratingVideo}
+        videoProgress={videoProgress}
         onDownloadWatermark={handleDownloadWatermark}
         isGeneratingWatermark={isSharing}
         onCopyPicture={handleCopyPicture}

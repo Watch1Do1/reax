@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { X, MessageSquare, Mail, Copy, Check, Download, Share2, ExternalLink, Image as ImageIcon } from "lucide-react";
+import { X, MessageSquare, Mail, Copy, Check, Download, Share2, ExternalLink, Image as ImageIcon, Film } from "lucide-react";
 import { Clip } from "../types";
 
 interface ShareModalProps {
@@ -10,6 +10,9 @@ interface ShareModalProps {
   isGeneratingWatermark?: boolean;
   onCopyPicture?: () => void;
   isCopyingPicture?: boolean;
+  onDownloadVideo?: () => void;
+  isGeneratingVideo?: boolean;
+  videoProgress?: number;
 }
 
 export default function ShareModal({
@@ -20,6 +23,9 @@ export default function ShareModal({
   isGeneratingWatermark = false,
   onCopyPicture,
   isCopyingPicture = false,
+  onDownloadVideo,
+  isGeneratingVideo = false,
+  videoProgress = 0,
 }: ShareModalProps) {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
@@ -168,7 +174,39 @@ export default function ShareModal({
 
         {/* Primary Action Buttons */}
         <div className="space-y-2.5">
-          {/* 1. Copy Picture (Paste directly into Email / Slack / Discord) */}
+          {/* 1. Download Watermarked Video (MP4) - Ideal for TikTok, Instagram, Twitter, Discord */}
+          {clip.mediaType === "video" && onDownloadVideo && (
+            <button
+              type="button"
+              onClick={onDownloadVideo}
+              disabled={isGeneratingVideo}
+              className="flex items-center justify-between w-full px-4 py-3 bg-gradient-to-r from-indigo-600/30 via-purple-600/30 to-pink-600/30 hover:from-indigo-600/45 hover:via-purple-600/45 hover:to-pink-600/45 border border-indigo-500/50 hover:border-indigo-400 rounded-xl transition-all cursor-pointer group shadow-xl"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-indigo-500/20 text-indigo-300 flex items-center justify-center group-hover:scale-105 transition-transform border border-indigo-500/30">
+                  <Film className="w-5 h-5" />
+                </div>
+                <div className="text-left">
+                  <div className="text-sm font-bold text-white flex items-center gap-1.5">
+                    {isGeneratingVideo 
+                      ? `Rendering Video... ${videoProgress ? `${videoProgress}%` : ""}` 
+                      : "Download Watermarked Video"}
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-400/20 text-indigo-300 border border-indigo-400/30">
+                      MP4
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-300">
+                    6s animated video with text & watermark for TikTok, Reels, Twitter, Discord
+                  </div>
+                </div>
+              </div>
+              <span className="text-xs font-semibold text-indigo-300 group-hover:text-white px-2 py-1 rounded-md bg-indigo-500/10">
+                {isGeneratingVideo ? `${videoProgress || 0}%` : "Download"}
+              </span>
+            </button>
+          )}
+
+          {/* 2. Copy Picture (Paste directly into Email / Slack / Discord) */}
           {onCopyPicture && (
             <button
               type="button"

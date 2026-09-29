@@ -115,9 +115,20 @@ export async function generateWatermarkedCanvas(
     ctx.drawImage(imgObj, 0, 0, exportW, exportH);
   }
 
-  const width = canvas.width;
-  const height = canvas.height;
+  renderWatermarkAndCaptions(ctx, canvas.width, canvas.height, clip);
+  return canvas;
+}
 
+/**
+ * Renders the overlays, caption text, letterboxing, and the getREAX.com watermark badge.
+ * Reused across both image and video frame rendering for 100% pixel-perfect consistency.
+ */
+export function renderWatermarkAndCaptions(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  clip: Clip
+): void {
   // Parse effect and style parameters: "effect|preset|color|position"
   const [, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "bottom"] = (clip.effect || "zoom").split("|");
 
@@ -329,8 +340,6 @@ export async function generateWatermarkedCanvas(
   ctx.textBaseline = "middle";
   ctx.fillText(wmText, dotX + dotRadius + Math.round(wmFontSize * 0.45), dotY);
   ctx.restore();
-
-  return canvas;
 }
 
 /**
@@ -439,3 +448,282 @@ export async function downloadWatermarkedImage(
     }, "image/png");
   });
 }
+
+/**
+ * Export high-definition watermarked MP4/WebM video of a Clip.
+ * - Draws video frames, overlays text and the getREAX.com watermark pill onto an offscreen canvas.
+ * - Captures canvas stream and mixes original video audio and optional voice note audio.
+ * - Exports native .mp4 (Safari iOS/macOS/modern Chrome) or .webm (legacy Chrome/Firefox).
+ * - Opens the native Share Sheet on mobile (for saving directly to Photos/Camera Roll) or triggers download.
+ */
+export async function downloadWatermarkedVideo(
+  clip: Clip,
+  onProgress?: (progressPercent: number) => void
+): Promise<{ success: boolean; error?: string }> {
+  // If not a video clip, download high-res watermarked picture
+  if (clip.mediaType !== "video") {
+    await downloadWatermarkedImage(clip);
+    return { success: true };
+  }
+
+  // Check MediaRecorder & canvas stream support
+  if (
+    typeof MediaRecorder === "undefined" ||
+    (typeof HTMLCanvasElement.prototype.captureStream !== "function" &&
+      typeof (HTMLCanvasElement.prototype as any).mozCaptureStream !== "function")
+  ) {
+    // Fallback: download still frame
+    await downloadWatermarkedImage(clip);
+    return { success: true };
+  }
+
+  let videoBlobUrl = "";
+  let audioCtx: AudioContext | null = null;
+  let voiceAudioEl: HTMLAudioElement | null = null;
+
+  try {
+    if (onProgress) onProgress(5);
+
+    // 1. Fetch video as Blob to guarantee zero CORS canvas-tainting issues
+    try {
+      const res = await fetch(clip.mediaUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      videoBlobUrl = URL.createObjectURL(blob);
+    } catch {
+      videoBlobUrl = clip.mediaUrl;
+    }
+
+    if (onProgress) onProgress(15);
+
+    // 2. Prepare hidden video element
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.playsInline = true;
+    video.preload = "auto";
+    video.muted = false;
+    video.src = videoBlobUrl;
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (video.readyState >= 2) resolve();
+        else reject(new Error("Video loading timed out"));
+      }, 15000);
+
+      video.onloadeddata = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      video.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error("Failed to load video element"));
+      };
+      video.load();
+    });
+
+    if (onProgress) onProgress(25);
+
+    // 3. Setup Canvas for rendering frames
+    const canvas = document.createElement("canvas");
+    const width = video.videoWidth || 1280;
+    const height = video.videoHeight || 720;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not initialize canvas context");
+
+    // 4. Capture canvas stream at 30 FPS
+    const canvasStream = (canvas.captureStream
+      ? canvas.captureStream(30)
+      : (canvas as any).mozCaptureStream(30)) as MediaStream;
+
+    const streamTracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
+
+    // 5. Setup Audio mixing via AudioContext (original audio + voice note)
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        audioCtx = new AudioContextClass();
+        const audioDest = audioCtx.createMediaStreamDestination();
+        const videoSource = audioCtx.createMediaElementSource(video);
+        videoSource.connect(audioDest);
+
+        // Mix in optional recorded voice note
+        if (clip.voiceAudioUrl) {
+          try {
+            voiceAudioEl = new Audio();
+            voiceAudioEl.crossOrigin = "anonymous";
+            voiceAudioEl.src = clip.voiceAudioUrl;
+            const voiceSource = audioCtx.createMediaElementSource(voiceAudioEl);
+            voiceSource.connect(audioDest);
+          } catch (vErr) {
+            console.warn("Could not mix voice note audio:", vErr);
+          }
+        }
+
+        const audioTracks = audioDest.stream.getAudioTracks();
+        if (audioTracks.length > 0) {
+          streamTracks.push(audioTracks[0]);
+        }
+      }
+    } catch (aErr) {
+      console.warn("AudioContext setup error (video will export without mixed audio):", aErr);
+    }
+
+    const combinedStream = new MediaStream(streamTracks);
+
+    // 6. Determine supported video format (prefer native MP4 for maximum iOS/social compatibility)
+    let chosenMime = "video/mp4";
+    let fileExt = "mp4";
+
+    if (typeof MediaRecorder.isTypeSupported === "function") {
+      if (MediaRecorder.isTypeSupported('video/mp4; codecs="avc1,mp4a.40.2"')) {
+        chosenMime = 'video/mp4; codecs="avc1,mp4a.40.2"';
+        fileExt = "mp4";
+      } else if (MediaRecorder.isTypeSupported("video/mp4")) {
+        chosenMime = "video/mp4";
+        fileExt = "mp4";
+      } else if (MediaRecorder.isTypeSupported('video/webm; codecs="vp9,opus"')) {
+        chosenMime = 'video/webm; codecs="vp9,opus"';
+        fileExt = "webm";
+      } else if (MediaRecorder.isTypeSupported("video/webm")) {
+        chosenMime = "video/webm";
+        fileExt = "webm";
+      }
+    }
+
+    // 7. Initialize MediaRecorder
+    const recorder = new MediaRecorder(combinedStream, {
+      mimeType: chosenMime,
+      videoBitsPerSecond: 3000000 // 3 Mbps high quality
+    });
+
+    const recordedChunks: Blob[] = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        recordedChunks.push(e.data);
+      }
+    };
+
+    // Draw initial frame at t = 0
+    video.currentTime = 0;
+    ctx.drawImage(video, 0, 0, width, height);
+    renderWatermarkAndCaptions(ctx, width, height, clip);
+
+    const videoDuration = video.duration || 6;
+
+    // 8. Record and frame-draw loop
+    const recordPromise = new Promise<Blob>((resolve, reject) => {
+      recorder.onstop = () => {
+        const finalBlob = new Blob(recordedChunks, { type: chosenMime });
+        resolve(finalBlob);
+      };
+      recorder.onerror = (err) => reject(err);
+
+      let animFrameId: number;
+      let isFinished = false;
+
+      const finishRecording = () => {
+        if (isFinished) return;
+        isFinished = true;
+        cancelAnimationFrame(animFrameId);
+        try { video.pause(); } catch {}
+        try { if (voiceAudioEl) voiceAudioEl.pause(); } catch {}
+        if (recorder.state === "recording") {
+          recorder.stop();
+        }
+      };
+
+      const renderLoop = () => {
+        if (isFinished) return;
+        if (video.ended || video.currentTime >= videoDuration - 0.05) {
+          finishRecording();
+          return;
+        }
+
+        try {
+          ctx.drawImage(video, 0, 0, width, height);
+          renderWatermarkAndCaptions(ctx, width, height, clip);
+          if (onProgress && videoDuration > 0) {
+            const currentPct = 25 + Math.min(70, Math.round((video.currentTime / videoDuration) * 70));
+            onProgress(currentPct);
+          }
+        } catch (rErr) {
+          console.error("Frame render error:", rErr);
+        }
+
+        animFrameId = requestAnimationFrame(renderLoop);
+      };
+
+      video.onended = finishRecording;
+      // Failsafe timeout in case onended doesn't trigger
+      setTimeout(finishRecording, Math.max(8000, (videoDuration + 3) * 1000));
+
+      recorder.start(100);
+
+      if (voiceAudioEl) {
+        try {
+          voiceAudioEl.currentTime = 0;
+          voiceAudioEl.play().catch(() => {});
+        } catch {}
+      }
+
+      video.play().then(() => {
+        animFrameId = requestAnimationFrame(renderLoop);
+      }).catch((playErr) => {
+        console.warn("Autoplay with audio failed, retrying muted:", playErr);
+        video.muted = true;
+        video.play().then(() => {
+          animFrameId = requestAnimationFrame(renderLoop);
+        }).catch(reject);
+      });
+    });
+
+    const recordedVideoBlob = await recordPromise;
+
+    if (onProgress) onProgress(98);
+
+    const fileName = `reax-${clip.id.slice(0, 8)}.${fileExt}`;
+    const file = new File([recordedVideoBlob], fileName, { type: chosenMime });
+
+    // 9. Deliver file: Mobile native share sheet (Save Video to Camera Roll) or browser download
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.share &&
+      navigator.canShare &&
+      navigator.canShare({ files: [file] })
+    ) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: "Reax Video",
+          text: clip.overlayText ? `"${clip.overlayText}" on getREAX.com` : "getREAX.com",
+        });
+        if (onProgress) onProgress(100);
+        return { success: true };
+      } catch (shareErr: any) {
+        if (shareErr?.name === "AbortError") {
+          if (onProgress) onProgress(100);
+          return { success: true };
+        }
+      }
+    }
+
+    triggerFileDownload(recordedVideoBlob, fileName);
+    if (onProgress) onProgress(100);
+    return { success: true };
+  } catch (err: any) {
+    console.error("Failed to export watermarked video:", err);
+    // Fallback: download still frame on any unrecoverable error
+    await downloadWatermarkedImage(clip);
+    return { success: false, error: err.message || "Failed to export video" };
+  } finally {
+    if (videoBlobUrl && videoBlobUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(videoBlobUrl);
+    }
+    if (audioCtx) {
+      try { audioCtx.close(); } catch {}
+    }
+  }
+}
+
