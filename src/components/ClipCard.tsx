@@ -54,6 +54,17 @@ export default function ClipCard({
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
 
+  // Resolve original root clip of this thread
+  const rootClip = React.useMemo(() => {
+    let curr = clip;
+    while (curr.parentId) {
+      const parent = allClips.find(c => c.id === curr.parentId);
+      if (!parent) break;
+      curr = parent;
+    }
+    return curr;
+  }, [clip, allClips]);
+
   const isVideo = clip.mediaType === "video" || 
     clip.mediaUrl.endsWith(".mp4") || 
     clip.mediaUrl.endsWith(".webm") || 
@@ -816,18 +827,34 @@ export default function ClipCard({
           ))}
         </div>
 
-        {/* React Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onRespond(clip);
-          }}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer shrink-0 shadow-sm"
-          title="React to this clip"
-        >
-          <CornerDownRight className="w-3.5 h-3.5" />
-          <span>React</span>
-        </button>
+        {/* Actions: Reax (primary, posts with parentId = root clip id) & Riff (smaller action on reaction card, posts with parentId = that card's id) */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {clip.parentId !== null && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRespond(clip);
+              }}
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 rounded-xl text-xs font-semibold transition-all active:scale-95 cursor-pointer shadow-sm"
+              title={`Riff on @${clip.authorName}'s reaction`}
+            >
+              <CornerDownRight className="w-3 h-3 text-cyan-400" />
+              <span>Riff</span>
+            </button>
+          )}
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRespond(rootClip);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer shrink-0 shadow-sm"
+            title={clip.parentId !== null ? `Reax to original thread (@${rootClip.authorName})` : "Reax to this clip"}
+          >
+            <CornerDownRight className="w-3.5 h-3.5" />
+            <span>Reax</span>
+          </button>
+        </div>
       </div>
 
       {/* Secondary Row: smaller, secondary (Like, Laugh, Save, Report, Delete, Thread) */}

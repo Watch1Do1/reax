@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
-  X, Heart, Volume2, Plus, ChevronRight, ArrowLeft, Sparkles, 
-  CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2, Mic
+  X, Heart, Volume2, Plus, ChevronRight, ArrowLeft, 
+  CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2, Mic, 
+  Flame, ListOrdered, ChevronDown, ChevronUp, Radio, Check
 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
-import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "../utils/keyUtils";
+import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 
 interface ThreadViewProps {
   key?: string;
@@ -39,8 +40,8 @@ export default function ThreadView({
   onViewUser
 }: ThreadViewProps) {
   
-  // Find ultimate root of this conversation tree
-  const getUltimateRootClip = (): Clip | undefined => {
+  // 1. Resolve Ultimate Root Clip
+  const ultimateRoot = useMemo<Clip | undefined>(() => {
     const target = clips.find(c => c.id === rootClipId);
     if (!target) return undefined;
     let current = target;
@@ -50,11 +51,9 @@ export default function ThreadView({
       current = parent;
     }
     return current;
-  };
+  }, [clips, rootClipId]);
 
-  const ultimateRoot = getUltimateRootClip();
-
-  // Traversal State - start at the specific clip clicked (or ultimate root if not specified)
+  // Focused clip tracking (default to root or requested clip)
   const [focusedClipId, setFocusedClipId] = useState<string>(() => {
     return rootClipId || ultimateRoot?.id || "";
   });
@@ -65,91 +64,197 @@ export default function ThreadView({
     }
   }, [rootClipId]);
 
-  // Track video state for focused card
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [isMuted, setIsMuted] = useState(true);
-  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const focusedClip = useMemo(() => {
+    return clips.find(c => c.id === focusedClipId) || ultimateRoot;
+  }, [clips, focusedClipId, ultimateRoot]);
 
-  // Sync focused clip changes
-  const focusedClip = clips.find(c => c.id === focusedClipId);
+  // 2. Breadcrumb calculation: Real authors in chain (Original → @parent → @author)
+  const breadcrumbChain = useMemo<Clip[]>(() => {
+    if (!focusedClip || !ultimateRoot) return [];
+    if (focusedClip.id === ultimateRoot.id) return [ultimateRoot];
 
-  // Saved state sync
-  const [isSaved, setIsSaved] = useState(false);
-  const [showSavedFastPick, setShowSavedFastPick] = useState(false);
-  const [savedReactions, setSavedReactions] = useState<SavedReaction[]>([]);
+    const chain: Clip[] = [];
+    let curr: Clip | undefined = focusedClip;
+    while (curr) {
+      chain.unshift(curr);
+      if (curr.id === ultimateRoot.id || !curr.parentId) break;
+      curr = clips.find(c => c.id === curr.parentId);
+    }
+    if (chain.length > 0 && chain[0].id !== ultimateRoot.id) {
+      chain.unshift(ultimateRoot);
+    }
+    return chain;
+  }, [focusedClip, ultimateRoot, clips]);
 
-  // Load saved list
-  const loadSavedList = () => {
-    const sanitized = loadAndSanitizeReactions();
-    setSavedReactions(sanitized);
+  // 3. Ranking Direct Reax (Client-side only, thread view only)
+  // Formula: createdAt decay, likesCount, laughsCount, and capped child count (max 3). No depth sorting.
+  const directReaxList = useMemo<Clip[]>(() => {
+    if (!ultimateRoot) return [];
+    const direct = clips.filter(c => c.parentId === ultimateRoot.id);
+
+    return [...direct].sort((a, b) => {
+      // Child count under this direct Reax (capped at 3)
+      const childCountA = clips.filter(c => c.parentId === a.id).length;
+      const childCountB = clips.filter(c => c.parentId === b.id).length;
+      const cappedChildrenA = Math.min(childCountA, 3);
+      const cappedChildrenB = Math.min(childCountB, 3);
+
+      // CreatedAt decay (hours since post)
+      const ageHoursA = Math.max(0, (Date.now() - new Date(a.createdAt).getTime()) / (1000 * 60 * 60));
+      const ageHoursB = Math.max(0, (Date.now() - new Date(b.createdAt).getTime()) / (1000 * 60 * 60));
+      const decayScoreA = 20 / (ageHoursA + 1);
+      const decayScoreB = 20 / (ageHoursB + 1);
+
+      const scoreA = (a.likesCount * 2) + ((a.laughsCount || 0) * 3) + (cappedChildrenA * 4) + decayScoreA;
+      const scoreB = (b.likesCount * 2) + ((b.laughsCount || 0) * 3) + (cappedChildrenB * 4) + decayScoreB;
+
+      return scoreB - scoreA;
+    });
+  }, [clips, ultimateRoot]);
+
+  // 4. Branch Riffs & Collapsed State (Depth > 2 collapsed behind "X more riffs")
+  const [expandedBranches, setExpandedBranches] = useState<Record<string, boolean>>({});
+
+  const toggleExpandBranch = (directReaxId: string) => {
+    setExpandedBranches(prev => ({
+      ...prev,
+      [directReaxId]: !prev[directReaxId]
+    }));
   };
 
-  useEffect(() => {
-    loadSavedList();
-    window.addEventListener("reax_saved_changed", loadSavedList);
-    return () => window.removeEventListener("reax_saved_changed", loadSavedList);
-  }, []);
+  // Helper: Get all descendants of a clip up to max depth 4
+  const getBranchRiffs = (directReaxId: string) => {
+    // Level 2 (Riffs directly on direct Reax)
+    const level2 = clips.filter(c => c.parentId === directReaxId);
 
-  useEffect(() => {
-    if (!focusedClip) return;
-    try {
-      const saved = JSON.parse(localStorage.getItem("reax_saved_reactions") || "[]");
-      const exists = saved.some((item: any) => 
-        item.mediaUrl === focusedClip.mediaUrl && 
-        item.voiceText === focusedClip.voiceText && 
-        item.overlayText === focusedClip.overlayText
-      );
-      setIsSaved(exists);
-    } catch (err) {
-      console.error(err);
-    }
-  }, [focusedClip, focusedClipId]);
+    // Level 3+ (Deeper riffs whose parent is in level 2 or further)
+    const deeper: Clip[] = [];
+    const queue = [...level2];
+    const visited = new Set<string>(level2.map(c => c.id));
 
-  const toggleSave = () => {
-    if (!focusedClip) return;
-    try {
-      const saved = JSON.parse(localStorage.getItem("reax_saved_reactions") || "[]");
-      let nextSaved;
-      if (isSaved) {
-        // Remove
-        nextSaved = saved.filter((item: any) => 
-          !(item.mediaUrl === focusedClip.mediaUrl && 
-            item.voiceText === focusedClip.voiceText && 
-            item.overlayText === focusedClip.overlayText)
-        );
-        setIsSaved(false);
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Removed from Saved Vault" } }));
-      } else {
-        // Add
-        const newSaved = {
-          id: generateUniqueId("saved"),
-          mediaUrl: focusedClip.mediaUrl,
-          voiceText: focusedClip.voiceText,
-          overlayText: focusedClip.overlayText,
-          tone: focusedClip.tone,
-          effect: focusedClip.effect || "zoom",
-          authorName: focusedClip.authorName,
-          savedAt: Date.now()
-        };
-        nextSaved = [...saved, newSaved];
-        setIsSaved(true);
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "⭐ Saved to your Reactions" } }));
-        
-        const logged = localStorage.getItem("reax_is_logged_in") === "true";
-        if (!logged) {
-          setTimeout(() => {
-            window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
-          }, 1000);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const children = clips.filter(c => c.parentId === current.id);
+      for (const child of children) {
+        if (!visited.has(child.id)) {
+          visited.add(child.id);
+          deeper.push(child);
+          queue.push(child);
         }
       }
-      localStorage.setItem("reax_saved_reactions", JSON.stringify(nextSaved));
-      window.dispatchEvent(new Event("reax_saved_changed"));
-    } catch (err) {
-      console.error(err);
+    }
+
+    return { level2, deeper, totalDescendants: level2.length + deeper.length };
+  };
+
+  // 5. Playback Controller: Single player active at a time, no autoplay sound
+  const [activePlayingId, setActivePlayingId] = useState<string | null>(null);
+  const [activePlayingAudioUrl, setActivePlayingAudioUrl] = useState<string | null>(null);
+  const [branchPlayback, setBranchPlayback] = useState<{
+    directId: string;
+    queue: Clip[];
+    currentIndex: number;
+  } | null>(null);
+
+  const branchTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Stop branch playback
+  const stopBranchPlayback = () => {
+    if (branchTimerRef.current) {
+      clearTimeout(branchTimerRef.current);
+      branchTimerRef.current = null;
+    }
+    setBranchPlayback(null);
+    stopAllFilteredAudio();
+    setActivePlayingAudioUrl(null);
+  };
+
+  // Play audio for a specific clip safely
+  const playClipAudio = (clip: Clip) => {
+    stopAllFilteredAudio();
+
+    // Resolve audio URL or voiceText
+    let audioUrl = clip.voiceAudioUrl;
+    if (!audioUrl && clip.voiceText) {
+      if (clip.voiceText.startsWith("audio_url:")) {
+        audioUrl = clip.voiceText.split("|||")[0].replace(/^audio_url:/, "");
+      } else if (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4"))) {
+        audioUrl = clip.voiceText;
+      }
+    }
+    if (!audioUrl && clip.mediaType === "audio") {
+      audioUrl = clip.mediaUrl;
+    }
+
+    if (audioUrl) {
+      setActivePlayingAudioUrl(clip.id);
+      playFilteredAudio(audioUrl, clip.voiceStyle || "normal")
+        .catch(() => setActivePlayingAudioUrl(null))
+        .finally(() => {
+          setTimeout(() => {
+            setActivePlayingAudioUrl(null);
+          }, 5000);
+        });
+    } else if (clip.voiceAudioData) {
+      setActivePlayingAudioUrl(clip.id);
+      playFilteredAudio(clip.voiceAudioData, clip.voiceStyle || "normal")
+        .catch(() => setActivePlayingAudioUrl(null))
+        .finally(() => {
+          setTimeout(() => {
+            setActivePlayingAudioUrl(null);
+          }, 5000);
+        });
+    } else if (clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction") && !clip.voiceText.startsWith("audio_url:")) {
+      setActivePlayingAudioUrl(clip.id);
+      speakText(clip.voiceText, clip.tone, clip.voiceStyle);
+      setTimeout(() => {
+        setActivePlayingAudioUrl(null);
+      }, 3000);
     }
   };
 
-  // Track liked and laughed state using localStorage keys reax_liked_ids and reax_laughed_ids
+  // "Play this branch": plays the selected direct Reax, then its visible riffs in order
+  const handlePlayBranch = (directReaxClip: Clip, visibleRiffs: Clip[]) => {
+    stopBranchPlayback();
+
+    const queue = [directReaxClip, ...visibleRiffs];
+    if (queue.length === 0) return;
+
+    setBranchPlayback({
+      directId: directReaxClip.id,
+      queue,
+      currentIndex: 0
+    });
+
+    setActivePlayingId(queue[0].id);
+    playClipAudio(queue[0]);
+
+    // Schedule advancing through the queue (5-second limit per clip)
+    let currentIdx = 0;
+    const advance = () => {
+      currentIdx += 1;
+      if (currentIdx < queue.length) {
+        setBranchPlayback(prev => prev ? { ...prev, currentIndex: currentIdx } : null);
+        setActivePlayingId(queue[currentIdx].id);
+        playClipAudio(queue[currentIdx]);
+        branchTimerRef.current = setTimeout(advance, 5000);
+      } else {
+        stopBranchPlayback();
+      }
+    };
+
+    branchTimerRef.current = setTimeout(advance, 5000);
+  };
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      if (branchTimerRef.current) clearTimeout(branchTimerRef.current);
+      stopAllFilteredAudio();
+    };
+  }, []);
+
+  // 6. Likes and Laughs Sync
   const getStoredIds = (key: string): string[] => {
     try {
       const raw = localStorage.getItem(key);
@@ -161,1036 +266,668 @@ export default function ThreadView({
     }
   };
 
-  const logged = localStorage.getItem("reax_is_logged_in") === "true";
-  const [isLiked, setIsLiked] = useState<boolean>(() => {
-    if (!logged || !focusedClipId) return false;
-    return getStoredIds("reax_liked_ids").includes(focusedClipId);
-  });
-  const [isLaughed, setIsLaughed] = useState<boolean>(() => {
-    if (!logged || !focusedClipId) return false;
-    return getStoredIds("reax_laughed_ids").includes(focusedClipId);
-  });
+  const logged = typeof window !== "undefined" && localStorage.getItem("reax_is_logged_in") === "true";
 
-  useEffect(() => {
-    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
-    if (!isLogged || !focusedClipId) {
-      setIsLiked(false);
-      setIsLaughed(false);
-      return;
-    }
-    setIsLiked(getStoredIds("reax_liked_ids").includes(focusedClipId));
-    setIsLaughed(getStoredIds("reax_laughed_ids").includes(focusedClipId));
-  }, [focusedClipId]);
-
-  useEffect(() => {
-    const handleLikesSync = () => {
-      const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
-      if (!isLogged || !focusedClipId) {
-        setIsLiked(false);
-        setIsLaughed(false);
-        return;
-      }
-      setIsLiked(getStoredIds("reax_liked_ids").includes(focusedClipId));
-      setIsLaughed(getStoredIds("reax_laughed_ids").includes(focusedClipId));
-    };
-    window.addEventListener("reax_likes_changed", handleLikesSync);
-    return () => window.removeEventListener("reax_likes_changed", handleLikesSync);
-  }, [focusedClipId]);
-
-  const handleLikeClick = (e: React.MouseEvent) => {
+  const handleLike = (clipId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!focusedClip) return;
-    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
-    if (!isLogged) {
+    if (!logged) {
       window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
       return;
     }
-
-    const nextLiked = !isLiked;
-    setIsLiked(nextLiked);
-
-    try {
-      let ids = getStoredIds("reax_liked_ids");
-      if (nextLiked) {
-        if (!ids.includes(focusedClip.id)) ids.push(focusedClip.id);
-      } else {
-        ids = ids.filter(id => id !== focusedClip.id);
-      }
-      localStorage.setItem("reax_liked_ids", JSON.stringify(ids));
-      window.dispatchEvent(new Event("reax_likes_changed"));
-    } catch (err) {
-      console.error("Error updating reax_liked_ids:", err);
-    }
-
-    if (nextLiked) {
-      onLike(focusedClip.id);
+    const currentLiked = getStoredIds("reax_liked_ids").includes(clipId);
+    let ids = getStoredIds("reax_liked_ids");
+    if (!currentLiked) {
+      ids.push(clipId);
+      onLike(clipId);
     } else {
-      onUnlike?.(focusedClip.id);
+      ids = ids.filter(id => id !== clipId);
+      onUnlike?.(clipId);
     }
+    localStorage.setItem("reax_liked_ids", JSON.stringify(ids));
+    window.dispatchEvent(new Event("reax_likes_changed"));
   };
 
-  const handleLaughClick = (e: React.MouseEvent) => {
+  const handleLaugh = (clipId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!focusedClip) return;
-    const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
-    if (!isLogged) {
+    if (!logged) {
       window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
       return;
     }
-
-    const nextLaughed = !isLaughed;
-    setIsLaughed(nextLaughed);
-
-    try {
-      let ids = getStoredIds("reax_laughed_ids");
-      if (nextLaughed) {
-        if (!ids.includes(focusedClip.id)) ids.push(focusedClip.id);
-      } else {
-        ids = ids.filter(id => id !== focusedClip.id);
-      }
-      localStorage.setItem("reax_laughed_ids", JSON.stringify(ids));
-      window.dispatchEvent(new Event("reax_likes_changed"));
-    } catch (err) {
-      console.error("Error updating reax_laughed_ids:", err);
-    }
-
-    if (nextLaughed) {
-      onLaugh(focusedClip.id);
+    const currentLaughed = getStoredIds("reax_laughed_ids").includes(clipId);
+    let ids = getStoredIds("reax_laughed_ids");
+    if (!currentLaughed) {
+      ids.push(clipId);
+      onLaugh(clipId);
     } else {
-      onUnlaugh?.(focusedClip.id);
+      ids = ids.filter(id => id !== clipId);
+      onUnlaugh?.(clipId);
     }
+    localStorage.setItem("reax_laughed_ids", JSON.stringify(ids));
+    window.dispatchEvent(new Event("reax_likes_changed"));
   };
 
-  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
-  const [currentlyPlayingClipId, setCurrentlyPlayingClipId] = useState<string | null>(null);
+  // Saved Reactions Tray State
+  const [activeSavedTargetClip, setActiveSavedTargetClip] = useState<Clip | null>(null);
+  const [savedReactions, setSavedReactions] = useState<SavedReaction[]>([]);
 
-  const handlePlayClipAudio = (clipToPlay?: Clip, e?: React.MouseEvent) => {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    const target = clipToPlay || focusedClip;
-    if (!target) return;
-
-    stopAllFilteredAudio();
-
-    // Resolve audio URL from all possible fields (voiceAudioUrl, encoded in voiceText, or mediaUrl)
-    let audioUrl = target.voiceAudioUrl;
-    if (!audioUrl && target.voiceText) {
-      if (target.voiceText.startsWith("audio_url:")) {
-        audioUrl = target.voiceText.split("|||")[0].replace(/^audio_url:/, "");
-      } else if (target.voiceText.startsWith("http") && (target.voiceText.includes("/storage/") || target.voiceText.includes(".webm") || target.voiceText.includes(".mp4"))) {
-        audioUrl = target.voiceText;
-      }
-    }
-    if (!audioUrl && target.mediaType === "audio") {
-      audioUrl = target.mediaUrl;
-    }
-
-    if (audioUrl) {
-      setIsAudioPlaying(true);
-      setCurrentlyPlayingClipId(target.id);
-      playFilteredAudio(audioUrl, target.voiceStyle || "normal")
-        .catch((err) => {
-          console.warn("Playback error in ThreadView:", err);
-          setIsAudioPlaying(false);
-          setCurrentlyPlayingClipId(null);
-        })
-        .finally(() => {
-          setTimeout(() => {
-            setIsAudioPlaying(false);
-            setCurrentlyPlayingClipId(null);
-          }, 4500);
-        });
-    } else if (target.voiceAudioData) {
-      setIsAudioPlaying(true);
-      setCurrentlyPlayingClipId(target.id);
-      playFilteredAudio(target.voiceAudioData, target.voiceStyle || "normal")
-        .catch(() => {
-          setIsAudioPlaying(false);
-          setCurrentlyPlayingClipId(null);
-        })
-        .finally(() => {
-          setTimeout(() => {
-            setIsAudioPlaying(false);
-            setCurrentlyPlayingClipId(null);
-          }, 4500);
-        });
-    } else if (target.voiceText && target.voiceText.trim() !== "" && !target.voiceText.includes("Voice Reaction") && !target.voiceText.startsWith("audio_url:")) {
-      setIsAudioPlaying(true);
-      setCurrentlyPlayingClipId(target.id);
-      speakText(target.voiceText, target.tone, target.voiceStyle);
-      setTimeout(() => {
-        setIsAudioPlaying(false);
-        setCurrentlyPlayingClipId(null);
-      }, 2500);
-    }
-  };
-
-  // If focused clip is deleted or not found, fallback to rootClipId
   useEffect(() => {
-    if (!focusedClip && ultimateRoot) {
-      setFocusedClipId(ultimateRoot.id);
-    }
-  }, [focusedClipId, clips, focusedClip, ultimateRoot]);
+    setSavedReactions(loadAndSanitizeReactions());
+  }, []);
 
-  // Recursively compute total replies under any clip
-  const getChainCount = (clipId: string): number => {
-    let count = 0;
-    const direct = clips.filter(c => c.parentId === clipId);
-    count += direct.length;
-    direct.forEach(child => {
-      count += getChainCount(child.id);
-    });
-    return count;
-  };
-
-  // Score momentum of a reaction branch
-  const getMomentumScore = (clip: Clip): number => {
-    const likesScore = clip.likesCount * 3;
-    const recursiveCount = getChainCount(clip.id);
-    const depthScore = recursiveCount * 6;
-    const ageInHours = (Date.now() - new Date(clip.createdAt).getTime()) / (1000 * 60 * 60);
-    const recencyScore = ageInHours < 2 ? 15 : (ageInHours < 24 ? 8 : 0);
-    return likesScore + depthScore + recencyScore;
-  };
-
-  // Find direct replies of current focused node, sorted by momentum
-  const directReplies = focusedClip 
-    ? clips.filter(c => c.parentId === focusedClip.id)
-    : [];
-  const sortedReplies = [...directReplies].sort((a, b) => getMomentumScore(b) - getMomentumScore(a));
-
-  // Compute navigation path from ultimate root to current focused clip
-  const getNavigationPath = (): Clip[] => {
-    if (!focusedClip) return [];
-    const path: Clip[] = [];
-    let current: Clip | undefined = focusedClip;
-    while (current) {
-      path.unshift(current);
-      if (!current.parentId) break;
-      current = clips.find(c => c.id === current.parentId);
-    }
-    return path;
-  };
-
-  const navPath = getNavigationPath();
-
-  // Sound & play handlers for focused card (video only)
-  const togglePlay = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        videoRef.current
-          .play()
-          .then(() => setIsPlaying(true))
-          .catch((err) => console.log("Video play interrupted", err));
-      }
-    }
-  };
-
-  const toggleMute = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (videoRef.current) {
-      const nextMuted = !isMuted;
-      videoRef.current.muted = nextMuted;
-      setIsMuted(nextMuted);
-    }
-  };
-
-  if (!focusedClip) return null;
-
-  const totalInChain = ultimateRoot ? getChainCount(ultimateRoot.id) + 1 : 0;
-  const isVideo = focusedClip.mediaUrl.endsWith(".mp4") || focusedClip.mediaUrl.endsWith(".webm") || focusedClip.mediaUrl.includes("mixkit-");
+  if (!ultimateRoot) return null;
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/80 backdrop-blur-md overflow-y-auto p-4 md:p-8 flex items-center justify-center">
-      <div className="w-full max-w-2xl bg-[#08090c]/90 backdrop-blur-xl border border-slate-800/40 rounded-3xl p-5 md:p-6 relative flex flex-col max-h-[92vh] shadow-[0_24px_64px_rgba(0,0,0,0.6)] overflow-hidden">
+    <div className="fixed inset-0 z-40 bg-black/85 backdrop-blur-md overflow-y-auto p-3 sm:p-6 md:p-8 flex items-center justify-center animate-fade-in">
+      <div className="w-full max-w-2xl bg-[#08090c]/95 backdrop-blur-2xl border border-slate-800/60 rounded-3xl relative flex flex-col max-h-[92vh] shadow-[0_24px_64px_rgba(0,0,0,0.7)] overflow-hidden">
         
-        {/* Modal Top Header Bar */}
-        <div className="flex items-center justify-between border-b border-slate-800/80 pb-3 flex-shrink-0">
+        {/* Top Header Bar */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800/80 bg-slate-950/80 flex-shrink-0 z-20">
           <div>
             <span className="text-[9px] font-mono font-black tracking-widest text-indigo-400 uppercase">
-              ⚡ ACTIVE CASCADE EXPLORER
+              CONVERSATION THREAD
             </span>
-            <h3 className="text-base font-sans font-black text-white leading-tight uppercase flex items-center gap-1.5 mt-0.5">
-              <span>Reaction Branches</span> 
-              <span className="text-[10px] bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 font-mono px-1.5 py-0.5 rounded font-bold">
-                {totalInChain} TOTAL
+            <h3 className="text-sm font-sans font-black text-white leading-tight uppercase flex items-center gap-2 mt-0.5">
+              <span>Thread Reactions</span>
+              <span className="text-[10px] bg-indigo-500/10 border border-indigo-500/25 text-indigo-300 font-mono px-2 py-0.5 rounded-full font-bold">
+                {directReaxList.length} Direct Reax
               </span>
             </h3>
           </div>
           <button 
+            type="button"
             onClick={onClose}
-            className="p-1.5 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white"
+            className="p-1.5 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-white cursor-pointer"
+            title="Close Thread"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Dynamic Interactive Breadcrumbs path */}
-        <div className="py-2.5 px-3 bg-slate-950/50 border-b border-slate-800/50 flex-shrink-0 -mx-6 flex items-center gap-1 overflow-x-auto text-xs font-mono scrollbar-none">
-          <span className="text-slate-500 font-bold uppercase text-[9px] mr-1">PATHWAY:</span>
-          {navPath.map((node, i) => (
-            <React.Fragment key={`nav-${node.id}`}>
-              {i > 0 && <ChevronRight className="w-3 h-3 text-slate-600 flex-shrink-0" />}
-              <button
-                onClick={() => setFocusedClipId(node.id)}
-                className={`flex items-center gap-1 px-2 py-0.5 rounded transition-all flex-shrink-0 ${
-                  node.id === focusedClipId 
-                    ? "bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 font-black" 
-                    : "text-slate-400 hover:text-slate-200 border border-transparent"
-                }`}
-              >
-                <span>@{node.authorName}</span>
-                <span className="text-[9px] opacity-80">
-                  {node.tone === "funny" ? "🎭" :
-                   node.tone === "dramatic" ? "🎬" :
-                   node.tone === "sarcastic" ? "🙄" :
-                   node.tone === "chill" ? "🌊" : "⚡"}
-                </span>
-              </button>
-            </React.Fragment>
-          ))}
+        {/* Real Authors Breadcrumb Chain: Original → @parent → @author */}
+        <div className="py-2.5 px-5 bg-slate-950/95 border-b border-slate-800/60 flex-shrink-0 flex items-center gap-1.5 overflow-x-auto text-xs font-mono scrollbar-none z-10">
+          <span className="text-slate-500 font-bold uppercase text-[9px] mr-1 flex items-center gap-1">
+            CHAIN:
+          </span>
+          {breadcrumbChain.map((node, i) => {
+            const isRootNode = node.id === ultimateRoot.id;
+            const isCurrentNode = node.id === focusedClip.id;
+
+            return (
+              <React.Fragment key={`breadcrumb-${node.id}`}>
+                {i > 0 && <ChevronRight className="w-3 h-3 text-slate-600 flex-shrink-0" />}
+                <button
+                  type="button"
+                  onClick={() => setFocusedClipId(node.id)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-md transition-all flex-shrink-0 cursor-pointer ${
+                    isCurrentNode
+                      ? "bg-indigo-600/25 border border-indigo-500/40 text-indigo-300 font-black shadow-sm"
+                      : "text-slate-400 hover:text-slate-200 border border-transparent"
+                  }`}
+                  title={`Focus @${node.authorName}'s clip`}
+                >
+                  <span className="font-bold">{isRootNode ? "Original" : `@${node.authorName}`}</span>
+                  {isRootNode && <span className="text-[9px] text-slate-500">(@{node.authorName})</span>}
+                </button>
+              </React.Fragment>
+            );
+          })}
         </div>
 
-        {/* Scrollable Traversal Stage */}
-        <div className="flex-1 overflow-y-auto pr-1 space-y-5 py-4">
-          
-          {/* Back button wrapper if not ultimate root */}
-          {focusedClip.parentId && (
+        {/* Branch Playback Active Status Banner */}
+        {branchPlayback && (
+          <div className="px-5 py-2 bg-gradient-to-r from-indigo-900/60 via-purple-900/60 to-pink-900/60 border-b border-indigo-500/30 flex items-center justify-between text-xs text-white z-10 animate-fade-in">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <span className="font-bold font-mono text-[11px]">
+                PLAYING BRANCH ({branchPlayback.currentIndex + 1} / {branchPlayback.queue.length})
+              </span>
+              <span className="text-indigo-200 text-[11px] truncate max-w-[200px]">
+                • @{branchPlayback.queue[branchPlayback.currentIndex]?.authorName}
+              </span>
+            </div>
             <button
-              onClick={() => {
-                const parent = clips.find(c => c.id === focusedClip.parentId);
-                if (parent) setFocusedClipId(parent.id);
-              }}
-              className="inline-flex items-center gap-1.5 text-[10px] font-mono font-black text-indigo-400 hover:text-indigo-300 transition-colors uppercase bg-indigo-500/5 border border-indigo-500/10 px-2.5 py-1 rounded-lg"
+              type="button"
+              onClick={stopBranchPlayback}
+              className="px-2 py-0.5 bg-black/50 hover:bg-black/80 border border-white/20 rounded text-[10px] font-mono font-bold transition-all cursor-pointer"
             >
-              <ArrowLeft className="w-3 h-3" /> Go Back to @{clips.find(c => c.id === focusedClip.parentId)?.authorName}
+              Stop
             </button>
-          )}
+          </div>
+        )}
 
-          {/* FOCUSED CARD (With sleek hidden controls on hover) */}
-          <div className="w-full max-w-xl mx-auto bg-slate-900/60 border border-indigo-500/40 rounded-2xl p-4 shadow-lg relative group/media-focused transition-all">
-            
-            {/* Header Meta of focused clip */}
-            <div className="flex justify-between items-center mb-3">
-              <button
-                type="button"
-                onClick={() => onViewUser?.(focusedClip.authorName)}
-                className="flex items-center gap-2 group cursor-pointer text-left focus:outline-none"
-                title={`View @${focusedClip.authorName}'s reactions`}
-              >
-                <div className="w-7 h-7 bg-indigo-500/10 group-hover:bg-indigo-600 text-indigo-400 group-hover:text-white rounded-full flex items-center justify-center font-mono font-bold text-xs transition-colors">
-                  {focusedClip.authorName[0]?.toUpperCase()}
-                </div>
+        {/* Scrollable Thread Content */}
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-6">
+          
+          {/* ========================================================= */}
+          {/* 1. ROOT CLIP: Full Width, Pinned at Top                   */}
+          {/* ========================================================= */}
+          <div className="w-full bg-slate-900/80 border-2 border-indigo-500/50 rounded-2xl p-4 sm:p-5 shadow-xl relative backdrop-blur-xl">
+            {/* Header: Author & Tag */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onViewUser?.(ultimateRoot.authorName)}
+                  className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 flex items-center justify-center font-mono font-bold text-xs hover:bg-indigo-600 hover:text-white transition-colors cursor-pointer"
+                  title={`View @${ultimateRoot.authorName}'s profile`}
+                >
+                  {ultimateRoot.authorName[0]?.toUpperCase()}
+                </button>
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-xs text-slate-200 group-hover:text-indigo-300 transition-colors block">@{focusedClip.authorName}</span>
-                    {focusedClip.authorName.startsWith("~") ? (
-                      <span className="text-[8px] px-1 bg-slate-950/60 border border-slate-800 rounded text-slate-500 font-bold font-mono uppercase">Guest</span>
-                    ) : (
-                      <span className="w-2 h-2 bg-emerald-500/20 border border-emerald-500/40 rounded-full flex items-center justify-center" title="Verified Member">
-                        <span className="w-0.5 h-0.5 bg-emerald-400 rounded-full" />
-                      </span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => onViewUser?.(ultimateRoot.authorName)}
+                      className="text-xs font-bold text-white hover:text-indigo-300 transition-colors cursor-pointer"
+                    >
+                      @{ultimateRoot.authorName}
+                    </button>
+                    <span className="px-1.5 py-0.2 bg-indigo-500/20 border border-indigo-500/35 rounded text-[8px] font-mono font-black uppercase text-indigo-300 tracking-wider">
+                      ROOT
+                    </span>
                   </div>
-                  <span className="text-[9px] text-slate-500 block font-mono">
-                    {new Date(focusedClip.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  <span className="text-[9px] font-mono text-slate-500 block">
+                    {new Date(ultimateRoot.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
-              </button>
-
-              <div className="flex items-center gap-1.5">
-                <span className={`px-2 py-0.5 rounded text-[9px] font-mono tracking-wider font-semibold capitalize ${
-                  focusedClip.tone === "funny" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" :
-                  focusedClip.tone === "dramatic" ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" :
-                  focusedClip.tone === "sarcastic" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" :
-                  focusedClip.tone === "chill" ? "bg-sky-500/10 text-sky-400 border border-sky-500/20" :
-                  "bg-orange-500/10 text-orange-400 border border-orange-500/20"
-                }`}>
-                  {focusedClip.tone}
-                </span>
               </div>
+
+              <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold capitalize border ${
+                ultimateRoot.tone === "funny" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                ultimateRoot.tone === "dramatic" ? "bg-rose-500/10 text-rose-400 border-rose-500/20" :
+                ultimateRoot.tone === "sarcastic" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" :
+                ultimateRoot.tone === "chill" ? "bg-sky-500/10 text-sky-400 border-sky-500/20" :
+                "bg-orange-500/10 text-orange-400 border-orange-500/20"
+              }`}>
+                {ultimateRoot.tone}
+              </span>
             </div>
 
-            {/* Focused Card Media */}
+            {/* Media Box: Video or Image */}
             <div 
-              onClick={(e) => {
-                const hasAudio = !!(
-                  focusedClip.voiceAudioUrl || 
-                  focusedClip.voiceAudioData || 
-                  (focusedClip.mediaType === "audio" && focusedClip.mediaUrl) || 
-                  (focusedClip.voiceText && (
-                    focusedClip.voiceText.startsWith("audio_url:") || 
-                    (focusedClip.voiceText.startsWith("http") && (focusedClip.voiceText.includes("/storage/") || focusedClip.voiceText.includes(".webm") || focusedClip.voiceText.includes(".mp4"))) ||
-                    (focusedClip.voiceText.trim() !== "" && !focusedClip.voiceText.includes("Voice Reaction"))
-                  ))
-                );
-                if (!isVideo && hasAudio) {
-                  handlePlayClipAudio(focusedClip, e);
-                }
+              onClick={() => {
+                setActivePlayingId(ultimateRoot.id);
+                playClipAudio(ultimateRoot);
               }}
-              className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-900 shadow-md ${
-                !isVideo ? "cursor-pointer" : ""
+              className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-800 shadow-inner group/media cursor-pointer ${
+                activePlayingId === ultimateRoot.id ? "ring-2 ring-indigo-500 shadow-indigo-500/20" : ""
               }`}
             >
-              <div className={`w-full h-full overflow-hidden flex items-center justify-center ${
-                focusedClip.effect === "zoom" ? "animate-zoom" :
-                focusedClip.effect === "pan" ? "animate-pan" :
-                focusedClip.effect === "bounce" ? "animate-bounce-subtle" :
-                focusedClip.effect === "pulse" ? "animate-pulse-subtle" :
-                focusedClip.effect === "shake" ? "animate-shake-chaotic" :
-                focusedClip.effect === "glitch" ? "animate-glitch" : "animate-zoom"
-              }`}>
-                {isVideo ? (
-                  <video 
-                    ref={videoRef}
-                    src={focusedClip.mediaUrl} 
-                    className="w-full h-full object-cover pointer-events-none" 
-                    loop 
-                    muted={isMuted}
-                    playsInline
-                    preload="metadata"
-                  />
-                ) : (
-                  <img 
-                    src={focusedClip.mediaUrl} 
-                    className="w-full h-full object-cover pointer-events-none" 
-                    alt=""
-                    referrerPolicy="no-referrer"
-                  />
-                )}
-              </div>
+              {ultimateRoot.mediaUrl.endsWith(".mp4") || ultimateRoot.mediaUrl.endsWith(".webm") || ultimateRoot.mediaUrl.includes("mixkit-") ? (
+                <video 
+                  src={ultimateRoot.mediaUrl} 
+                  className="w-full h-full object-cover pointer-events-none" 
+                  loop 
+                  muted={true} 
+                  playsInline 
+                  preload="metadata" 
+                />
+              ) : (
+                <img 
+                  src={ultimateRoot.mediaUrl} 
+                  className="w-full h-full object-cover pointer-events-none" 
+                  alt="" 
+                  referrerPolicy="no-referrer" 
+                />
+              )}
 
-              {(() => {
-                const [, , , textStylePosition = "bottom"] = (focusedClip.effect || "zoom").split("|");
-                const positionClasses: Record<string, string> = {
-                  "top-left": "absolute top-8 left-3 flex justify-start items-start text-left max-w-[80%] z-20 px-3 pointer-events-none",
-                  "top": "absolute top-8 inset-x-0 flex justify-center items-start text-center px-3 z-20 pointer-events-none",
-                  "top-right": "absolute top-8 right-3 flex justify-end items-start text-right max-w-[80%] z-20 px-3 pointer-events-none",
-                  "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
-                  "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
-                  "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
-                  "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
-                  "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
-                  "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
-                  "none": "hidden",
-                };
-
-                return focusedClip.overlayText && textStylePosition !== "none" ? (
-                  <div className={positionClasses[textStylePosition] || positionClasses.bottom}>
-                    <h2 className={`font-sans font-black text-base sm:text-lg md:text-xl text-white ${
-                      textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
-                    } tracking-wider drop-shadow-[0_1.5px_3.5px_rgba(0,0,0,0.85)] uppercase line-clamp-2 break-words leading-tight max-w-full`}>
-                      {focusedClip.overlayText}
-                    </h2>
-                  </div>
-                ) : null;
-              })()}
-
-              {/* Playing audio visual wave badge */}
-              {isAudioPlaying && (
-                <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[10px] font-mono font-bold shadow-lg animate-pulse backdrop-blur-md">
-                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                  <span>PLAYING AUDIO</span>
+              {/* Overlay Text */}
+              {ultimateRoot.overlayText && (
+                <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none">
+                  <h2 className="font-sans font-black text-base sm:text-lg text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight">
+                    {ultimateRoot.overlayText}
+                  </h2>
                 </div>
               )}
 
-              {/* Compact Overlay Controls: Bottom-Left (Reply + Voice), Bottom-Right (Play/Mute for Video) */}
-              <div className="absolute bottom-2.5 left-2.5 flex items-center gap-1.5 z-20">
+              {/* Audio playing visual indicator */}
+              {activePlayingAudioUrl === ultimateRoot.id && (
+                <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded bg-emerald-600 text-white text-[9px] font-mono font-bold shadow-md animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                  <span>VOICE ACTIVE</span>
+                </div>
+              )}
+            </div>
+
+            {/* Root Engagement & Primary REAX Action */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mt-3.5 pt-3 border-t border-slate-800/60">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={(e) => handleLaugh(ultimateRoot.id, e)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                  title="Laugh"
+                >
+                  <span>😂</span>
+                  <span>{ultimateRoot.laughsCount ?? 0}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => handleLike(ultimateRoot.id, e)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-rose-400 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                  title="Like"
+                >
+                  <Heart className="w-3.5 h-3.5 fill-rose-500/20" />
+                  <span>{ultimateRoot.likesCount}</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={(e) => {
-                    e.preventDefault();
                     e.stopPropagation();
-                    onRespond(focusedClip);
+                    setActivePlayingId(ultimateRoot.id);
+                    playClipAudio(ultimateRoot);
                   }}
-                  className="flex items-center gap-1.5 bg-black/75 hover:bg-black/90 text-white hover:text-indigo-300 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-xs font-semibold shadow-lg transition-all active:scale-95 cursor-pointer"
-                  title="Reply to this branch"
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold border transition-all cursor-pointer ${
+                    activePlayingAudioUrl === ultimateRoot.id
+                      ? "bg-emerald-600 text-white border-emerald-400 animate-pulse"
+                      : "bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800"
+                  }`}
+                  title="Play Voice Audio"
                 >
-                  <Plus className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Reply</span>
+                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Voice</span>
                 </button>
-
-                {(() => {
-                  const hasAudioUrl = !!(
-                    focusedClip.voiceAudioUrl || 
-                    (focusedClip.voiceText && (
-                      focusedClip.voiceText.startsWith("audio_url:") || 
-                      (focusedClip.voiceText.startsWith("http") && (focusedClip.voiceText.includes("/storage/") || focusedClip.voiceText.includes(".webm") || focusedClip.voiceText.includes(".mp4")))
-                    )) || 
-                    (focusedClip.mediaType === "audio" && focusedClip.mediaUrl)
-                  );
-                  const hasVoiceData = !!focusedClip.voiceAudioData;
-                  const hasValidVoiceText = !!(focusedClip.voiceText && focusedClip.voiceText.trim() !== "" && !focusedClip.voiceText.includes("Voice Reaction") && !focusedClip.voiceText.startsWith("audio_url:"));
-                  const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
-
-                  if (!showAudioButton) return null;
-
-                  return (
-                    <button
-                      type="button"
-                      onClick={(e) => handlePlayClipAudio(focusedClip, e)}
-                      className={`flex items-center gap-1 backdrop-blur-md px-2 py-1.5 rounded-lg border shadow-lg transition-all active:scale-95 cursor-pointer ${
-                        isAudioPlaying
-                          ? "bg-emerald-600 text-white border-emerald-400 shadow-emerald-500/30 animate-pulse"
-                          : "bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white border-white/10"
-                      }`}
-                      title={
-                        hasAudioUrl || hasVoiceData
-                          ? "Play recorded voice audio"
-                          : `Play AI voice: "${focusedClip.voiceText}"`
-                      }
-                    >
-                      {hasAudioUrl || hasVoiceData ? (
-                        <Mic className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-emerald-400"}`} />
-                      ) : (
-                        <Volume2 className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-indigo-400"}`} />
-                      )}
-                      <span className="text-[10px] font-mono font-bold">
-                        {isAudioPlaying ? "Playing..." : "Voice"}
-                      </span>
-                    </button>
-                  );
-                })()}
               </div>
 
-              {/* Mute & Play Controls (Video Only) */}
-              {isVideo && (
-                <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1 bg-black/75 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 z-20 shadow-lg">
-                  <button 
-                    type="button"
-                    onClick={togglePlay}
-                    className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
-                    title={isPlaying ? "Pause Loop" : "Play Loop"}
-                  >
-                    {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                  </button>
-                  <div className="w-[1px] h-3.5 bg-white/20" />
-                  <button 
-                    type="button"
-                    onClick={toggleMute}
-                    className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
-                    title={isMuted ? "Unmute Audio" : "Mute Audio"}
-                  >
-                    {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume1 className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Primary Engagement Row */}
-            <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-800/60">
-              <div className="flex items-center gap-3">
-                {/* Primary Humor Metric: 😂 Laughs */}
-                <button 
-                  onClick={handleLaughClick}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all group/laugh active:scale-95 cursor-pointer ${
-                    !logged 
-                      ? "bg-amber-500/5 border-amber-500/10 text-slate-500 opacity-60" 
-                      : isLaughed
-                        ? "bg-amber-500/20 border-amber-500/40 text-amber-300 font-bold ring-1 ring-amber-500/30"
-                        : "bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/25 text-amber-300 hover:text-amber-200"
-                  }`}
-                  title={!logged ? "Sign in to laugh" : isLaughed ? "Remove laugh" : "Laugh at this clip"}
+              {/* PRIMARY ACTION: "Reax" (Always posts with parentId = root.id) */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onRespond(ultimateRoot)}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-500/20 transition-all active:scale-95 cursor-pointer uppercase tracking-wider"
+                  title="Reax to Original Post (parentId = root)"
                 >
-                  <span className="text-sm transition-transform group-hover/laugh:scale-125">😂</span>
-                  <span className="text-xs font-mono font-bold">{focusedClip.laughsCount ?? 0}</span>
+                  <CornerDownRight className="w-4 h-4" />
+                  <span>Reax to Original</span>
                 </button>
-
-                {/* Secondary Metric: ❤️ Likes */}
-                <button 
-                  onClick={handleLikeClick}
-                  className={`flex items-center gap-1.5 transition-colors cursor-pointer px-1.5 py-1 ${
-                    !logged 
-                      ? "text-slate-500 opacity-60" 
-                      : isLiked 
-                        ? "text-rose-400 font-bold" 
-                        : "text-slate-400 hover:text-rose-400"
-                  }`}
-                  title={!logged ? "Sign in to like" : isLiked ? "Remove like" : "Like this clip"}
-                >
-                  <Heart className={`w-4 h-4 transition-colors ${isLiked ? "fill-rose-400 text-rose-400" : "fill-transparent hover:fill-rose-400"}`} />
-                  <span className="text-xs font-mono font-bold">{focusedClip.likesCount ?? 0}</span>
-                </button>
-
-                <button 
-                  onClick={toggleSave}
-                  className={`flex items-center gap-1 text-xs font-mono transition-colors cursor-pointer px-1.5 py-1 ${
-                    isSaved ? "text-amber-400 font-bold" : "text-slate-400 hover:text-amber-400"
-                  }`}
-                  title={isSaved ? "Remove from my Reactions" : "Save to my Reactions"}
-                >
-                  <Star className={`w-4 h-4 ${isSaved ? "fill-amber-400 text-amber-400" : "text-slate-400"}`} />
-                  <span className="hidden sm:inline">{isSaved ? "Saved" : "Save"}</span>
-                </button>
-
-                {/* Author Only Delete Action */}
-                {(() => {
-                  const logged = localStorage.getItem("reax_is_logged_in") === "true";
-                  const currentUsername = (localStorage.getItem("clips_username") || "").toLowerCase().replace(/^~/, "");
-                  const author = (focusedClip.authorName || "").toLowerCase().replace(/^~/, "");
-                  if (logged && currentUsername && author && currentUsername === author && author !== "guest" && onDelete) {
-                    return (
-                      <button 
-                        onClick={() => {
-                          if (window.confirm("Are you sure you want to delete your reaction?")) {
-                            onDelete(focusedClip.id);
-                            onClose();
-                          }
-                        }}
-                        className="flex items-center gap-1 text-slate-500 hover:text-red-400 text-xs font-mono transition-colors cursor-pointer px-1.5 py-1"
-                        title="Delete your reaction"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Delete</span>
-                      </button>
-                    );
-                  }
-                  return null;
-                })()}
               </div>
-
-              <button 
-                onClick={() => onRespond(focusedClip)}
-                className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-600/10 hover:bg-indigo-600 border border-indigo-500/20 hover:border-indigo-500 text-indigo-400 hover:text-white text-[10px] font-mono font-black uppercase rounded-lg transition-all cursor-pointer"
-              >
-                <Plus className="w-3 h-3" /> React to this branch
-              </button>
             </div>
 
-            {/* Direct Quick-Tap reaction options right inside the focus node */}
-            <div className="mt-3.5 bg-slate-950/25 p-3 border border-slate-800/80 rounded-xl shadow-inner">
-              <span className="block text-[10px] font-mono font-black text-amber-400 tracking-wider uppercase mb-2 text-center sm:text-left">
-                ⚡ TAP A TONE TO REACT:
+            {/* Quick-Tone Tap Bar for Root (All post with parentId = root.id) */}
+            <div className="mt-3 pt-3 border-t border-slate-800/40">
+              <span className="block text-[9px] font-mono font-black text-slate-400 uppercase tracking-widest mb-1.5">
+                ⚡ QUICK REAX TO ORIGINAL:
               </span>
-              <div className="grid grid-cols-6 gap-2">
+              <div className="grid grid-cols-6 gap-1.5">
                 {[
-                  { id: "funny" as const, emoji: "🎭", label: "Funny", color: "hover:bg-amber-500/10 text-amber-400 border-amber-500/15 hover:border-amber-400 hover:shadow-[0_0_12px_rgba(245,158,11,0.25)]" },
-                  { id: "dramatic" as const, emoji: "🎬", label: "Drama", color: "hover:bg-rose-500/10 text-rose-400 border-rose-500/15 hover:border-rose-400 hover:shadow-[0_0_12px_rgba(244,63,94,0.25)]" },
-                  { id: "sarcastic" as const, emoji: "🙄", label: "Sarcasm", color: "hover:bg-purple-500/10 text-purple-400 border-purple-500/15 hover:border-purple-400 hover:shadow-[0_0_12px_rgba(168,85,247,0.25)]" },
-                  { id: "chill" as const, emoji: "🌊", label: "Chill", color: "hover:bg-sky-500/10 text-sky-400 border-sky-500/15 hover:border-sky-400 hover:shadow-[0_0_12px_rgba(14,165,233,0.25)]" },
-                  { id: "chaotic" as const, emoji: "⚡", label: "Chaos", color: "hover:bg-orange-500/10 text-orange-400 border-orange-500/15 hover:border-orange-400 hover:shadow-[0_0_12px_rgba(249,115,22,0.25)]" }
-                ].map((item) => (
+                  { id: "funny" as const, emoji: "🎭", label: "Funny", color: "hover:border-amber-400 text-amber-300" },
+                  { id: "dramatic" as const, emoji: "🎬", label: "Drama", color: "hover:border-rose-400 text-rose-300" },
+                  { id: "sarcastic" as const, emoji: "🙄", label: "Sarcasm", color: "hover:border-purple-400 text-purple-300" },
+                  { id: "chill" as const, emoji: "🌊", label: "Chill", color: "hover:border-sky-400 text-sky-300" },
+                  { id: "chaotic" as const, emoji: "⚡", label: "Chaos", color: "hover:border-orange-400 text-orange-300" }
+                ].map(toneItem => (
                   <button
-                    key={item.id}
-                    onClick={() => onRespondWithTone(focusedClip, item.id)}
-                    className={`flex flex-col items-center justify-center py-2.5 px-1 bg-slate-900/95 border rounded-lg transition-all hover:scale-[1.04] active:scale-95 ${item.color} cursor-pointer`}
+                    key={`root-tone-${toneItem.id}`}
+                    type="button"
+                    onClick={() => onRespondWithTone(ultimateRoot, toneItem.id)}
+                    className={`flex flex-col items-center justify-center py-2 px-1 bg-slate-950/80 border border-slate-800/80 rounded-xl transition-all active:scale-95 cursor-pointer ${toneItem.color}`}
+                    title={`Reax with ${toneItem.label} tone`}
                   >
-                    <span className="text-base">{item.emoji}</span>
-                    <span className="text-[8px] font-bold text-slate-300 mt-1">{item.label}</span>
+                    <span className="text-sm">{toneItem.emoji}</span>
+                    <span className="text-[8px] font-bold mt-0.5">{toneItem.label}</span>
                   </button>
                 ))}
 
-                {/* 6th Option: SAVED ⭐ */}
+                {/* Vault saved pick button */}
                 <button
-                  onClick={() => setShowSavedFastPick(!showSavedFastPick)}
-                  className={`flex flex-col items-center justify-center py-2.5 px-1 bg-slate-900/95 border rounded-lg transition-all hover:scale-[1.04] active:scale-95 cursor-pointer ${
-                    showSavedFastPick 
-                      ? "border-amber-400 bg-amber-500/10 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.25)]" 
-                      : "border-slate-800 hover:border-amber-400 text-amber-400 hover:shadow-[0_0_12px_rgba(245,158,11,0.2)]"
+                  type="button"
+                  onClick={() => setActiveSavedTargetClip(activeSavedTargetClip?.id === ultimateRoot.id ? null : ultimateRoot)}
+                  className={`flex flex-col items-center justify-center py-2 px-1 bg-slate-950/80 border rounded-xl transition-all active:scale-95 cursor-pointer text-amber-400 ${
+                    activeSavedTargetClip?.id === ultimateRoot.id
+                      ? "border-amber-400 bg-amber-500/10 shadow-sm"
+                      : "border-slate-800/80 hover:border-amber-400"
                   }`}
+                  title="Reax with Saved Reaction"
                 >
-                  <span className="text-base">⭐</span>
-                  <span className="text-[8px] font-bold mt-1">Saved</span>
+                  <span className="text-sm">⭐</span>
+                  <span className="text-[8px] font-bold mt-0.5">Saved</span>
                 </button>
               </div>
 
-              {/* SAVED REACTIONS QUICK TRAY SELECTOR */}
-              <AnimatePresence>
-                {showSavedFastPick && (
-                  <motion.div
-                    key="saved-fast-pick-tray"
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="pt-3.5 mt-3 border-t border-slate-800/60 space-y-2">
-                      <div className="flex justify-between items-center px-1">
-                        <span className="text-[9px] font-mono font-black text-amber-400 uppercase tracking-widest">
-                          ⭐ SELECT A SAVED REACTION TO REPLY INSTANTLY:
-                        </span>
-                        <span className="text-[8px] text-slate-500 font-mono">
-                          {savedReactions.length} AVAILABLE
-                        </span>
-                      </div>
-
-                      {savedReactions.length === 0 ? (
-                        <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-900 text-center py-4">
-                          <p className="text-[10px] text-slate-500">Your vault is empty.</p>
-                          <p className="text-[9px] text-slate-600">Save reactions from the feed or respondent flow to see them here!</p>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2 overflow-x-auto pb-1.5 pt-0.5 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
-                          {savedReactions.map((reax) => {
-                            const isVideo = reax.mediaUrl.endsWith(".mp4") || reax.mediaUrl.endsWith(".webm") || reax.mediaUrl.includes("mixkit-");
-                            return (
-                              <button
-                                key={`thread-${focusedClip.id}-reax-${reax.id}`}
-                                onClick={() => {
-                                  if (onRespondWithSaved) {
-                                    onRespondWithSaved(focusedClip, reax);
-                                    setShowSavedFastPick(false);
-                                  }
-                                }}
-                                className="flex-shrink-0 w-28 bg-slate-950/90 border border-slate-800 hover:border-amber-400 rounded-xl overflow-hidden text-left p-1.5 transition-all group active:scale-95 shadow-md hover:shadow-amber-500/5"
-                              >
-                                <div className="aspect-video w-full rounded-lg bg-slate-900 overflow-hidden relative mb-1">
-                                  {isVideo ? (
-                                    <video src={reax.mediaUrl} className="w-full h-full object-cover" muted playsInline />
-                                  ) : (
-                                    <img src={reax.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
-                                  )}
-                                  <div className="absolute top-1 right-1 px-1 bg-black/60 rounded text-[7px] font-mono uppercase text-indigo-300 font-bold">
-                                    {reax.tone}
-                                  </div>
-                                </div>
-                                <p className="text-[8px] font-mono font-bold text-slate-400 truncate uppercase tracking-wide group-hover:text-amber-400">
-                                  {reax.overlayText || "NO CAPTION"}
-                                </p>
-                                <p className="text-[7px] text-slate-600 truncate italic">
-                                  "{reax.voiceText || "No audio"}"
-                                </p>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
+              {/* Saved Tray Selector for Root */}
+              {activeSavedTargetClip?.id === ultimateRoot.id && (
+                <div className="mt-2.5 p-2.5 bg-slate-950 border border-amber-500/30 rounded-xl space-y-1.5 animate-fade-in">
+                  <span className="text-[8px] font-mono font-black text-amber-400 uppercase tracking-widest block">
+                    ⭐ SELECT SAVED REACTION TO REAX (PARENT = ROOT):
+                  </span>
+                  {savedReactions.length === 0 ? (
+                    <p className="text-[10px] text-slate-500 italic py-2 text-center">No saved reactions found in your Vault.</p>
+                  ) : (
+                    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                      {savedReactions.map(saved => (
+                        <button
+                          key={`root-saved-${saved.id}`}
+                          type="button"
+                          onClick={() => {
+                            onRespondWithSaved?.(ultimateRoot, saved);
+                            setActiveSavedTargetClip(null);
+                          }}
+                          className="flex-shrink-0 w-24 bg-slate-900 border border-slate-800 hover:border-amber-400 rounded-lg p-1 text-left transition-all active:scale-95 cursor-pointer"
+                        >
+                          <div className="aspect-video w-full rounded bg-black overflow-hidden mb-1">
+                            <img src={saved.mediaUrl} className="w-full h-full object-cover" alt="" />
+                          </div>
+                          <span className="text-[8px] font-bold text-slate-300 block truncate">{saved.overlayText || saved.tone}</span>
+                        </button>
+                      ))}
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  )}
+                </div>
+              )}
             </div>
-
           </div>
 
-          {/* ⚡ CHOOSE REACTION DIRECTION / BRANCHING PATHWAYS */}
-          <div className="space-y-4 pt-2">
+
+          {/* ========================================================= */}
+          {/* 2. DIRECT REAX: Vertical List, Same-Size Cards            */}
+          {/* ========================================================= */}
+          <div className="space-y-4">
             <div className="flex items-center justify-between px-1">
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-                <span className="text-[10px] font-mono font-black text-slate-300 uppercase tracking-widest">
-                  🔥 CHOOSE A PATHWAY ({sortedReplies.length} reactions)
-                </span>
-              </div>
+              <span className="text-[10px] font-mono font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                DIRECT REAX ({directReaxList.length})
+              </span>
+              <span className="text-[9px] font-mono text-slate-500 uppercase">
+                Ranked by Recency & Velocity
+              </span>
             </div>
 
-            {/* 🔥 Recommended: Top reactions under this branch */}
-            {sortedReplies.length > 0 && (
-              <div className="bg-slate-950/30 p-3 rounded-2xl border border-slate-900 space-y-2.5">
-                <span className="block text-[10px] font-mono font-black text-rose-400 uppercase tracking-widest px-1">
-                  🔥 Top reactions under this branch
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {sortedReplies.slice(0, 3).map((reply) => {
-                    const isVideo = reply.mediaUrl.endsWith(".mp4") || reply.mediaUrl.endsWith(".webm") || reply.mediaUrl.includes("mixkit-");
-                    const hasAudio = !!(
-                      reply.voiceAudioUrl || 
-                      reply.voiceAudioData || 
-                      (reply.voiceText && (
-                        reply.voiceText.startsWith("audio_url:") || 
-                        (reply.voiceText.startsWith("http") && (reply.voiceText.includes("/storage/") || reply.voiceText.includes(".webm") || reply.voiceText.includes(".mp4"))) || 
-                        (reply.voiceText.trim() !== "" && !reply.voiceText.includes("Voice Reaction"))
-                      ))
-                    );
-                    const isCurrentPlaying = currentlyPlayingClipId === reply.id;
-
-                    return (
-                      <div
-                        key={`top-${reply.id}`}
-                        onClick={() => {
-                          setFocusedClipId(reply.id);
-                          if (hasAudio) {
-                            handlePlayClipAudio(reply);
-                          }
-                        }}
-                        className="bg-slate-900/90 border border-slate-800/80 hover:border-rose-500/50 rounded-xl p-2.5 cursor-pointer flex flex-row sm:flex-col gap-2.5 items-center sm:items-stretch group hover:bg-slate-900 transition-all active:scale-[0.98] shadow-sm hover:shadow-[0_0_10px_rgba(244,63,94,0.15)]"
-                      >
-                        <div className="w-14 sm:w-full aspect-video rounded-lg bg-slate-950 overflow-hidden relative border border-slate-800 flex-shrink-0">
-                          {isVideo ? (
-                            <video src={reply.mediaUrl} className="w-full h-full object-cover" muted playsInline />
-                          ) : (
-                            <img src={reply.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
-                          )}
-                          <div className="absolute top-1 right-1 px-1 py-0.2 bg-black/60 rounded text-[7px] font-mono uppercase text-rose-300 font-bold border border-rose-500/20">
-                            {reply.tone}
-                          </div>
-                        </div>
-                        <div className="flex-1 min-w-0 sm:mt-1">
-                          <div className="flex items-center justify-between gap-1">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onViewUser?.(reply.authorName);
-                              }}
-                              className="text-[10px] font-bold text-slate-200 hover:text-indigo-300 truncate cursor-pointer hover:underline text-left"
-                              title={`View @${reply.authorName}'s reactions`}
-                            >
-                              @{reply.authorName}
-                            </button>
-                            {hasAudio && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handlePlayClipAudio(reply, e);
-                                }}
-                                className={`px-1 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-0.5 border transition-all ${
-                                  isCurrentPlaying
-                                    ? "bg-emerald-600 text-white border-emerald-400 animate-pulse"
-                                    : "bg-slate-800 hover:bg-slate-700 text-emerald-400 border-slate-700"
-                                }`}
-                                title="Play voice recording"
-                              >
-                                <Mic className="w-2.5 h-2.5" />
-                                <span>{isCurrentPlaying ? "Playing" : "Voice"}</span>
-                              </button>
-                            )}
-                          </div>
-                          <p className="text-[9px] text-slate-400 italic line-clamp-1 mt-0.5 leading-none">
-                            "{reply.overlayText || (reply.voiceText && !reply.voiceText.startsWith("audio_url:") ? reply.voiceText : "Visual reaction")}"
-                          </p>
-                          <p className="text-[8px] font-mono text-rose-400 mt-1 flex items-center gap-0.5">
-                            ❤️ {reply.likesCount}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+            {directReaxList.length === 0 ? (
+              <div className="text-center py-10 bg-slate-950/40 border border-slate-800/40 rounded-2xl p-6 space-y-2">
+                <p className="text-xs text-slate-400 font-medium">No direct reactions yet.</p>
+                <p className="text-[10px] text-slate-600">Be the first to hit "Reax to Original" above!</p>
               </div>
-            )}
-
-            {sortedReplies.length > 0 ? (
-              <div className="space-y-4">
-                {/* 1. 🔥 LEADING PATHWAY (Best Reply) */}
-                {sortedReplies[0] && (() => {
-                  const leadingReply = sortedReplies[0];
-                  const hasLeadingAudio = !!(
-                    leadingReply.voiceAudioUrl || 
-                    leadingReply.voiceAudioData || 
-                    (leadingReply.voiceText && (
-                      leadingReply.voiceText.startsWith("audio_url:") || 
-                      (leadingReply.voiceText.startsWith("http") && (leadingReply.voiceText.includes("/storage/") || leadingReply.voiceText.includes(".webm") || leadingReply.voiceText.includes(".mp4"))) || 
-                      (leadingReply.voiceText.trim() !== "" && !leadingReply.voiceText.includes("Voice Reaction"))
-                    ))
-                  );
-                  const isLeadingPlaying = currentlyPlayingClipId === leadingReply.id;
+            ) : (
+              <div className="space-y-6">
+                {directReaxList.map(directReax => {
+                  const { level2, deeper, totalDescendants } = getBranchRiffs(directReax.id);
+                  const isExpanded = !!expandedBranches[directReax.id];
+                  const visibleRiffs = isExpanded ? [...level2, ...deeper] : level2;
+                  const isCurrentlyPlayingThisCard = activePlayingId === directReax.id;
 
                   return (
-                    <div className="space-y-2">
-                      <span className="text-[9px] font-mono font-black text-rose-400 uppercase tracking-wider block px-1">
-                        👑 LEADING PATHWAY (Best Reply)
-                      </span>
-                      <motion.div
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        onClick={() => {
-                          setFocusedClipId(leadingReply.id);
-                          if (hasLeadingAudio) {
-                            handlePlayClipAudio(leadingReply);
-                          }
-                        }}
-                        className="bg-gradient-to-r from-rose-950/20 to-indigo-950/25 border border-rose-500/40 hover:border-rose-400 rounded-2xl p-4 flex flex-col sm:flex-row gap-4 cursor-pointer group hover:from-rose-950/30 transition-all duration-300 relative overflow-hidden shadow-md"
-                      >
-                        {/* High momentum background glow */}
-                        <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-xl pointer-events-none" />
-                        
-                        <div className="w-full sm:w-28 aspect-video sm:aspect-square rounded-xl bg-slate-900 overflow-hidden flex-shrink-0 relative border border-rose-500/20">
-                          {leadingReply.mediaUrl.endsWith(".mp4") || leadingReply.mediaUrl.endsWith(".webm") || leadingReply.mediaUrl.includes("mixkit-") ? (
-                            <video src={leadingReply.mediaUrl} className="w-full h-full object-cover" muted playsInline />
-                          ) : (
-                            <img src={leadingReply.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
-                          )}
-                          {leadingReply.overlayText && (
-                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-1.5 text-center">
-                              <span className="text-[9px] font-sans font-black text-white uppercase tracking-wider line-clamp-2">
-                                {leadingReply.overlayText}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex-1 flex flex-col justify-between">
+                    <div 
+                      key={`direct-${directReax.id}`} 
+                      className={`w-full bg-slate-900/60 border rounded-2xl p-4 sm:p-5 shadow-lg transition-all ${
+                        isCurrentlyPlayingThisCard
+                          ? "border-indigo-500 shadow-indigo-500/20 ring-1 ring-indigo-500"
+                          : "border-slate-800/80 hover:border-slate-700"
+                      }`}
+                    >
+                      {/* Direct Reax Header */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onViewUser?.(directReax.authorName)}
+                            className="w-7 h-7 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center font-mono font-bold text-xs hover:bg-indigo-600 hover:text-white transition-colors cursor-pointer"
+                          >
+                            {directReax.authorName[0]?.toUpperCase()}
+                          </button>
                           <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-white font-black">@{leadingReply.authorName}</span>
-                                {hasLeadingAudio && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handlePlayClipAudio(leadingReply, e);
-                                    }}
-                                    className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-1 border transition-all ${
-                                      isLeadingPlaying
-                                        ? "bg-emerald-600 text-white border-emerald-400 animate-pulse"
-                                        : "bg-slate-900/90 hover:bg-slate-800 text-emerald-400 border-slate-700"
-                                    }`}
-                                  >
-                                    <Mic className="w-2.5 h-2.5" />
-                                    <span>{isLeadingPlaying ? "Playing..." : "Play Voice"}</span>
-                                  </button>
-                                )}
-                              </div>
-                              <span className="px-2 py-0.5 rounded text-[8px] font-mono bg-rose-500/25 text-rose-300 border border-rose-500/30 uppercase tracking-wider">
-                                {leadingReply.tone}
-                              </span>
-                            </div>
-                            {leadingReply.voiceText && !leadingReply.voiceText.startsWith("audio_url:") && (
-                              <p className="text-xs text-slate-300 italic font-sans leading-tight mt-1">
-                                "{leadingReply.voiceText}"
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 pt-3 border-t border-slate-900 mt-2">
-                            <div className="flex items-center gap-3">
-                              <span className="flex items-center gap-1 font-bold text-amber-400">
-                                <span>😂</span>
-                                {leadingReply.laughsCount ?? 0}
-                              </span>
-                              <span className="flex items-center gap-1 text-slate-400">
-                                <Heart className="w-3.5 h-3.5 fill-rose-500/20 text-rose-400" />
-                                {leadingReply.likesCount}
-                              </span>
-                            </div>
-                            <span className="text-indigo-400 group-hover:translate-x-1 transition-transform flex items-center gap-0.5 font-black">
-                              <span>EXPLORE CASCADE ➔</span>
+                            <button
+                              type="button"
+                              onClick={() => onViewUser?.(directReax.authorName)}
+                              className="text-xs font-bold text-slate-200 hover:text-indigo-300 transition-colors block text-left cursor-pointer"
+                            >
+                              @{directReax.authorName}
+                            </button>
+                            <span className="text-[9px] font-mono text-slate-500 block">
+                              {new Date(directReax.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
                         </div>
-                      </motion.div>
+
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-semibold capitalize border ${
+                          directReax.tone === "funny" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                          directReax.tone === "dramatic" ? "bg-rose-500/10 text-rose-400 border-rose-500/20" :
+                          directReax.tone === "sarcastic" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" :
+                          directReax.tone === "chill" ? "bg-sky-500/10 text-sky-400 border-sky-500/20" :
+                          "bg-orange-500/10 text-orange-400 border-orange-500/20"
+                        }`}>
+                          {directReax.tone}
+                        </span>
+                      </div>
+
+                      {/* Same-size Media Card */}
+                      <div 
+                        onClick={() => {
+                          setActivePlayingId(directReax.id);
+                          playClipAudio(directReax);
+                        }}
+                        className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-900 shadow-inner cursor-pointer ${
+                          isCurrentlyPlayingThisCard ? "ring-2 ring-indigo-500" : ""
+                        }`}
+                      >
+                        {directReax.mediaUrl.endsWith(".mp4") || directReax.mediaUrl.endsWith(".webm") || directReax.mediaUrl.includes("mixkit-") ? (
+                          <video 
+                            src={directReax.mediaUrl} 
+                            className="w-full h-full object-cover pointer-events-none" 
+                            loop 
+                            muted={true} 
+                            playsInline 
+                            preload="metadata" 
+                          />
+                        ) : (
+                          <img 
+                            src={directReax.mediaUrl} 
+                            className="w-full h-full object-cover pointer-events-none" 
+                            alt="" 
+                            referrerPolicy="no-referrer" 
+                          />
+                        )}
+
+                        {directReax.overlayText && (
+                          <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-3 z-10 pointer-events-none">
+                            <h2 className="font-sans font-black text-sm sm:text-base text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight">
+                              {directReax.overlayText}
+                            </h2>
+                          </div>
+                        )}
+
+                        {activePlayingAudioUrl === directReax.id && (
+                          <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-600 text-white text-[8px] font-mono font-bold animate-pulse">
+                            <span>PLAYING VOICE</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Card Action Row: Like, Laugh, "Play this branch", and "Riff" */}
+                      <div className="flex flex-wrap items-center justify-between gap-2.5 mt-3 pt-3 border-t border-slate-800/60">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => handleLaugh(directReax.id, e)}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                          >
+                            <span>😂</span>
+                            <span>{directReax.laughsCount ?? 0}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => handleLike(directReax.id, e)}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-rose-400 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                          >
+                            <Heart className="w-3.5 h-3.5 fill-rose-500/20" />
+                            <span>{directReax.likesCount}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActivePlayingId(directReax.id);
+                              playClipAudio(directReax);
+                            }}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-mono font-bold border transition-all cursor-pointer ${
+                              activePlayingAudioUrl === directReax.id
+                                ? "bg-emerald-600 text-white border-emerald-400"
+                                : "bg-slate-950 hover:bg-slate-800 text-slate-300 border-slate-800"
+                            }`}
+                          >
+                            <Mic className="w-3 h-3 text-emerald-400" />
+                            <span className="hidden sm:inline">Voice</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {/* "Play this branch" Button */}
+                          <button
+                            type="button"
+                            onClick={() => handlePlayBranch(directReax, visibleRiffs)}
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
+                            title="Play this reaction, then its visible riffs in order"
+                          >
+                            <Play className="w-3 h-3 fill-indigo-400 text-indigo-400" />
+                            <span>Play branch</span>
+                          </button>
+
+                          {/* "Riff" Action (Posts with parentId = directReax.id) */}
+                          <button
+                            type="button"
+                            onClick={() => onRespond(directReax)}
+                            className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
+                            title={`Riff on @${directReax.authorName}'s reaction (parentId = ${directReax.id})`}
+                          >
+                            <CornerDownRight className="w-3.5 h-3.5" />
+                            <span>Riff</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* ========================================================= */}
+                      {/* 3. RIFFS: Mini-Cards Under that Card, No Extra Indent      */}
+                      {/* ========================================================= */}
+                      {totalDescendants > 0 && (
+                        <div className="mt-3.5 pt-3 border-t border-slate-800/80 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[9px] font-mono font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                              <span>⚡ RIFFS ({totalDescendants})</span>
+                            </span>
+                            {deeper.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandBranch(directReax.id)}
+                                className="text-[9px] font-mono font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-colors cursor-pointer"
+                              >
+                                {isExpanded ? (
+                                  <>
+                                    <ChevronUp className="w-3 h-3" /> Hide {deeper.length} deeper riffs
+                                  </>
+                                ) : (
+                                  <>
+                                    <ChevronDown className="w-3 h-3" /> {deeper.length} more riffs
+                                  </>
+                                )}
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Mini-Cards Container (Spanning full width, no extra indent) */}
+                          <div className="space-y-2">
+                            {visibleRiffs.map(riff => {
+                              const isCurrentlyPlayingThisRiff = activePlayingId === riff.id;
+                              const isDeeper = riff.parentId !== directReax.id;
+
+                              return (
+                                <div
+                                  key={`riff-${riff.id}`}
+                                  onClick={() => {
+                                    setFocusedClipId(riff.id);
+                                    setActivePlayingId(riff.id);
+                                    playClipAudio(riff);
+                                  }}
+                                  className={`w-full bg-slate-950/70 border rounded-xl p-2.5 flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                                    isCurrentlyPlayingThisRiff
+                                      ? "border-indigo-400 bg-indigo-950/20 ring-1 ring-indigo-400 shadow-md"
+                                      : "border-slate-800/80 hover:border-slate-700"
+                                  }`}
+                                >
+                                  {/* Left: Thumbnail & Info */}
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <div className="w-14 aspect-video rounded-lg bg-black overflow-hidden flex-shrink-0 relative border border-slate-800">
+                                      {riff.mediaUrl.endsWith(".mp4") || riff.mediaUrl.endsWith(".webm") || riff.mediaUrl.includes("mixkit-") ? (
+                                        <video src={riff.mediaUrl} className="w-full h-full object-cover" muted playsInline />
+                                      ) : (
+                                        <img src={riff.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                                      )}
+                                      {isDeeper && (
+                                        <div className="absolute top-0.5 left-0.5 px-1 bg-purple-500/80 text-[6px] font-mono text-white rounded font-bold">
+                                          +1
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-[11px] font-bold text-slate-200 truncate">
+                                          @{riff.authorName}
+                                        </span>
+                                        <span className="text-[8px] font-mono px-1 rounded bg-slate-800 text-slate-400 uppercase">
+                                          {riff.tone}
+                                        </span>
+                                      </div>
+                                      <p className="text-[10px] text-slate-400 truncate italic mt-0.5">
+                                        "{riff.overlayText || riff.voiceText || "Riff response"}"
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  {/* Right: Laugh, Voice, and Riff on this mini-card */}
+                                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => handleLaugh(riff.id, e)}
+                                      className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono text-amber-300"
+                                      title="Laugh"
+                                    >
+                                      <span>😂</span>
+                                      <span>{riff.laughsCount ?? 0}</span>
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setActivePlayingId(riff.id);
+                                        playClipAudio(riff);
+                                      }}
+                                      className={`p-1 rounded border transition-colors ${
+                                        activePlayingAudioUrl === riff.id
+                                          ? "bg-emerald-600 text-white border-emerald-400"
+                                          : "bg-slate-900 text-slate-400 hover:text-white border-slate-800"
+                                      }`}
+                                      title="Play audio"
+                                    >
+                                      <Mic className="w-3 h-3 text-emerald-400" />
+                                    </button>
+
+                                    {/* Small Riff Action on this card (posts with parentId = riff.id) */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onRespond(riff);
+                                      }}
+                                      className="flex items-center gap-0.5 px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 hover:text-white rounded-lg text-[10px] font-bold transition-all active:scale-95 cursor-pointer"
+                                      title={`Riff on @${riff.authorName}'s reaction`}
+                                    >
+                                      <CornerDownRight className="w-2.5 h-2.5 text-cyan-400" />
+                                      <span>Riff</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
-                })()}
-
-                {/* 2. ✨ ALTERNATIVE PATHWAYS (Other Replies) */}
-                {sortedReplies.length > 1 && (
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-mono font-black text-indigo-400 uppercase tracking-wider block px-1">
-                      ✨ ALTERNATIVE PATHWAYS ({sortedReplies.length - 1})
-                    </span>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <AnimatePresence mode="popLayout">
-                        {sortedReplies.slice(1).map((reply, index) => {
-                          const childRepliesCount = getChainCount(reply.id);
-                          const hasAltAudio = !!(
-                            reply.voiceAudioUrl || 
-                            reply.voiceAudioData || 
-                            (reply.voiceText && (
-                              reply.voiceText.startsWith("audio_url:") || 
-                              (reply.voiceText.startsWith("http") && (reply.voiceText.includes("/storage/") || reply.voiceText.includes(".webm") || reply.voiceText.includes(".mp4"))) || 
-                              (reply.voiceText.trim() !== "" && !reply.voiceText.includes("Voice Reaction"))
-                            ))
-                          );
-                          const isAltPlaying = currentlyPlayingClipId === reply.id;
-
-                          return (
-                            <motion.div
-                              key={`alt-${reply.id}`}
-                              initial={{ opacity: 0, y: 12 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, scale: 0.95 }}
-                              transition={{ duration: 0.25, delay: index * 0.05 }}
-                              onClick={() => {
-                                setFocusedClipId(reply.id);
-                                if (hasAltAudio) {
-                                  handlePlayClipAudio(reply);
-                                }
-                              }}
-                              className="bg-slate-950/40 border border-slate-800/80 hover:border-indigo-500/40 rounded-xl p-3 flex flex-col justify-between cursor-pointer group hover:bg-slate-900/20 active:scale-[0.98] transition-all duration-300 relative overflow-hidden"
-                            >
-                              <div className="flex items-start gap-2.5 mb-2.5">
-                                <div className="w-10 h-10 rounded-lg bg-slate-900 overflow-hidden flex-shrink-0 relative border border-slate-800">
-                                  {reply.mediaUrl.endsWith(".mp4") || reply.mediaUrl.endsWith(".webm") || reply.mediaUrl.includes("mixkit-") ? (
-                                    <video src={reply.mediaUrl} className="w-full h-full object-cover" muted playsInline />
-                                  ) : (
-                                    <img src={reply.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
-                                  )}
-                                  {reply.overlayText && (
-                                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-1 text-center">
-                                      <span className="text-[8px] font-sans font-black text-white uppercase tracking-wider line-clamp-2">
-                                        {reply.overlayText}
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="space-y-0.5 overflow-hidden flex-1">
-                                  <div className="flex items-center justify-between gap-1">
-                                    <span className="block text-[10px] text-slate-300 font-bold truncate">@{reply.authorName}</span>
-                                    {hasAltAudio && (
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handlePlayClipAudio(reply, e);
-                                        }}
-                                        className={`px-1 py-0.5 rounded text-[8px] font-mono font-bold flex items-center gap-0.5 border transition-all ${
-                                          isAltPlaying
-                                            ? "bg-emerald-600 text-white border-emerald-400 animate-pulse"
-                                            : "bg-slate-900 hover:bg-slate-800 text-emerald-400 border-slate-700"
-                                        }`}
-                                      >
-                                        <Mic className="w-2.5 h-2.5" />
-                                        <span>{isAltPlaying ? "Playing" : "Voice"}</span>
-                                      </button>
-                                    )}
-                                  </div>
-                                  <span className="block text-[9px] font-mono text-indigo-400 font-bold uppercase">
-                                    {reply.tone}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {reply.voiceText && !reply.voiceText.startsWith("audio_url:") && (
-                                <p className="text-[10px] text-slate-400 italic line-clamp-1 mb-2 font-sans">
-                                  "{reply.voiceText}"
-                                </p>
-                              )}
-
-                              <div className="flex items-center justify-between text-[9px] font-mono text-slate-500 pt-2 border-t border-slate-900">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-amber-400 font-bold">😂 {reply.laughsCount ?? 0}</span>
-                                  <span className="flex items-center gap-0.5 text-slate-400">
-                                    <Heart className="w-3 h-3 text-slate-600 group-hover:text-rose-500" />
-                                    {reply.likesCount}
-                                  </span>
-                                </div>
-                                <span className="text-indigo-400 group-hover:underline flex items-center gap-0.5 font-bold">
-                                  <span>➔ CASCADE</span>
-                                  {childRepliesCount > 0 && <span>({childRepliesCount})</span>}
-                                </span>
-                              </div>
-                            </motion.div>
-                          );
-                        })}
-                      </AnimatePresence>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              /* Empty Branch State */
-              <div className="text-center py-10 bg-slate-950/20 border border-dashed border-slate-800 rounded-2xl p-6 space-y-3">
-                <p className="text-[11px] text-slate-400 max-w-xs mx-auto leading-relaxed">
-                  No other active branching responses found under this comment yet. Start a new direction!
-                </p>
-                <button
-                  onClick={() => onRespond(focusedClip)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] rounded-lg shadow transition-all uppercase tracking-wider font-mono"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Start Pathway
-                </button>
+                })}
               </div>
             )}
           </div>
