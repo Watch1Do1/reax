@@ -3,7 +3,7 @@ import {
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
   ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User,
-  MoreVertical, Mail, FileText
+  MoreVertical, Mail, FileText, Clock, Mic
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -296,7 +296,7 @@ export default function App() {
   const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(false);
   const [remixData, setRemixData] = useState<SavedReaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const [feedType, setFeedType] = useState<"trending" | "latest" | "most_reacted" | "audio_hot">("trending");
+  const [feedType, setFeedType] = useState<"hot" | "latest" | "most_reacted" | "audio_hot">("hot");
 
   // User Search & Public Profile State
   const [selectedUserProfileUsername, setSelectedUserProfileUsername] = useState<string | null>(null);
@@ -903,9 +903,9 @@ export default function App() {
             return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
           });
           
-      case "trending":
+      case "hot":
       default:
-        // Trending Score = Replies * 5 + Likes * 2 + Recent Activity
+        // Hot Velocity Score = (Replies * 5) + (Laughs * 3) + (Likes * 2) + Dynamic Freshness Boost
         return [...baseRoots].sort((a, b) => {
           const repliesA = getChainCount(a.id);
           const repliesB = getChainCount(b.id);
@@ -916,12 +916,12 @@ export default function App() {
           const ageHoursA = (Date.now() - lastActivityA) / (1000 * 60 * 60);
           const ageHoursB = (Date.now() - lastActivityB) / (1000 * 60 * 60);
           
-          // Recent Activity Score: 20 points max, decays dynamically based on hours since last activity
-          const activityScoreA = 20 / (ageHoursA + 1);
-          const activityScoreB = 20 / (ageHoursB + 1);
+          // Velocity Score: Active conversations in recent hours get highest multiplier
+          const activityScoreA = 25 / (ageHoursA + 1);
+          const activityScoreB = 25 / (ageHoursB + 1);
           
-          const scoreA = (repliesA * 5) + (a.likesCount * 2) + activityScoreA;
-          const scoreB = (repliesB * 5) + (b.likesCount * 2) + activityScoreB;
+          const scoreA = (repliesA * 5) + ((a.laughsCount || 0) * 3) + (a.likesCount * 2) + activityScoreA;
+          const scoreB = (repliesB * 5) + ((b.laughsCount || 0) * 3) + (b.likesCount * 2) + activityScoreB;
           
           return scoreB - scoreA;
         });
@@ -1090,28 +1090,52 @@ export default function App() {
           </div>
         )}
 
-        {/* Minimal Feed Filter */}
+        {/* Modern Segmented Feed Filter */}
         {!loading && clips.length > 0 && (
-          <div className="flex items-center justify-center gap-3 text-xs font-medium text-slate-500 pb-1">
+          <div className="flex items-center justify-center gap-1 p-1 bg-slate-900/80 border border-slate-800/80 rounded-2xl max-w-fit mx-auto mb-1 text-xs font-medium shadow-inner backdrop-blur-sm">
             <button 
-              onClick={() => setFeedType("trending")}
-              className={`transition-colors cursor-pointer ${feedType === "trending" ? "text-slate-100 font-bold" : "hover:text-slate-300"}`}
+              onClick={() => setFeedType("hot")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+                feedType === "hot" 
+                  ? "bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 text-rose-300 font-bold border border-rose-500/35 shadow-sm" 
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
             >
-              Trending
+              <Flame className={`w-3.5 h-3.5 ${feedType === "hot" ? "text-orange-400 fill-orange-400/30" : "text-slate-400"}`} />
+              <span>Hot</span>
             </button>
-            <span className="text-slate-700">•</span>
             <button 
               onClick={() => setFeedType("latest")}
-              className={`transition-colors cursor-pointer ${feedType === "latest" ? "text-slate-100 font-bold" : "hover:text-slate-300"}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+                feedType === "latest" 
+                  ? "bg-slate-800 text-slate-100 font-bold border border-slate-700 shadow-sm" 
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
             >
-              Latest
+              <Clock className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Latest</span>
             </button>
-            <span className="text-slate-700">•</span>
             <button 
               onClick={() => setFeedType("most_reacted")}
-              className={`transition-colors cursor-pointer ${feedType === "most_reacted" ? "text-slate-100 font-bold" : "hover:text-slate-300"}`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+                feedType === "most_reacted" 
+                  ? "bg-slate-800 text-slate-100 font-bold border border-slate-700 shadow-sm" 
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
             >
-              Most Reacted
+              <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Most Reacted</span>
+            </button>
+            <button 
+              onClick={() => setFeedType("audio_hot")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+                feedType === "audio_hot" 
+                  ? "bg-slate-800 text-slate-100 font-bold border border-slate-700 shadow-sm" 
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              <Mic className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Voice</span>
             </button>
           </div>
         )}
@@ -1137,13 +1161,15 @@ export default function App() {
           /* Contextual Empty State */
           <div className="text-center py-12 bg-slate-900/20 border border-slate-800/40 rounded-3xl p-8 space-y-4">
             <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-slate-500 text-lg">
-              {feedType === "audio_hot" ? "🎤" : "🎬"}
+              {feedType === "audio_hot" ? "🎤" : (feedType === "hot" ? "🔥" : "🎬")}
             </div>
             <div className="space-y-1.5">
               <h3 className="text-sm font-bold text-white">No loops fit this algorithm</h3>
               <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
                 {feedType === "audio_hot" 
                   ? "None of the active conversation threads have custom voice recordings or AI speech accents yet. Be the first to add one!"
+                  : feedType === "hot"
+                  ? "No active reaction conversations yet. Be the first to start a hot thread!"
                   : "No loops have been posted to this feed tab yet."}
               </p>
             </div>
@@ -1168,20 +1194,21 @@ export default function App() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <span className="text-xs font-mono font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                {feedType.replace("_", " ").toUpperCase()} FEED ({rootClips.length})
+                <span className={`w-1.5 h-1.5 rounded-full ${feedType === "hot" ? "bg-rose-500 animate-pulse" : "bg-indigo-500"}`} />
+                {feedType === "hot" ? "🔥 HOT FEED" : `${feedType.replace("_", " ").toUpperCase()} FEED`} ({rootClips.length})
               </span>
               <span className="text-[10px] text-slate-500 font-mono uppercase">
-                Sorted by {feedType === "trending" ? "Velocity score" : (feedType === "most_reacted" ? "Tree reply depth" : "Date stamp")}
+                Sorted by {feedType === "hot" ? "Engagement Velocity" : (feedType === "most_reacted" ? "Thread Depth" : (feedType === "audio_hot" ? "Voice Activity" : "Date Stamp"))}
               </span>
             </div>
 
             <div className="space-y-6">
-              {rootClips.map((clip) => (
+              {rootClips.map((clip, index) => (
                 <ClipCard
                   key={`clip-${clip.id}`}
                   clip={clip}
                   allClips={clips}
+                  isHot={feedType === "hot" && index < 3}
                   onLaugh={handleLaugh}
                   onLike={handleLike}
                   onUnlike={handleUnlike}

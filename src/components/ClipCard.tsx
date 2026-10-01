@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag, Trash2, Share2, Copy, Check } from "lucide-react";
+import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag, Trash2, Share2, Copy, Check, Flame } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
@@ -22,6 +22,7 @@ interface ClipCardProps {
   onViewUser?: (username: string) => void;
   isNestedReply?: boolean;
   isTopReply?: boolean;
+  isHot?: boolean;
 }
 
 export default function ClipCard({ 
@@ -38,7 +39,8 @@ export default function ClipCard({
   onViewThread, 
   onViewUser,
   isNestedReply = false, 
-  isTopReply = false 
+  isTopReply = false,
+  isHot = false
 }: ClipCardProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
@@ -559,6 +561,11 @@ export default function ClipCard({
 
         {/* Tone tag pills & Top Reaction Badge */}
         <div className="flex items-center gap-1.5">
+          {isHot && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[8.5px] font-mono font-black tracking-wide bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-rose-500/20 text-amber-300 border border-amber-500/35 shadow-md">
+              <Flame className="w-2.5 h-2.5 text-orange-400 fill-orange-400" /> HOT
+            </span>
+          )}
           {(clip.voiceAudioUrl || clip.voiceAudioData || clip.mediaType === "audio") && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[8.5px] font-mono font-black tracking-wide bg-gradient-to-r from-emerald-500/15 to-teal-500/15 text-emerald-300 border border-emerald-500/30 shadow-md">
               🎤 VOICE
