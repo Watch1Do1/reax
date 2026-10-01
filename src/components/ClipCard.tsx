@@ -816,10 +816,10 @@ export default function ClipCard({
               key={item.id}
               onClick={(e) => {
                 e.stopPropagation();
-                onRespondWithTone(clip, item.id);
+                onRespondWithTone(rootClip, item.id);
               }}
               className={`flex items-center justify-center gap-1 py-1.5 px-1 bg-slate-950/70 border rounded-xl text-xs transition-all active:scale-95 cursor-pointer ${item.color}`}
-              title={`React with ${item.label} tone`}
+              title={`Reax to original (@${rootClip.authorName}) with ${item.label} tone`}
             >
               <span className="text-sm leading-none">{item.emoji}</span>
               <span className="hidden sm:inline text-[10px] font-medium text-slate-300">{item.label}</span>
