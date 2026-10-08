@@ -2915,15 +2915,13 @@ const fallbackWebmWithFFmpeg = ({
 async function executeLocalTrim({
   rawBucket,
   rawPath,
-  rawUrl,
   trimStartMs,
   trimDurationMs,
   stripAudio,
   userId
 }: {
   rawBucket: string;
-  rawPath?: string;
-  rawUrl?: string;
+  rawPath: string;
   trimStartMs: number;
   trimDurationMs: number;
   stripAudio: boolean;
@@ -2941,23 +2939,13 @@ async function executeLocalTrim({
   const storageClient = supabaseAdmin || (!isProduction ? supabase : null);
 
   try {
-    if (rawPath && storageClient) {
-      const { data: blobData, error: dlErr } = await storageClient.storage
-        .from(rawBucket)
-        .download(rawPath);
-      if (dlErr || !blobData) {
-        throw new Error(`Failed to download raw video from storage: ${dlErr?.message || "Not found"}`);
-      }
-      fs.writeFileSync(inputPath, Buffer.from(await blobData.arrayBuffer()));
-    } else if (rawUrl) {
-      const response = await fetch(rawUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to download raw video: HTTP ${response.status}`);
-      }
-      fs.writeFileSync(inputPath, Buffer.from(await response.arrayBuffer()));
-    } else {
-      throw new Error("No rawPath or rawUrl provided");
+    if (!storageClient) throw new Error("Storage is not configured.");
+    if (!rawPath.startsWith("raw-clips/") || rawPath.includes("..")) throw new Error("Invalid raw path.");
+    const { data: blobData, error: dlErr } = await storageClient.storage.from(rawBucket).download(rawPath);
+    if (dlErr || !blobData) {
+      throw new Error(`Failed to download raw video from storage: ${dlErr?.message || "Not found"}`);
     }
+    fs.writeFileSync(inputPath, Buffer.from(await blobData.arrayBuffer()));
 
     const probe = await probeVideoFile(inputPath);
     const duration = probe.duration;
@@ -3014,17 +3002,8 @@ async function executeLocalTrim({
 
     // Delete raw file using exact bucket and path
     try {
-      let bucketToDelete = rawBucket;
-      let pathToDelete = rawPath;
-      if (!pathToDelete && rawUrl) {
-        const rawMatch = rawUrl.match(/\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/);
-        if (rawMatch) {
-          bucketToDelete = rawMatch[1];
-          pathToDelete = decodeURIComponent(rawMatch[2]);
-        }
-      }
-      if (pathToDelete) {
-        await storageClient.storage.from(bucketToDelete).remove([pathToDelete]);
+      if (rawPath) {
+        await storageClient.storage.from(rawBucket).remove([rawPath]);
       }
     } catch {}
 
@@ -3069,8 +3048,18 @@ app.post("/api/clips/queue-trim", async (req, res) => {
     effect = "zoom|classic|white|bottom"
   } = req.body;
 
-  if (!rawPath && !rawUrl) {
-    return res.status(400).json({ error: "rawPath or rawUrl is required" });
+  // Security: never fetch client-supplied URLs; only trim the caller's own raw upload.
+  if (rawUrl) {
+    return res.status(400).json({ error: "rawUrl is not accepted. Upload the file and send rawPath." });
+  }
+  const ALLOWED_RAW_BUCKETS = ["media", "reactions"];
+  if (!ALLOWED_RAW_BUCKETS.includes(rawBucket)) {
+    return res.status(400).json({ error: "Invalid upload bucket." });
+  }
+  const escapedUserId = user.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rawPathPattern = new RegExp(`^raw-clips/${escapedUserId}/[A-Za-z0-9-]+\\.(mp4|mov|webm)$`);
+  if (typeof rawPath !== "string" || rawPath.includes("..") || !rawPathPattern.test(rawPath)) {
+    return res.status(400).json({ error: "Invalid upload path." });
   }
 
   const safeStartMs = Math.max(0, parseInt(trimStartMs, 10) || 0);
@@ -3092,7 +3081,6 @@ app.post("/api/clips/queue-trim", async (req, res) => {
         body: JSON.stringify({
           rawBucket,
           rawPath,
-          rawUrl,
           trimStartMs: safeStartMs,
           trimDurationMs: safeDurationMs,
           stripAudio: safeStripAudio,
@@ -3119,7 +3107,6 @@ app.post("/api/clips/queue-trim", async (req, res) => {
       trimmedUrl = await executeLocalTrim({
         rawBucket,
         rawPath,
-        rawUrl,
         trimStartMs: safeStartMs,
         trimDurationMs: safeDurationMs,
         stripAudio: safeStripAudio,
@@ -3918,33 +3905,30 @@ app.post("/api/upload", async (req, res) => {
 // ADMINISTRATIVE & MODERATION API ENDPOINTS
 // ==========================================
 
+// Trim whitespace and one pair of surrounding quotes (keeps Vercel env values like "abc" working)
+const normalizeAdminSecret = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  let s = value.trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
+  return s;
+};
+
+// Exact, case-sensitive, constant-time compare. Hashing first gives equal-length buffers,
+// so timingSafeEqual never throws on a length mismatch.
+const adminPasscodeMatches = (provided: string, expected: string): boolean => {
+  const a = crypto.createHash("sha256").update(provided, "utf8").digest();
+  const b = crypto.createHash("sha256").update(expected, "utf8").digest();
+  return crypto.timingSafeEqual(a, b);
+};
+
 const adminAuthMiddleware = async (req: any, res: any, next: any) => {
   try {
-    // 1. Passcode verification (X-Admin-Passcode header, query param, or body)
-    let passcode = req.headers["x-admin-passcode"] || (req.query && req.query.passcode) || (req.body && req.body.passcode);
-    if (typeof passcode === "string") {
-      passcode = passcode.trim();
-      if ((passcode.startsWith('"') && passcode.endsWith('"')) || (passcode.startsWith("'") && passcode.endsWith("'"))) {
-        passcode = passcode.slice(1, -1).trim();
-      }
-    }
-
-    let expectedPasscode = process.env.ADMIN_PASSCODE || "admin123";
-    if (typeof expectedPasscode === "string") {
-      expectedPasscode = expectedPasscode.trim();
-      if ((expectedPasscode.startsWith('"') && expectedPasscode.endsWith('"')) || (expectedPasscode.startsWith("'") && expectedPasscode.endsWith("'"))) {
-        expectedPasscode = expectedPasscode.slice(1, -1).trim();
-      }
-    }
-
-    const validPasscodes = [
-      expectedPasscode,
-      "admin123",
-      "admin",
-      "MvscReaxSRO2026!$"
-    ].filter(Boolean);
-
-    if (passcode && validPasscodes.some(vp => vp.toLowerCase() === passcode.toLowerCase())) {
+    // 1. Passcode: X-Admin-Passcode HEADER ONLY, exact match against the ADMIN_PASSCODE env var (no defaults, no extras)
+    const expectedPasscode = normalizeAdminSecret(process.env.ADMIN_PASSCODE);
+    const providedPasscode = normalizeAdminSecret(req.headers["x-admin-passcode"]);
+    if (!expectedPasscode) {
+      if (providedPasscode) console.warn("[Admin] ADMIN_PASSCODE is not set; passcode login is disabled.");
+    } else if (providedPasscode && adminPasscodeMatches(providedPasscode, expectedPasscode)) {
       return next();
     }
 
@@ -3958,7 +3942,10 @@ const adminAuthMiddleware = async (req: any, res: any, next: any) => {
         if (!authError && userData?.user?.id) {
           const userId = userData.user.id.toLowerCase();
           const userEmail = (userData.user.email || "").toLowerCase();
-          const userRole = userData.user.user_metadata?.role || userData.user.app_metadata?.role;
+          // app_metadata is server-controlled; user_metadata is user-editable and must never grant admin
+          const appRole = userData.user.app_metadata?.role;
+          const emailConfirmed = Boolean(userData.user.email_confirmed_at || (userData.user as any).confirmed_at);
+          const isAnonymousUser = Boolean((userData.user as any).is_anonymous);
 
           const adminEmails = (process.env.ADMIN_USER_EMAILS || "team@watch1do1.com,support@getreax.com")
             .split(",")
@@ -3967,8 +3954,8 @@ const adminAuthMiddleware = async (req: any, res: any, next: any) => {
 
           if (
             (ADMIN_USER_IDS.length > 0 && ADMIN_USER_IDS.includes(userId)) ||
-            adminEmails.includes(userEmail) ||
-            userRole === "admin"
+            (!!userEmail && emailConfirmed && !isAnonymousUser && adminEmails.includes(userEmail)) ||
+            appRole === "admin"
           ) {
             return next();
           }
@@ -3978,22 +3965,15 @@ const adminAuthMiddleware = async (req: any, res: any, next: any) => {
       }
     }
 
-    // 3. Fallback for preview container / local development
-    const host = (req.headers.host || "").toLowerCase();
-    if (
-      !isProduction || 
-      token === "dev-bearer-token" || 
-      host.includes("localhost") || 
-      host.includes("127.0.0.1") ||
-      (process.env.DEV_MEMORY_STORE === "true")
-    ) {
+    // 3. Local development only (never in production, never based on a token or Host header)
+    if (!isProduction && process.env.DEV_MEMORY_STORE === "true") {
       return next();
     }
 
     return res.status(401).json({ error: "Unauthorized: Valid admin authentication required." });
   } catch (err: any) {
     console.error("Critical error in adminAuthMiddleware:", err);
-    return res.status(500).json({ error: "Authentication internal error", details: err?.message });
+    return res.status(500).json({ error: "Authentication internal error" });
   }
 };
 

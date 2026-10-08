@@ -917,7 +917,6 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
           body: JSON.stringify({
             rawBucket: rawUploadResult.bucket || "media",
             rawPath: rawUploadResult.path,
-            rawUrl: rawUploadResult.url,
             trimStartMs: Math.round(trimInfo.start * 1000),
             trimDurationMs: Math.round(trimInfo.windowDuration * 1000),
             stripAudio: Boolean(stripAudio),

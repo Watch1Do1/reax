@@ -174,8 +174,13 @@ app.post("/trim", async (req, res) => {
     userId
   } = req.body;
 
-  if (!userId || (!rawPath && !rawUrl)) {
-    return res.status(400).json({ error: "Missing required parameters (userId, rawPath or rawUrl)" });
+  const ALLOWED_RAW_BUCKETS = ["media", "reactions"];
+  if (
+    !userId || typeof rawPath !== "string" || !ALLOWED_RAW_BUCKETS.includes(rawBucket) ||
+    rawPath.includes("..") || !rawPath.startsWith(`raw-clips/${userId}/`) ||
+    !/^raw-clips\/[A-Za-z0-9-]+\/[A-Za-z0-9-]+\.(mp4|mov|webm)$/.test(rawPath)
+  ) {
+    return res.status(400).json({ error: "Invalid raw clip path." });
   }
 
   const supabase = getSupabase();
@@ -196,26 +201,16 @@ app.post("/trim", async (req, res) => {
     console.log(`[Worker] Starting trim job ${jobId || tempId} for user ${userId}`);
 
     // 2. Download raw video from Supabase Storage
-    if (rawPath) {
-      console.log(`[Worker] Downloading ${rawBucket}/${rawPath}`);
-      const { data: blobData, error: dlErr } = await supabase.storage
-        .from(rawBucket)
-        .download(rawPath);
+    console.log(`[Worker] Downloading ${rawBucket}/${rawPath}`);
+    const { data: blobData, error: dlErr } = await supabase.storage
+      .from(rawBucket)
+      .download(rawPath);
 
-      if (dlErr || !blobData) {
-        throw new Error(`Failed to download raw video from Supabase: ${dlErr?.message || "Not found"}`);
-      }
-      const arrayBuf = await blobData.arrayBuffer();
-      fs.writeFileSync(inputPath, Buffer.from(arrayBuf));
-    } else if (rawUrl) {
-      console.log(`[Worker] Downloading via URL: ${rawUrl}`);
-      const dlRes = await fetch(rawUrl);
-      if (!dlRes.ok) {
-        throw new Error(`Failed to download raw video via URL: HTTP ${dlRes.status}`);
-      }
-      const arrayBuf = await dlRes.arrayBuffer();
-      fs.writeFileSync(inputPath, Buffer.from(arrayBuf));
+    if (dlErr || !blobData) {
+      throw new Error(`Failed to download raw video from Supabase: ${dlErr?.message || "Not found"}`);
     }
+    const arrayBuf = await blobData.arrayBuffer();
+    fs.writeFileSync(inputPath, Buffer.from(arrayBuf));
 
     // 3. Probe duration with ffprobe
     const probe = await probeVideo(inputPath);
@@ -283,20 +278,9 @@ app.post("/trim", async (req, res) => {
 
     // 6. Delete raw file using exact bucket and path
     try {
-      let bucketToDelete = rawBucket;
-      let pathToDelete = rawPath;
-
-      if (!pathToDelete && rawUrl) {
-        const rawMatch = rawUrl.match(/\/storage\/v1\/object\/public\/([^\/]+)\/(.+)$/);
-        if (rawMatch) {
-          bucketToDelete = rawMatch[1];
-          pathToDelete = decodeURIComponent(rawMatch[2]);
-        }
-      }
-
-      if (pathToDelete) {
-        console.log(`[Worker] Deleting raw file: ${bucketToDelete}/${pathToDelete}`);
-        await supabase.storage.from(bucketToDelete).remove([pathToDelete]);
+      if (rawPath) {
+        console.log(`[Worker] Deleting raw file: ${rawBucket}/${rawPath}`);
+        await supabase.storage.from(rawBucket).remove([rawPath]);
       }
     } catch (delErr) {
       console.warn("[Worker] Non-critical: Could not delete raw file from storage:", delErr);
