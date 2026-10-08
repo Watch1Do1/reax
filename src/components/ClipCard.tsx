@@ -655,6 +655,8 @@ export default function ClipCard({
             yellow: "text-yellow-400",
             red: "text-rose-500",
             cyan: "text-cyan-400",
+            navy: "text-blue-900",
+            "navy-blue": "text-blue-900",
           };
 
           const positionClasses: Record<string, string> = {

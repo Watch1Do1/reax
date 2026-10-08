@@ -1679,6 +1679,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       yellow: "text-yellow-400",
                       red: "text-rose-500",
                       cyan: "text-cyan-400",
+                      navy: "text-blue-900",
+                      "navy-blue": "text-blue-900",
                     };
 
                     const positionClasses: Record<string, string> = {
@@ -1783,6 +1785,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                             <option value="yellow">💛 Yellow</option>
                             <option value="red">❤️ Rose Red</option>
                             <option value="cyan">🩵 Neon Cyan</option>
+                            <option value="navy">💙 Navy Blue</option>
                           </select>
                         </div>
                       </div>

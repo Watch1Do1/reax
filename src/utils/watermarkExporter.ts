@@ -253,6 +253,8 @@ export function renderWatermarkAndCaptions(
       yellow: "#facc15",
       red: "#f43f5e",
       cyan: "#22d3ee",
+      navy: "#1e3a8a",
+      "navy-blue": "#1e3a8a",
     };
     const textFillColor = colorMap[textStyleColor] || "#ffffff";
     const strokeWidth = Math.max(3, Math.round(fontSize * 0.16));
