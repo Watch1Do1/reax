@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { Clip } from "../types";
 import { getAuthToken } from "../utils/supabaseClient";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 
 interface AdminPanelProps {
   key?: string | number | null;
@@ -748,11 +749,11 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
                                   <td className="p-4">
                                     {clip ? (
                                       <div className="flex items-center gap-3">
-                                        <div className="w-14 h-11 bg-slate-900 rounded-lg overflow-hidden border border-slate-800 shrink-0 relative flex items-center justify-center">
+                                        <div className="w-14 h-11 bg-slate-900 rounded-lg overflow-hidden border border-slate-800 shrink-0 relative flex items-center justify-center reax-protected-media" onContextMenu={blockMediaEvent}>
                                           {isVideo ? (
-                                            <video src={clip.mediaUrl} className="w-full h-full object-cover" muted />
+                                            <video {...protectedMediaProps} controlsList="nodownload noremoteplayback" disablePictureInPicture src={clip.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" muted />
                                           ) : (
-                                            <img src={clip.mediaUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                            <img {...protectedMediaProps} src={clip.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" referrerPolicy="no-referrer" />
                                           )}
                                         </div>
                                         <div className="min-w-0 max-w-[180px]">
@@ -947,11 +948,11 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
                                   
                                   {/* Preview media */}
                                   <td className="p-4 min-w-[120px]">
-                                    <div className="w-16 h-12 bg-slate-900 rounded-lg overflow-hidden border border-slate-800 relative flex items-center justify-center">
+                                    <div className="w-16 h-12 bg-slate-900 rounded-lg overflow-hidden border border-slate-800 relative flex items-center justify-center reax-protected-media" onContextMenu={blockMediaEvent}>
                                       {isVideo ? (
-                                        <video src={clip.mediaUrl} className="w-full h-full object-cover" muted />
+                                        <video {...protectedMediaProps} controlsList="nodownload noremoteplayback" disablePictureInPicture src={clip.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" muted />
                                       ) : (
-                                        <img src={clip.mediaUrl} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                        <img {...protectedMediaProps} src={clip.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" referrerPolicy="no-referrer" />
                                       )}
                                       {clip.overlayText && (
                                         <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[7px] text-center uppercase tracking-tight py-0.5 font-bold block truncate">
@@ -1610,9 +1611,10 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
               <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl flex items-center gap-3">
                 {clipToPurge.mediaUrl ? (
                   <img 
+                    {...protectedMediaProps}
                     src={clipToPurge.mediaUrl} 
                     alt="Preview" 
-                    className="w-14 h-14 rounded-lg object-cover border border-slate-700 bg-slate-900 shrink-0" 
+                    className="w-14 h-14 rounded-lg object-cover border border-slate-700 bg-slate-900 shrink-0 reax-protected-media select-none" 
                     onError={(e) => {
                       (e.target as HTMLElement).style.display = 'none';
                     }}

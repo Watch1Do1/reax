@@ -5,6 +5,7 @@ import {
 import { Clip } from "../types";
 import { speakText } from "../utils/audio";
 import { getAuthToken } from "../utils/supabaseClient";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 
 // Tone labels, emojis, and local fallback captions (No Unsplash/Mixkit stock URLs)
 const TONE_OPTIONS: Array<{
@@ -241,7 +242,7 @@ export default function FastReaxPanel({
             </div>
 
             {/* Loop Preview Canvas using parentClip.mediaUrl */}
-            <div className="relative aspect-video rounded-2xl overflow-hidden bg-black border border-slate-800 shadow-md">
+            <div className="relative aspect-video rounded-2xl overflow-hidden bg-black border border-slate-800 shadow-md reax-protected-media" onContextMenu={blockMediaEvent}>
               <div className={`w-full h-full ${
                 visualEffect === "zoom" ? "animate-zoom" :
                 visualEffect === "pan" ? "animate-pan" :
@@ -252,8 +253,11 @@ export default function FastReaxPanel({
               }`}>
                 {isVideo ? (
                   <video 
+                    {...protectedMediaProps}
+                    controlsList="nodownload noremoteplayback"
+                    disablePictureInPicture
                     src={parentClip.mediaUrl} 
-                    className="w-full h-full object-cover" 
+                    className="w-full h-full object-cover reax-protected-media select-none" 
                     autoPlay 
                     loop 
                     muted 
@@ -261,8 +265,9 @@ export default function FastReaxPanel({
                   />
                 ) : (
                   <img 
+                    {...protectedMediaProps}
                     src={parentClip.mediaUrl} 
-                    className="w-full h-full object-cover" 
+                    className="w-full h-full object-cover reax-protected-media select-none" 
                     alt="" 
                     referrerPolicy="no-referrer" 
                   />

@@ -116,3 +116,12 @@ body {
   box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.5);
 }
 
+/* Block native copy/save/drag/long-press on raw clip media (watermark lives in exports only) */
+.reax-protected-media,
+.reax-protected-media * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+

@@ -8,6 +8,7 @@ import {
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 
 interface ThreadViewProps {
   key?: string;
@@ -449,14 +450,18 @@ export default function ThreadView({
                 setActivePlayingId(ultimateRoot.id);
                 playClipAudio(ultimateRoot);
               }}
-              className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-800 shadow-inner group/media cursor-pointer ${
+              onContextMenu={blockMediaEvent}
+              className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-800 shadow-inner group/media cursor-pointer reax-protected-media ${
                 activePlayingId === ultimateRoot.id ? "ring-2 ring-indigo-500 shadow-indigo-500/20" : ""
               }`}
             >
               {ultimateRoot.mediaUrl.endsWith(".mp4") || ultimateRoot.mediaUrl.endsWith(".webm") || ultimateRoot.mediaUrl.includes("mixkit-") ? (
                 <video 
+                  {...protectedMediaProps}
+                  controlsList="nodownload noremoteplayback"
+                  disablePictureInPicture
                   src={ultimateRoot.mediaUrl} 
-                  className="w-full h-full object-cover pointer-events-none" 
+                  className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
                   loop 
                   muted={true} 
                   playsInline 
@@ -464,8 +469,9 @@ export default function ThreadView({
                 />
               ) : (
                 <img 
+                  {...protectedMediaProps}
                   src={ultimateRoot.mediaUrl} 
-                  className="w-full h-full object-cover pointer-events-none" 
+                  className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
                   alt="" 
                   referrerPolicy="no-referrer" 
                 />
@@ -606,8 +612,8 @@ export default function ThreadView({
                           }}
                           className="flex-shrink-0 w-24 bg-slate-900 border border-slate-800 hover:border-amber-400 rounded-lg p-1 text-left transition-all active:scale-95 cursor-pointer"
                         >
-                          <div className="aspect-video w-full rounded bg-black overflow-hidden mb-1">
-                            <img src={saved.mediaUrl} className="w-full h-full object-cover" alt="" />
+                          <div className="aspect-video w-full rounded bg-black overflow-hidden mb-1 reax-protected-media" onContextMenu={blockMediaEvent}>
+                            <img {...protectedMediaProps} src={saved.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" alt="" />
                           </div>
                           <span className="text-[8px] font-bold text-slate-300 block truncate">{saved.overlayText || saved.tone}</span>
                         </button>
@@ -697,14 +703,18 @@ export default function ThreadView({
                           setActivePlayingId(directReax.id);
                           playClipAudio(directReax);
                         }}
-                        className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-900 shadow-inner cursor-pointer ${
+                        onContextMenu={blockMediaEvent}
+                        className={`relative aspect-video rounded-xl bg-black overflow-hidden flex items-center justify-center border border-slate-900 shadow-inner cursor-pointer reax-protected-media ${
                           isCurrentlyPlayingThisCard ? "ring-2 ring-indigo-500" : ""
                         }`}
                       >
                         {directReax.mediaUrl.endsWith(".mp4") || directReax.mediaUrl.endsWith(".webm") || directReax.mediaUrl.includes("mixkit-") ? (
                           <video 
+                            {...protectedMediaProps}
+                            controlsList="nodownload noremoteplayback"
+                            disablePictureInPicture
                             src={directReax.mediaUrl} 
-                            className="w-full h-full object-cover pointer-events-none" 
+                            className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
                             loop 
                             muted={true} 
                             playsInline 
@@ -712,8 +722,9 @@ export default function ThreadView({
                           />
                         ) : (
                           <img 
+                            {...protectedMediaProps}
                             src={directReax.mediaUrl} 
-                            className="w-full h-full object-cover pointer-events-none" 
+                            className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
                             alt="" 
                             referrerPolicy="no-referrer" 
                           />
@@ -848,11 +859,11 @@ export default function ThreadView({
                                 >
                                   {/* Left: Thumbnail & Info */}
                                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                    <div className="w-14 aspect-video rounded-lg bg-black overflow-hidden flex-shrink-0 relative border border-slate-800">
+                                    <div className="w-14 aspect-video rounded-lg bg-black overflow-hidden flex-shrink-0 relative border border-slate-800 reax-protected-media" onContextMenu={blockMediaEvent}>
                                       {riff.mediaUrl.endsWith(".mp4") || riff.mediaUrl.endsWith(".webm") || riff.mediaUrl.includes("mixkit-") ? (
-                                        <video src={riff.mediaUrl} className="w-full h-full object-cover" muted playsInline />
+                                        <video {...protectedMediaProps} controlsList="nodownload noremoteplayback" disablePictureInPicture src={riff.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" muted playsInline />
                                       ) : (
-                                        <img src={riff.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                                        <img {...protectedMediaProps} src={riff.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" alt="" referrerPolicy="no-referrer" />
                                       )}
                                       {isDeeper && (
                                         <div className="absolute top-0.5 left-0.5 px-1 bg-purple-500/80 text-[6px] font-mono text-white rounded font-bold">

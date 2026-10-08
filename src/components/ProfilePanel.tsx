@@ -13,6 +13,7 @@ import {
   syncUserProfile,
   fetchMyProfile
 } from "../utils/supabaseClient";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 
 export interface ProfilePanelProps {
   isOpen: boolean;
@@ -445,22 +446,27 @@ export default function ProfilePanel({
                         onClose();
                       }
                     }}
-                    className="group relative aspect-[9/12] bg-slate-950 rounded-xl overflow-hidden border border-slate-800 hover:border-indigo-500/60 transition-all text-left flex flex-col justify-end p-2.5 cursor-pointer shadow-sm active:scale-95"
+                    onContextMenu={blockMediaEvent}
+                    className="group relative aspect-[9/12] bg-slate-950 rounded-xl overflow-hidden border border-slate-800 hover:border-indigo-500/60 transition-all text-left flex flex-col justify-end p-2.5 cursor-pointer shadow-sm active:scale-95 reax-protected-media"
                   >
                     {/* Media backdrop */}
                     {clip.mediaUrl.match(/\.(mp4|webm|mov)(\?.*)?$/i) ? (
                       <video
+                        {...protectedMediaProps}
+                        controlsList="nodownload noremoteplayback"
+                        disablePictureInPicture
                         src={clip.mediaUrl}
-                        className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity"
+                        className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity reax-protected-media select-none"
                         muted
                         playsInline
                         loop
                       />
                     ) : (
                       <img
+                        {...protectedMediaProps}
                         src={clip.mediaUrl}
                         alt="reaction"
-                        className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity"
+                        className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity reax-protected-media select-none"
                       />
                     )}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />

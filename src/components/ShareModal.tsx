@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { X, MessageSquare, Mail, Copy, Check, Download, Share2, ExternalLink, Image as ImageIcon, Film } from "lucide-react";
 import { Clip } from "../types";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -134,20 +135,24 @@ export default function ShareModal({
 
         {/* Clip Preview Snippet with Watermark Badge */}
         <div className="my-4 p-3 bg-slate-950/70 rounded-xl border border-slate-800/80 flex items-center gap-3">
-          <div className="relative w-18 h-18 rounded-lg bg-slate-800 overflow-hidden shrink-0 border border-slate-700/50">
+          <div className="relative w-18 h-18 rounded-lg bg-slate-800 overflow-hidden shrink-0 border border-slate-700/50 reax-protected-media" onContextMenu={blockMediaEvent}>
             {clip.mediaType === "video" ? (
               <video
+                {...protectedMediaProps}
+                controlsList="nodownload noremoteplayback"
+                disablePictureInPicture
                 src={clip.mediaUrl}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover reax-protected-media select-none"
                 muted
                 playsInline
                 preload="metadata"
               />
             ) : (
               <img
+                {...protectedMediaProps}
                 src={clip.mediaUrl}
                 alt={clip.overlayText || "Reaction"}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover reax-protected-media select-none"
               />
             )}
             <div className="absolute top-1 right-1 px-1.5 py-0.5 rounded-full bg-black/80 border border-white/20 text-[7px] font-mono font-bold text-white flex items-center gap-0.5 shadow-sm">

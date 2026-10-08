@@ -10,6 +10,7 @@ import { Clip, SavedReaction } from "../types";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { uploadMediaAsset, uploadRawClipAsset, getAuthToken } from "../utils/supabaseClient";
 import { convertHeicToJpeg, isHeicFile } from "../utils/imageUtils";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import ClipTimelineEditor from "./ClipTimelineEditor";
 
 interface RespondModalProps {
@@ -1453,11 +1454,14 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 </div>
 
                 {/* Chosen media preview card */}
-                <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800/80 flex items-center justify-center shadow-lg w-2/3 mx-auto">
+                <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800/80 flex items-center justify-center shadow-lg w-2/3 mx-auto reax-protected-media" onContextMenu={blockMediaEvent}>
                   {selectedMedia?.isVideo ? (
                     <video 
+                      {...protectedMediaProps}
+                      controlsList="nodownload noremoteplayback"
+                      disablePictureInPicture
                       src={selectedMedia.data} 
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover reax-protected-media select-none"
                       autoPlay 
                       loop 
                       muted 
@@ -1465,8 +1469,9 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     />
                   ) : (
                     <img 
+                      {...protectedMediaProps}
                       src={selectedMedia?.data} 
-                      className="w-full h-full object-cover" 
+                      className="w-full h-full object-cover reax-protected-media select-none" 
                       alt=""
                     />
                   )}
@@ -1556,7 +1561,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 className="space-y-4"
               >
                 {/* Visual loop display */}
-                <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800/80 flex items-center justify-center shadow-inner">
+                <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800/80 flex items-center justify-center shadow-inner reax-protected-media" onContextMenu={blockMediaEvent}>
                   <div className={`w-full h-full overflow-hidden flex items-center justify-center ${
                     visualEffect === "zoom" ? "animate-zoom" :
                     visualEffect === "pan" ? "animate-pan" :
@@ -1568,8 +1573,11 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     {selectedMedia?.isVideo ? (
                       <div className="relative w-full h-full">
                         <video 
+                          {...protectedMediaProps}
+                          controlsList="nodownload noremoteplayback"
+                          disablePictureInPicture
                           src={selectedMedia.data} 
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover reax-protected-media select-none"
                           autoPlay 
                           loop={!trimInfo} 
                           muted={previewMuted}
@@ -1635,8 +1643,9 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       </div>
                     ) : selectedMedia?.data ? (
                       <img 
+                        {...protectedMediaProps}
                         src={selectedMedia.data} 
-                        className="w-full h-full object-cover" 
+                        className="w-full h-full object-cover reax-protected-media select-none" 
                         alt="Looping visual clip preview"
                       />
                     ) : (
@@ -2280,13 +2289,14 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                                   }
                                   setIsSaved(true);
                                 }}
-                                className="relative w-16 h-16 rounded-xl bg-black overflow-hidden flex-shrink-0 border border-slate-800 hover:border-amber-400 transition-all active:scale-95 group/saveditem"
+                                className="relative w-16 h-16 rounded-xl bg-black overflow-hidden flex-shrink-0 border border-slate-800 hover:border-amber-400 transition-all active:scale-95 group/saveditem reax-protected-media"
+                                onContextMenu={blockMediaEvent}
                                 title={`Tone: ${reax.tone}. Voice: "${reax.voiceText}"`}
                               >
                                 {reax.mediaUrl.endsWith(".mp4") || reax.mediaUrl.endsWith(".webm") ? (
-                                  <video src={reax.mediaUrl} className="w-full h-full object-cover pointer-events-none" muted playsInline />
+                                  <video {...protectedMediaProps} controlsList="nodownload noremoteplayback" disablePictureInPicture src={reax.mediaUrl} className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" muted playsInline />
                                 ) : (
-                                  <img src={reax.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                                  <img {...protectedMediaProps} src={reax.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" alt="" referrerPolicy="no-referrer" />
                                 )}
                                 <div className="absolute inset-0 bg-black/40 group-hover/saveditem:bg-black/10 transition-colors" />
                                 <div className="absolute top-1 right-1 bg-black/60 backdrop-blur rounded-sm px-1 text-[7px] font-mono text-amber-300 font-bold uppercase">

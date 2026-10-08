@@ -4,18 +4,50 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>
-      // Suppress Vite HMR WebSocket connection errors in environments where WebSockets are unsupported
-      window.addEventListener('unhandledrejection', function (event) {
-        var msg = (event.reason && (event.reason.message || event.reason.toString())) || '';
-        var stack = (event.reason && event.reason.stack) || '';
-        if (
-          msg.indexOf('WebSocket') !== -1 ||
-          msg.indexOf('vite:ws') !== -1 ||
-          stack.indexOf('@vite/client') !== -1
-        ) {
-          event.preventDefault();
+      // Suppress Vite HMR WebSocket connection errors in environments where WebSockets are unsupported/disabled
+      (function() {
+        function isViteWsError(err, msg, filename, stack) {
+          var m = (msg || (err && (err.message || err.toString())) || '') + '';
+          var s = (stack || (err && err.stack) || '') + '';
+          var f = (filename || '') + '';
+          return (
+            m.indexOf('WebSocket') !== -1 ||
+            m.indexOf('vite:ws') !== -1 ||
+            m.indexOf('closed without opened') !== -1 ||
+            s.indexOf('@vite/client') !== -1 ||
+            f.indexOf('@vite/client') !== -1
+          );
         }
-      });
+
+        window.addEventListener('unhandledrejection', function (event) {
+          if (isViteWsError(event.reason)) {
+            event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
+          }
+        }, true);
+
+        window.addEventListener('error', function (event) {
+          if (isViteWsError(event.error, event.message, event.filename)) {
+            event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
+            return true;
+          }
+        }, true);
+
+        var origConsoleError = console.error;
+        console.error = function() {
+          var args = Array.prototype.slice.call(arguments);
+          var joined = args.map(function(a) { return (a && a.stack) || a; }).join(' ');
+          if (isViteWsError(null, joined)) {
+            return;
+          }
+          return origConsoleError.apply(console, args);
+        };
+      })();
     </script>
     <title>Reax</title>
     <meta name="description" content="A high-octane social platform where users communicate exclusively using 2-5s expressive video reactions, using AI-generated dialogue and immersive audio." />

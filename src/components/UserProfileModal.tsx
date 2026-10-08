@@ -5,6 +5,7 @@ import {
   CornerDownRight, Mic, Calendar, Flame, ChevronRight, ExternalLink
 } from "lucide-react";
 import { Clip } from "../types";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 
 export interface UserProfileModalProps {
   isOpen: boolean;
@@ -244,12 +245,27 @@ export default function UserProfileModal({
                           onClose();
                           onSelectClip(clip.id);
                         }}
-                        className="w-full aspect-video rounded-xl bg-slate-900 overflow-hidden relative border border-slate-800/80 cursor-pointer"
+                        onContextMenu={blockMediaEvent}
+                        className="w-full aspect-video rounded-xl bg-slate-900 overflow-hidden relative border border-slate-800/80 cursor-pointer reax-protected-media"
                       >
                         {isVideo ? (
-                          <video src={clip.mediaUrl} className="w-full h-full object-cover" muted playsInline />
+                          <video 
+                            {...protectedMediaProps}
+                            controlsList="nodownload noremoteplayback"
+                            disablePictureInPicture
+                            src={clip.mediaUrl} 
+                            className="w-full h-full object-cover reax-protected-media select-none" 
+                            muted 
+                            playsInline 
+                          />
                         ) : (
-                          <img src={clip.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                          <img 
+                            {...protectedMediaProps}
+                            src={clip.mediaUrl} 
+                            className="w-full h-full object-cover reax-protected-media select-none" 
+                            alt="" 
+                            referrerPolicy="no-referrer" 
+                          />
                         )}
 
                         {/* Tone Badge */}

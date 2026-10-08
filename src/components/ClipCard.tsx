@@ -4,6 +4,7 @@ import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import ShareModal from "./ShareModal";
 
 interface ClipCardProps {
@@ -633,9 +634,10 @@ export default function ClipCard({
             handlePlayAudio(e);
           }
         }}
-        className={`relative aspect-video rounded-xl bg-slate-950 overflow-hidden flex items-center justify-center group/media border border-slate-950/40 ${
+        className={`relative aspect-video rounded-xl bg-slate-950 overflow-hidden flex items-center justify-center group/media border border-slate-950/40 reax-protected-media ${
           !isVideo && (clip.voiceAudioUrl || clip.voiceAudioData || clip.voiceText || (clip.mediaType === "audio" && clip.mediaUrl)) ? "cursor-pointer" : ""
         }`}
+        onContextMenu={(e) => { e.preventDefault(); handleCopyPicture(); }}
       >
         
         {/* Kinetic animations depending on the tone of the reaction */}
@@ -685,9 +687,12 @@ export default function ClipCard({
                 {isVideo ? (
                   <video 
                     ref={videoRef}
+                    {...protectedMediaProps}
+                    controlsList="nodownload noremoteplayback"
+                    disablePictureInPicture
                     crossOrigin="anonymous"
                     src={clip.mediaUrl} 
-                    className="w-full h-full object-cover pointer-events-none"
+                    className="w-full h-full object-cover pointer-events-none reax-protected-media select-none"
                     loop 
                     muted={isMuted}
                     playsInline
@@ -696,9 +701,10 @@ export default function ClipCard({
                 ) : (
                   <img 
                     ref={imgRef}
+                    {...protectedMediaProps}
                     crossOrigin="anonymous"
                     src={clip.mediaUrl} 
-                    className="w-full h-full object-cover pointer-events-none" 
+                    className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
                     alt={`Reaction clip by ${clip.authorName}`}
                     referrerPolicy="no-referrer"
                   />

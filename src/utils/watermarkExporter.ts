@@ -363,50 +363,48 @@ export function triggerFileDownload(blob: Blob, filename: string) {
  * Copy watermarked image directly into system clipboard (ready for Ctrl+V in email, Slack, etc.).
  * Automatically falls back to file download if browser clipboard image write is blocked or unsupported.
  */
-export async function copyWatermarkedImageToClipboard(
+export function copyWatermarkedImageToClipboard(
   clip: Clip,
   mediaEl?: HTMLImageElement | HTMLVideoElement | null
 ): Promise<{ success: boolean; fallbackDownloaded?: boolean; error?: string }> {
+  const fileName = `reax-${clip.id.slice(0, 8)}.png`;
+
+  // Start rendering now, but DO NOT await before clipboard.write().
+  const pngBlobPromise: Promise<Blob> = generateWatermarkedCanvas(clip, mediaEl).then(
+    (canvas) =>
+      new Promise<Blob>((resolve, reject) =>
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Failed to render image canvas"))), "image/png")
+      )
+  );
+
+  const downloadFallback = () =>
+    pngBlobPromise
+      .then((blob) => { triggerFileDownload(blob, fileName); return { success: false, fallbackDownloaded: true }; })
+      .catch((err: any) => ({ success: false, error: err?.message || "Failed to process image" }));
+
+  const canWriteImage =
+    typeof navigator !== "undefined" && !!navigator.clipboard &&
+    typeof navigator.clipboard.write === "function" && typeof ClipboardItem !== "undefined";
+
+  if (!canWriteImage) return downloadFallback();
+
+  let writePromise: Promise<void>;
   try {
-    const canvas = await generateWatermarkedCanvas(clip, mediaEl);
-
-    return await new Promise<{ success: boolean; fallbackDownloaded?: boolean; error?: string }>((resolve) => {
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          return resolve({ success: false, error: "Failed to render image canvas" });
-        }
-
-        const fileName = `reax-${clip.id.slice(0, 8)}.png`;
-
-        // Modern Clipboard API: write image/png
-        if (
-          typeof navigator !== "undefined" &&
-          navigator.clipboard &&
-          typeof navigator.clipboard.write === "function" &&
-          typeof ClipboardItem !== "undefined"
-        ) {
-          try {
-            const item = new ClipboardItem({ "image/png": blob });
-            await navigator.clipboard.write([item]);
-            return resolve({ success: true });
-          } catch (writeErr: any) {
-            console.warn("Direct clipboard image write failed (e.g. permission or iframe limit), falling back to download:", writeErr);
-          }
-        }
-
-        // Automatic fallback: download image file
-        triggerFileDownload(blob, fileName);
-        return resolve({ success: false, fallbackDownloaded: true });
-      }, "image/png");
-    });
-  } catch (err: any) {
-    console.error("Error copying watermarked image:", err);
-    return { success: false, error: err.message || "Failed to process image" };
+    // Synchronous call inside the click: Safari + Chrome accept a Promise<Blob> here.
+    writePromise = navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlobPromise })]);
+  } catch (e) {
+    writePromise = Promise.reject(e);
   }
+  return writePromise
+    .then(() => ({ success: true }))
+    .catch((err) => {
+      console.warn("Clipboard image write failed, falling back to download:", err);
+      return downloadFallback();
+    });
 }
 
 /**
- * Download high-res watermarked reaction image or trigger native share sheet.
+ * Download high-res watermarked reaction image or trigger native share sheet on touch devices.
  */
 export async function downloadWatermarkedImage(
   clip: Clip,
@@ -424,7 +422,9 @@ export async function downloadWatermarkedImage(
       const fileName = `reax-${clip.id.slice(0, 8)}.png`;
       const file = new File([blob], fileName, { type: "image/png" });
 
+      const isTouch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
       if (
+        isTouch &&
         typeof navigator !== "undefined" &&
         navigator.share &&
         navigator.canShare &&

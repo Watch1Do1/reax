@@ -4,6 +4,7 @@ import { X, Star, Trash2, Send, Play, Pause, Volume2, Film, Sparkles, Pencil } f
 import { SavedReaction, Clip } from "../types";
 import { speakText } from "../utils/audio";
 import { loadAndSanitizeReactions, detectDuplicateIds } from "../utils/keyUtils";
+import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 
 interface SavedReactionsVaultProps {
   key?: string;
@@ -131,18 +132,27 @@ export default function SavedReactionsVault({ onClose, onPostReaction, onRemixRe
                     className="group bg-slate-950/60 border border-slate-800/80 hover:border-amber-500/40 rounded-2xl overflow-hidden p-2 flex flex-col justify-between transition-all duration-300 hover:bg-slate-950 shadow-lg"
                   >
                     {/* Thumbnail preview */}
-                    <div className="relative aspect-video rounded-xl bg-slate-900 overflow-hidden border border-slate-800/50 flex items-center justify-center">
+                    <div className="relative aspect-video rounded-xl bg-slate-900 overflow-hidden border border-slate-800/50 flex items-center justify-center reax-protected-media" onContextMenu={blockMediaEvent}>
                       {isVideo ? (
                         <video 
+                          {...protectedMediaProps}
+                          controlsList="nodownload noremoteplayback"
+                          disablePictureInPicture
                           src={reax.mediaUrl} 
-                          className="w-full h-full object-cover" 
+                          className="w-full h-full object-cover reax-protected-media select-none" 
                           muted 
                           playsInline 
                           loop
                           autoPlay
                         />
                       ) : (
-                        <img src={reax.mediaUrl} className="w-full h-full object-cover" alt="" referrerPolicy="no-referrer" />
+                        <img 
+                          {...protectedMediaProps}
+                          src={reax.mediaUrl} 
+                          className="w-full h-full object-cover reax-protected-media select-none" 
+                          alt="" 
+                          referrerPolicy="no-referrer" 
+                        />
                       )}
                       
                       {reax.overlayText && (
