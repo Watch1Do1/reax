@@ -3414,6 +3414,46 @@ app.post("/api/clips/trim-upload", handleTrimUploadMiddleware, async (req, res) 
   }
 });
 
+app.post("/api/clips/:id/export", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) return res.status(authRes.status).json({ error: authRes.error });
+  const { user } = authRes.auth;
+
+  const clip = await store!.getClip(req.params.id);
+  if (!clip || clip.deleted) return res.status(404).json({ error: "Clip not found" });
+  const looksLikeVideo = clip.mediaType === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(clip.mediaUrl || "") || (clip.mediaUrl || "").includes("mixkit-");
+  if (!looksLikeVideo) return res.status(400).json({ error: "Only video clips can be exported as video." });
+
+  const overlayPng = req.body?.overlayPng;
+  if (typeof overlayPng !== "string" || !overlayPng.startsWith("data:image/png;base64,") || overlayPng.length > 4_000_000) {
+    return res.status(400).json({ error: "Invalid overlay image." });
+  }
+
+  const workerBaseUrl = process.env.CLOUD_RUN_WORKER_URL || process.env.FFMPEG_WORKER_URL;
+  if (!workerBaseUrl) return res.status(503).json({ error: "Video export is not configured." });
+
+  try {
+    const workerRes = await fetch(`${workerBaseUrl.replace(/\/$/, "")}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-worker-secret": process.env.WORKER_SECRET || "" },
+      body: JSON.stringify({
+        clipId: clip.id,
+        mediaUrl: clip.mediaUrl,                 // from DB, never from the client
+        voiceAudioUrl: clip.voiceAudioUrl || null,
+        overlayPng,
+        userId: user.id                          // session user, never client-provided
+      }),
+      signal: AbortSignal.timeout(55000)         // Vercel maxDuration is 60s (vercel.json)
+    });
+    const data = await workerRes.json().catch(() => ({}));
+    if (!workerRes.ok) return res.status(workerRes.status || 500).json({ error: data.error || "Couldn't create the video. Please try again." });
+    return res.json({ url: data.url, downloadUrl: data.downloadUrl, fileName: data.fileName });
+  } catch (err: any) {
+    console.error("[Export] Error calling Cloud Run worker:", err);
+    return res.status(504).json({ error: "Video export timed out. Please try again." });
+  }
+});
+
 // API: Laugh at a clip (😂 Humor-first engagement metric with unique prevention)
 app.post("/api/clips/:id/laugh", async (req, res) => {
   const clipId = req.params.id;

@@ -1,4 +1,5 @@
 import { Clip } from "../types";
+import { getAuthToken } from "./supabaseClient";
 
 /**
  * Safely draw a rounded rectangle on a 2D canvas context across all browser engines.
@@ -449,281 +450,77 @@ export async function downloadWatermarkedImage(
   });
 }
 
-/**
- * Export high-definition watermarked MP4/WebM video of a Clip.
- * - Draws video frames, overlays text and the getREAX.com watermark pill onto an offscreen canvas.
- * - Captures canvas stream and mixes original video audio and optional voice note audio.
- * - Exports native .mp4 (Safari iOS/macOS/modern Chrome) or .webm (legacy Chrome/Firefox).
- * - Opens the native Share Sheet on mobile (for saving directly to Photos/Camera Roll) or triggers download.
- */
-export async function downloadWatermarkedVideo(
+/** Natural size of the clip's video; uses the on-screen element if it is loaded, otherwise loads metadata. */
+export async function getVideoDimensions(clip: Clip, videoEl?: HTMLVideoElement | null): Promise<{ width: number; height: number }> {
+  if (videoEl && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) return { width: videoEl.videoWidth, height: videoEl.videoHeight };
+  return new Promise((resolve, reject) => {
+    const v = document.createElement("video");
+    v.preload = "metadata"; v.muted = true; v.playsInline = true; v.crossOrigin = "anonymous";
+    const timer = setTimeout(() => reject(new Error("Couldn't read the video size.")), 10000);
+    v.onloadedmetadata = () => { clearTimeout(timer); resolve({ width: v.videoWidth || 1080, height: v.videoHeight || 1920 }); };
+    v.onerror = () => { clearTimeout(timer); reject(new Error("Couldn't load the video.")); };
+    v.src = clip.mediaUrl;
+  });
+}
+
+/** Transparent PNG containing only the caption + getREAX.com pill, exactly as rendered for pictures. */
+export function renderOverlayPngDataUrl(clip: Clip, width: number, height: number): string {
+  const scale = Math.min(1, 1920 / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(2, Math.round(width * scale));
+  canvas.height = Math.max(2, Math.round(height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not initialize 2D canvas context");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);   // keep it transparent
+  renderWatermarkAndCaptions(ctx, canvas.width, canvas.height, clip);
+  return canvas.toDataURL("image/png");
+}
+
+/** Asks the server to render the watermarked MP4, then downloads it as a File (does NOT save/share). */
+export async function exportWatermarkedVideo(
   clip: Clip,
-  onProgress?: (progressPercent: number) => void
-): Promise<{ success: boolean; error?: string }> {
-  // If not a video clip, download high-res watermarked picture
-  if (clip.mediaType !== "video") {
-    await downloadWatermarkedImage(clip);
-    return { success: true };
-  }
+  videoEl?: HTMLVideoElement | null,
+  onProgress?: (pct: number) => void
+): Promise<{ file: File; downloadUrl: string; fileName: string }> {
+  onProgress?.(5);
+  const { width, height } = await getVideoDimensions(clip, videoEl);
+  const overlayPng = renderOverlayPngDataUrl(clip, width, height);
+  onProgress?.(15);
 
-  // Check MediaRecorder & canvas stream support
-  if (
-    typeof MediaRecorder === "undefined" ||
-    (typeof HTMLCanvasElement.prototype.captureStream !== "function" &&
-      typeof (HTMLCanvasElement.prototype as any).mozCaptureStream !== "function")
-  ) {
-    // Fallback: download still frame
-    await downloadWatermarkedImage(clip);
-    return { success: true };
-  }
-
-  let videoBlobUrl = "";
-  let audioCtx: AudioContext | null = null;
-  let voiceAudioEl: HTMLAudioElement | null = null;
-
+  let pct = 15;
+  const tick = setInterval(() => { pct = Math.min(85, pct + 3); onProgress?.(pct); }, 700);
   try {
-    if (onProgress) onProgress(5);
-
-    // 1. Fetch video as Blob to guarantee zero CORS canvas-tainting issues
-    try {
-      const res = await fetch(clip.mediaUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      videoBlobUrl = URL.createObjectURL(blob);
-    } catch {
-      videoBlobUrl = clip.mediaUrl;
-    }
-
-    if (onProgress) onProgress(15);
-
-    // 2. Prepare hidden video element
-    const video = document.createElement("video");
-    video.crossOrigin = "anonymous";
-    video.playsInline = true;
-    video.preload = "auto";
-    video.muted = false;
-    video.src = videoBlobUrl;
-
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (video.readyState >= 2) resolve();
-        else reject(new Error("Video loading timed out"));
-      }, 15000);
-
-      video.onloadeddata = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      video.onerror = () => {
-        clearTimeout(timer);
-        reject(new Error("Failed to load video element"));
-      };
-      video.load();
+    const token = await getAuthToken();
+    const res = await fetch(`/api/clips/${encodeURIComponent(clip.id)}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ overlayPng })
     });
-
-    if (onProgress) onProgress(25);
-
-    // 3. Setup Canvas for rendering frames
-    const canvas = document.createElement("canvas");
-    const width = video.videoWidth || 1280;
-    const height = video.videoHeight || 720;
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Could not initialize canvas context");
-
-    // 4. Capture canvas stream at 30 FPS
-    const canvasStream = (canvas.captureStream
-      ? canvas.captureStream(30)
-      : (canvas as any).mozCaptureStream(30)) as MediaStream;
-
-    const streamTracks: MediaStreamTrack[] = [...canvasStream.getVideoTracks()];
-
-    // 5. Setup Audio mixing via AudioContext (original audio + voice note)
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (AudioContextClass) {
-        audioCtx = new AudioContextClass();
-        const audioDest = audioCtx.createMediaStreamDestination();
-        const videoSource = audioCtx.createMediaElementSource(video);
-        videoSource.connect(audioDest);
-
-        // Mix in optional recorded voice note
-        if (clip.voiceAudioUrl) {
-          try {
-            voiceAudioEl = new Audio();
-            voiceAudioEl.crossOrigin = "anonymous";
-            voiceAudioEl.src = clip.voiceAudioUrl;
-            const voiceSource = audioCtx.createMediaElementSource(voiceAudioEl);
-            voiceSource.connect(audioDest);
-          } catch (vErr) {
-            console.warn("Could not mix voice note audio:", vErr);
-          }
-        }
-
-        const audioTracks = audioDest.stream.getAudioTracks();
-        if (audioTracks.length > 0) {
-          streamTracks.push(audioTracks[0]);
-        }
-      }
-    } catch (aErr) {
-      console.warn("AudioContext setup error (video will export without mixed audio):", aErr);
-    }
-
-    const combinedStream = new MediaStream(streamTracks);
-
-    // 6. Determine supported video format (prefer native MP4 for maximum iOS/social compatibility)
-    let chosenMime = "video/mp4";
-    let fileExt = "mp4";
-
-    if (typeof MediaRecorder.isTypeSupported === "function") {
-      if (MediaRecorder.isTypeSupported('video/mp4; codecs="avc1,mp4a.40.2"')) {
-        chosenMime = 'video/mp4; codecs="avc1,mp4a.40.2"';
-        fileExt = "mp4";
-      } else if (MediaRecorder.isTypeSupported("video/mp4")) {
-        chosenMime = "video/mp4";
-        fileExt = "mp4";
-      } else if (MediaRecorder.isTypeSupported('video/webm; codecs="vp9,opus"')) {
-        chosenMime = 'video/webm; codecs="vp9,opus"';
-        fileExt = "webm";
-      } else if (MediaRecorder.isTypeSupported("video/webm")) {
-        chosenMime = "video/webm";
-        fileExt = "webm";
-      }
-    }
-
-    // 7. Initialize MediaRecorder
-    const recorder = new MediaRecorder(combinedStream, {
-      mimeType: chosenMime,
-      videoBitsPerSecond: 3000000 // 3 Mbps high quality
-    });
-
-    const recordedChunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) {
-        recordedChunks.push(e.data);
-      }
-    };
-
-    // Draw initial frame at t = 0
-    video.currentTime = 0;
-    ctx.drawImage(video, 0, 0, width, height);
-    renderWatermarkAndCaptions(ctx, width, height, clip);
-
-    const videoDuration = video.duration || 6;
-
-    // 8. Record and frame-draw loop
-    const recordPromise = new Promise<Blob>((resolve, reject) => {
-      recorder.onstop = () => {
-        const finalBlob = new Blob(recordedChunks, { type: chosenMime });
-        resolve(finalBlob);
-      };
-      recorder.onerror = (err) => reject(err);
-
-      let animFrameId: number;
-      let isFinished = false;
-
-      const finishRecording = () => {
-        if (isFinished) return;
-        isFinished = true;
-        cancelAnimationFrame(animFrameId);
-        try { video.pause(); } catch {}
-        try { if (voiceAudioEl) voiceAudioEl.pause(); } catch {}
-        if (recorder.state === "recording") {
-          recorder.stop();
-        }
-      };
-
-      const renderLoop = () => {
-        if (isFinished) return;
-        if (video.ended || video.currentTime >= videoDuration - 0.05) {
-          finishRecording();
-          return;
-        }
-
-        try {
-          ctx.drawImage(video, 0, 0, width, height);
-          renderWatermarkAndCaptions(ctx, width, height, clip);
-          if (onProgress && videoDuration > 0) {
-            const currentPct = 25 + Math.min(70, Math.round((video.currentTime / videoDuration) * 70));
-            onProgress(currentPct);
-          }
-        } catch (rErr) {
-          console.error("Frame render error:", rErr);
-        }
-
-        animFrameId = requestAnimationFrame(renderLoop);
-      };
-
-      video.onended = finishRecording;
-      // Failsafe timeout in case onended doesn't trigger
-      setTimeout(finishRecording, Math.max(8000, (videoDuration + 3) * 1000));
-
-      recorder.start(100);
-
-      if (voiceAudioEl) {
-        try {
-          voiceAudioEl.currentTime = 0;
-          voiceAudioEl.play().catch(() => {});
-        } catch {}
-      }
-
-      video.play().then(() => {
-        animFrameId = requestAnimationFrame(renderLoop);
-      }).catch((playErr) => {
-        console.warn("Autoplay with audio failed, retrying muted:", playErr);
-        video.muted = true;
-        video.play().then(() => {
-          animFrameId = requestAnimationFrame(renderLoop);
-        }).catch(reject);
-      });
-    });
-
-    const recordedVideoBlob = await recordPromise;
-
-    if (onProgress) onProgress(98);
-
-    const fileName = `reax-${clip.id.slice(0, 8)}.${fileExt}`;
-    const file = new File([recordedVideoBlob], fileName, { type: chosenMime });
-
-    // 9. Deliver file: Mobile native share sheet (Save Video to Camera Roll) or browser download
-    if (
-      typeof navigator !== "undefined" &&
-      navigator.share &&
-      navigator.canShare &&
-      navigator.canShare({ files: [file] })
-    ) {
-      try {
-        await navigator.share({
-          files: [file],
-          title: "Reax Video",
-          text: clip.overlayText ? `"${clip.overlayText}" on getREAX.com` : "getREAX.com",
-        });
-        if (onProgress) onProgress(100);
-        return { success: true };
-      } catch (shareErr: any) {
-        if (shareErr?.name === "AbortError") {
-          if (onProgress) onProgress(100);
-          return { success: true };
-        }
-      }
-    }
-
-    triggerFileDownload(recordedVideoBlob, fileName);
-    if (onProgress) onProgress(100);
-    return { success: true };
-  } catch (err: any) {
-    console.error("Failed to export watermarked video:", err);
-    // Fallback: download still frame on any unrecoverable error
-    await downloadWatermarkedImage(clip);
-    return { success: false, error: err.message || "Failed to export video" };
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.url) throw new Error(data.error || "Couldn't create the video. Please try again.");
+    onProgress?.(90);
+    const vidRes = await fetch(data.url);
+    if (!vidRes.ok) throw new Error("Couldn't download the finished video. Please try again.");
+    const blob = await vidRes.blob();
+    const fileName = data.fileName || `reax-${clip.id.slice(0, 8)}.mp4`;
+    onProgress?.(100);
+    return { file: new File([blob], fileName, { type: "video/mp4" }), downloadUrl: data.downloadUrl || data.url, fileName };
   } finally {
-    if (videoBlobUrl && videoBlobUrl.startsWith("blob:")) {
-      URL.revokeObjectURL(videoBlobUrl);
-    }
-    if (audioCtx) {
-      try { audioCtx.close(); } catch {}
+    clearInterval(tick);
+  }
+}
+
+/** MUST be called directly from a click/tap handler (fresh user gesture). Phones: share sheet (Save Video to Photos). Desktop: file download. */
+export async function deliverVideoFile(file: File, clip: Clip): Promise<void> {
+  const isTouch = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches;
+  if (isTouch && navigator.share && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: "Reax Video", text: clip.overlayText ? `"${clip.overlayText}" on getREAX.com` : "getREAX.com" });
+      return;
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
     }
   }
+  triggerFileDownload(file, file.name);   // same-origin blob URL, so the download attribute works
 }
 

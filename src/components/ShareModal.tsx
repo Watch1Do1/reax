@@ -13,6 +13,8 @@ interface ShareModalProps {
   onDownloadVideo?: () => void;
   isGeneratingVideo?: boolean;
   videoProgress?: number;
+  isVideoReady?: boolean;
+  onSaveVideo?: () => void;
 }
 
 export default function ShareModal({
@@ -26,6 +28,8 @@ export default function ShareModal({
   onDownloadVideo,
   isGeneratingVideo = false,
   videoProgress = 0,
+  isVideoReady = false,
+  onSaveVideo,
 }: ShareModalProps) {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
@@ -178,7 +182,7 @@ export default function ShareModal({
           {clip.mediaType === "video" && onDownloadVideo && (
             <button
               type="button"
-              onClick={onDownloadVideo}
+              onClick={isVideoReady && onSaveVideo ? onSaveVideo : onDownloadVideo}
               disabled={isGeneratingVideo}
               className="flex items-center justify-between w-full px-4 py-3 bg-gradient-to-r from-indigo-600/30 via-purple-600/30 to-pink-600/30 hover:from-indigo-600/45 hover:via-purple-600/45 hover:to-pink-600/45 border border-indigo-500/50 hover:border-indigo-400 rounded-xl transition-all cursor-pointer group shadow-xl"
             >
@@ -189,19 +193,21 @@ export default function ShareModal({
                 <div className="text-left">
                   <div className="text-sm font-bold text-white flex items-center gap-1.5">
                     {isGeneratingVideo 
-                      ? `Rendering Video... ${videoProgress ? `${videoProgress}%` : ""}` 
-                      : "Download Watermarked Video"}
+                      ? `Creating Video... ${videoProgress || 0}%` 
+                      : isVideoReady ? "Save Video" : "Create Watermarked Video"}
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-400/20 text-indigo-300 border border-indigo-400/30">
                       MP4
                     </span>
                   </div>
                   <div className="text-xs text-slate-300">
-                    6s animated video with text & watermark for TikTok, Reels, Twitter, Discord
+                    {isVideoReady 
+                      ? "Ready: saves to Photos on phones, downloads on computers" 
+                      : "MP4 with your caption + getREAX.com watermark. Works on X, TikTok, Instagram, Discord"}
                   </div>
                 </div>
               </div>
               <span className="text-xs font-semibold text-indigo-300 group-hover:text-white px-2 py-1 rounded-md bg-indigo-500/10">
-                {isGeneratingVideo ? `${videoProgress || 0}%` : "Download"}
+                {isGeneratingVideo ? `${videoProgress || 0}%` : isVideoReady ? "Save" : "Create"}
               </span>
             </button>
           )}

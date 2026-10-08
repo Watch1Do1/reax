@@ -3,7 +3,7 @@ import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Pla
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
-import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, downloadWatermarkedVideo } from "../utils/watermarkExporter";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
 import ShareModal from "./ShareModal";
 
 interface ClipCardProps {
@@ -53,6 +53,11 @@ export default function ClipCard({
   const [showSubReplies, setShowSubReplies] = useState(false);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
+  const [exportedVideo, setExportedVideo] = useState<File | null>(null);
+
+  // Clear exportedVideo when the share modal closes and when clip.id changes:
+  useEffect(() => { if (!isShareModalOpen) setExportedVideo(null); }, [isShareModalOpen]);
+  useEffect(() => { setExportedVideo(null); }, [clip.id]);
 
   // Resolve original root clip of this thread
   const rootClip = React.useMemo(() => {
@@ -72,23 +77,28 @@ export default function ClipCard({
     clip.mediaUrl.includes("uploads/clip-");
 
   // High-res Watermark & Video Exporter Handlers
-  const handleDownloadVideo = async () => {
+  const handleDownloadVideo = async () => {          // "Create" step
     if (isGeneratingVideo) return;
     setIsGeneratingVideo(true);
     setVideoProgress(0);
     try {
-      const res = await downloadWatermarkedVideo(clip, (pct) => setVideoProgress(pct));
-      if (res.success) {
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Watermarked video downloaded!" } }));
-      } else {
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: res.error || "Failed to download video" } }));
-      }
+      const { file } = await exportWatermarkedVideo(clip, videoRef.current, (pct) => setVideoProgress(pct));
+      setExportedVideo(file);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Video ready! Tap Save Video." } }));
     } catch (err: any) {
-      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Could not export video" } }));
+      // Clear error. Never fall back to downloading a picture.
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: err?.message || "Couldn't create the video. Please try again." } }));
     } finally {
       setIsGeneratingVideo(false);
       setVideoProgress(0);
     }
+  };
+
+  const handleSaveVideo = () => {                    // fresh tap: share sheet / download
+    if (!exportedVideo) return;
+    deliverVideoFile(exportedVideo, clip).catch(() => {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Couldn't save the video. Please try again." } }));
+    });
   };
   const handleDownloadWatermark = async () => {
     if (isSharing) return;
@@ -1127,6 +1137,8 @@ export default function ClipCard({
         onDownloadVideo={handleDownloadVideo}
         isGeneratingVideo={isGeneratingVideo}
         videoProgress={videoProgress}
+        isVideoReady={!!exportedVideo}
+        onSaveVideo={handleSaveVideo}
         onDownloadWatermark={handleDownloadWatermark}
         isGeneratingWatermark={isSharing}
         onCopyPicture={handleCopyPicture}
