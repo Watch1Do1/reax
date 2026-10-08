@@ -3,6 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Suppress Vite HMR WebSocket connection errors in environments where WebSockets are unsupported
+      window.addEventListener('unhandledrejection', function (event) {
+        var msg = (event.reason && (event.reason.message || event.reason.toString())) || '';
+        var stack = (event.reason && event.reason.stack) || '';
+        if (
+          msg.indexOf('WebSocket') !== -1 ||
+          msg.indexOf('vite:ws') !== -1 ||
+          stack.indexOf('@vite/client') !== -1
+        ) {
+          event.preventDefault();
+        }
+      });
+    </script>
     <title>Reax</title>
     <meta name="description" content="A high-octane social platform where users communicate exclusively using 2-5s expressive video reactions, using AI-generated dialogue and immersive audio." />
     <meta property="og:title" content="Reax" />
