@@ -5,6 +5,7 @@ import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/aud
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import { getAuthToken } from "../utils/supabaseClient";
 import ShareModal from "./ShareModal";
 
 interface ClipCardProps {
@@ -136,6 +137,9 @@ export default function ClipCard({
   };
 
   const [showReportMenu, setShowReportMenu] = useState(false);
+  const [selectedReportReason, setSelectedReportReason] = useState<string | null>(null);
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const submittingReportRef = useRef(false);
   const [isReported, setIsReported] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -153,24 +157,43 @@ export default function ClipCard({
     }
   };
 
-  const handleReport = async (reason: string) => {
+  const handleReport = async () => {
+    if (!selectedReportReason || submittingReportRef.current) return;
+    submittingReportRef.current = true;
+    setIsSubmittingReport(true);
+
     try {
+      const token = await getAuthToken();
       const res = await fetch(`/api/clips/${clip.id}/report`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reporter: localStorage.getItem("clips_username") || "Anonymous",
-          reason: reason
-        })
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ reason: selectedReportReason })
       });
+
       if (res.ok) {
         setIsReported(true);
         setShowReportMenu(false);
-        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Report submitted to moderation queue. Thank you!" } }));
+        setSelectedReportReason(null);
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Report submitted, thanks" } }));
+      } else {
+        try { await res.json(); } catch {}
+        if (res.status === 401) {
+          window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Please sign in to report." } }));
+        } else if (res.status === 404) {
+          window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "This clip no longer exists." } }));
+        } else {
+          window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Couldn't submit report. Please try again." } }));
+        }
       }
-    } catch (e) {
-      console.error(e);
-      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Failed to submit report." } }));
+    } catch (err) {
+      console.error("Report submit error:", err);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Couldn't submit report. Check your connection and try again." } }));
+    } finally {
+      submittingReportRef.current = false;
+      setIsSubmittingReport(false);
     }
   };
 
@@ -957,7 +980,11 @@ export default function ClipCard({
 
           {/* Report Button */}
           <button 
-            onClick={() => setShowReportMenu(!showReportMenu)}
+            type="button"
+            onClick={() => {
+              setShowReportMenu(!showReportMenu);
+              setSelectedReportReason(null);
+            }}
             className={`flex items-center gap-1 transition-colors cursor-pointer ${
               isReported ? "text-rose-400" : "text-slate-500 hover:text-slate-300"
             }`}
@@ -1020,8 +1047,12 @@ export default function ClipCard({
               </p>
             </div>
             <button 
-              onClick={() => setShowReportMenu(false)}
-              className="text-slate-500 hover:text-slate-300 text-xs font-mono p-1"
+              type="button"
+              onClick={() => {
+                setShowReportMenu(false);
+                setSelectedReportReason(null);
+              }}
+              className="text-slate-500 hover:text-slate-300 text-xs font-mono p-1 cursor-pointer"
             >
               ✕
             </button>
@@ -1036,16 +1067,37 @@ export default function ClipCard({
               "Spam",
               "Copyright",
               "Other"
-            ].map((reason) => (
-              <button
-                key={reason}
-                onClick={() => handleReport(reason)}
-                className="py-1.5 px-2.5 bg-[#090b0e] border border-slate-800 hover:border-red-500/40 text-slate-300 hover:text-red-400 rounded-lg text-[10px] font-mono font-bold transition-all text-left truncate cursor-pointer active:scale-95 flex items-center gap-1"
-              >
-                <span className="text-red-400">⚠️</span>
-                <span className="truncate">{reason}</span>
-              </button>
-            ))}
+            ].map((reason) => {
+              const selected = selectedReportReason === reason;
+              return (
+                <button
+                  key={reason}
+                  type="button"
+                  onClick={() => setSelectedReportReason(reason)}
+                  aria-pressed={selected}
+                  className={`py-1.5 px-2.5 rounded-lg text-[10px] font-mono font-bold transition-all text-left truncate cursor-pointer active:scale-95 flex items-center gap-1 border ${
+                    selected
+                      ? "border-red-500 bg-red-500/10 text-red-300"
+                      : "bg-[#090b0e] border-slate-800 hover:border-red-500/40 text-slate-300 hover:text-red-400"
+                  }`}
+                >
+                  <span className="text-red-400">⚠️</span>
+                  <span className="truncate">{reason}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="pt-1 flex justify-end">
+            <button
+              type="button"
+              disabled={!selectedReportReason || isSubmittingReport}
+              onClick={handleReport}
+              className="py-1.5 px-3 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <Flag className="w-3 h-3" />
+              <span>{isSubmittingReport ? "Submitting…" : "Submit report"}</span>
+            </button>
           </div>
         </div>
       )}

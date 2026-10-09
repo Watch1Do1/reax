@@ -1091,51 +1091,52 @@ class SupabaseStore implements Store {
   }
 
   async insertReport(report: Report): Promise<Report> {
-    try {
-      await this.client.from("reports").insert([{
-        id: report.id,
-        clip_id: report.clipId,
-        reporter: report.reporter,
-        reason: report.reason,
-        created_at: report.createdAt
-      }]);
-    } catch (err) {
-      console.warn("insertReport note: reports table optional or error:", err);
+    const { error } = await this.client.from("reports").insert([{
+      id: report.id,
+      clip_id: report.clipId,
+      reporter: report.reporter,
+      reason: report.reason,
+      created_at: report.createdAt
+    }]);
+    if (error) {
+      console.error("SupabaseStore.insertReport error:", error);
+      throw error;
     }
     return report;
   }
 
   async getReports(): Promise<Array<Report & { clip?: Partial<Clip> | null }>> {
-    try {
-      const { data, error } = await this.client
-        .from("reports")
-        .select("*")
-        .order("created_at", { ascending: false });
+    const { data, error } = await this.client
+      .from("reports")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-      if (!error && data && Array.isArray(data)) {
-        const clips = await this.getClips(true);
-        return data.map((r: any) => {
-          const clip = clips.find(c => c.id === r.clip_id);
-          return {
-            id: r.id,
-            clipId: r.clip_id,
-            reporter: r.reporter,
-            reason: r.reason,
-            createdAt: r.created_at,
-            clip: clip ? {
-              id: clip.id,
-              authorName: clip.authorName,
-              mediaUrl: clip.mediaUrl,
-              voiceText: clip.voiceText,
-              overlayText: clip.overlayText,
-              deleted: clip.deleted || false,
-              reportCount: clip.reportCount || 0
-            } : null
-          };
-        });
-      }
-    } catch (err) {
-      console.warn("getReports warning:", err);
+    if (error) {
+      console.error("SupabaseStore.getReports error:", error);
+      throw error;
+    }
+
+    if (data && Array.isArray(data)) {
+      const clips = await this.getClips(true);
+      return data.map((r: any) => {
+        const clip = clips.find(c => c.id === r.clip_id);
+        return {
+          id: r.id,
+          clipId: r.clip_id,
+          reporter: r.reporter,
+          reason: r.reason,
+          createdAt: r.created_at,
+          clip: clip ? {
+            id: clip.id,
+            authorName: clip.authorName,
+            mediaUrl: clip.mediaUrl,
+            voiceText: clip.voiceText,
+            overlayText: clip.overlayText,
+            deleted: clip.deleted || false,
+            reportCount: clip.reportCount || 0
+          } : null
+        };
+      });
     }
     return [];
   }
@@ -4185,9 +4186,6 @@ app.post("/api/clips/:id/report", async (req, res) => {
       return res.status(404).json({ error: "Clip not found" });
     }
 
-    const nextReportCount = (clip.reportCount || 0) + 1;
-    await store!.updateClip(clipId, { reportCount: nextReportCount });
-
     const newReport: Report = {
       id: crypto.randomUUID(),
       clipId,
@@ -4197,10 +4195,14 @@ app.post("/api/clips/:id/report", async (req, res) => {
     };
 
     await store!.insertReport(newReport);
+
+    const nextReportCount = (clip.reportCount || 0) + 1;
+    await store!.updateClip(clipId, { reportCount: nextReportCount });
+
     res.json({ success: true, report: newReport, reportCount: nextReportCount });
   } catch (err: any) {
     console.error("Error reporting clip:", err);
-    res.status(500).json({ error: "Failed to report clip" });
+    res.status(500).json({ error: "Failed to save report" });
   }
 });
 
