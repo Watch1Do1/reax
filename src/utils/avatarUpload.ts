@@ -1,50 +1,73 @@
 import { getAuthToken, getSupabaseClient } from "./supabaseClient";
 
 export async function uploadAvatar(file: File): Promise<string> {
-  if (!file.type || !file.type.startsWith("image/")) {
+  const isImageMime = file.type && file.type.startsWith("image/");
+  const isImageExt = /\.(heic|heif|jpg|jpeg|png|webp|gif)$/i.test(file.name || "");
+  if (!isImageMime && !isImageExt) {
     throw new Error("Please choose an image.");
   }
 
   let bmp: ImageBitmap;
   try {
-    bmp = await createImageBitmap(file);
+    bmp = await createImageBitmap(file, { imageOrientation: "from-image" } as any);
   } catch {
-    throw new Error("Couldn't read that image. Try a JPEG or PNG.");
-  }
-
-  const s = Math.min(bmp.width, bmp.height);
-  const sx = (bmp.width - s) / 2;
-  const sy = (bmp.height - s) / 2;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Could not process image.");
-  }
-  ctx.drawImage(bmp, sx, sy, s, s, 0, 0, 256, 256);
-
-  let blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/webp", 0.85)
-  );
-  if (!blob || blob.type !== "image/webp") {
-    blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", 0.85)
-    );
-  }
-  if (!blob) {
-    throw new Error("Could not process image.");
-  }
-
-  if (blob.size > 300 * 1024) {
-    const fallbackType = blob.type === "image/webp" ? "image/webp" : "image/jpeg";
-    blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, fallbackType, 0.7)
-    );
-    if (!blob || blob.size > 300 * 1024) {
-      throw new Error("Image too large.");
+    try {
+      bmp = await createImageBitmap(file);
+    } catch {
+      throw new Error(
+        "Couldn't read that image. HEIC photos work in Safari; otherwise try a JPEG or PNG."
+      );
     }
+  }
+
+  const render = (size: number): HTMLCanvasElement => {
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Could not process image.");
+    }
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(0, 0, size, size);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    const scale = Math.min(size / bmp.width, size / bmp.height);
+    const dw = Math.round(bmp.width * scale);
+    const dh = Math.round(bmp.height * scale);
+    const dx = Math.round((size - dw) / 2);
+    const dy = Math.round((size - dh) / 2);
+    ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, dx, dy, dw, dh);
+    return canvas;
+  };
+
+  const encode = (
+    canvas: HTMLCanvasElement,
+    mimeType: string,
+    quality: number
+  ): Promise<Blob | null> => {
+    return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, mimeType, quality));
+  };
+
+  const probe = await encode(render(8), "image/webp", 0.8);
+  const type = probe?.type === "image/webp" ? "image/webp" : "image/jpeg";
+
+  let blob: Blob | null = null;
+  outer: for (const size of [256, 192, 128]) {
+    const c = render(size);
+    for (const q of [0.85, 0.75, 0.65, 0.55, 0.45]) {
+      const b = await encode(c, type, q);
+      if (b && b.type === type && b.size <= 300 * 1024) {
+        blob = b;
+        break outer;
+      }
+    }
+  }
+
+  bmp.close?.();
+
+  if (!blob) {
+    throw new Error("Image too large.");
   }
 
   const token = await getAuthToken();
