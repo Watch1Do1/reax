@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
 export interface AvatarProps {
   url?: string | null;
@@ -9,6 +9,10 @@ export interface AvatarProps {
 
 export function Avatar({ url, name, size = 28, className = "" }: AvatarProps) {
   const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [url]);
 
   const ok =
     typeof url === "string" &&

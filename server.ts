@@ -2429,79 +2429,84 @@ app.post("/api/me", async (req, res) => {
 
 // API: Save User Profile Avatar
 app.post("/api/me/avatar", async (req, res) => {
-  const authRes = await authenticateUser(req);
-  if (authRes.ok === false) {
-    return res.status(authRes.status).json({ error: authRes.error });
-  }
-  const { user } = authRes.auth;
+  try {
+    const authRes = await authenticateUser(req);
+    if (authRes.ok === false) {
+      return res.status(authRes.status).json({ error: authRes.error });
+    }
+    const { user } = authRes.auth;
 
-  const isAnon = Boolean(user.is_anonymous || !user.email);
-  if (isAnon || !user.email_confirmed_at) {
-    return res.status(403).json({ error: "Confirm your email to add a profile photo." });
-  }
+    const isAnon = Boolean(user.is_anonymous || !user.email);
+    if (isAnon || !user.email_confirmed_at) {
+      return res.status(403).json({ error: "Confirm your email to add a profile photo." });
+    }
 
-  if (!supabaseAdmin) {
-    return res.status(503).json({ error: "storage_unconfigured" });
-  }
+    if (!supabaseAdmin) {
+      return res.status(503).json({ error: "storage_unconfigured" });
+    }
 
-  const { path, bucket } = req.body;
-  if (bucket !== "media" && bucket !== "reactions") {
-    return res.status(400).json({ error: "Invalid bucket." });
-  }
+    const { path, bucket } = req.body;
+    if (bucket !== "media" && bucket !== "reactions") {
+      return res.status(400).json({ error: "Invalid bucket." });
+    }
 
-  const avatarPathRegex = new RegExp(`^avatars/${user.id}/[0-9a-f-]{36}\\.(webp|jpg)$`);
-  if (typeof path !== "string" || !avatarPathRegex.test(path)) {
-    return res.status(403).json({ error: "You can only set your own profile photo." });
-  }
+    const avatarPathRegex = new RegExp(`^avatars/${user.id}/[0-9a-f-]{36}\\.(webp|jpg)$`);
+    if (typeof path !== "string" || !avatarPathRegex.test(path)) {
+      return res.status(403).json({ error: "You can only set your own profile photo." });
+    }
 
-  const info = await supabaseAdmin.storage.from(bucket).info(path);
-  if (info.error || !info.data) {
-    return res.status(400).json({ error: "Upload not found." });
-  }
+    const info = await supabaseAdmin.storage.from(bucket).info(path);
+    if (info.error || !info.data) {
+      return res.status(400).json({ error: "Upload not found." });
+    }
 
-  const size = info.data.size ?? info.data.metadata?.size;
-  const type = (info.data.contentType ?? info.data.metadata?.mimetype ?? "").toLowerCase();
+    const size = info.data.size ?? info.data.metadata?.size;
+    const type = (info.data.contentType ?? info.data.metadata?.mimetype ?? "").toLowerCase();
 
-  if (!size || size > AVATAR_MAX_BYTES || (type !== "image/webp" && type !== "image/jpeg")) {
-    await supabaseAdmin.storage.from(bucket).remove([path]);
-    return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
-  }
+    if (!size || size > AVATAR_MAX_BYTES || (type !== "image/webp" && type !== "image/jpeg")) {
+      await supabaseAdmin.storage.from(bucket).remove([path]);
+      return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
+    }
 
-  const dl = await supabaseAdmin.storage.from(bucket).download(path);
-  if (dl.error || !dl.data) {
-    await supabaseAdmin.storage.from(bucket).remove([path]);
-    return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
-  }
+    const dl = await supabaseAdmin.storage.from(bucket).download(path);
+    if (dl.error || !dl.data) {
+      await supabaseAdmin.storage.from(bucket).remove([path]);
+      return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
+    }
 
-  const b = new Uint8Array(await dl.data.arrayBuffer()).slice(0, 12);
-  const isJpeg = b.length >= 3 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
-  const isWebP =
-    b.length >= 12 &&
-    b[0] === 0x52 &&
-    b[1] === 0x49 &&
-    b[2] === 0x46 &&
-    b[3] === 0x46 &&
-    b[8] === 0x57 &&
-    b[9] === 0x45 &&
-    b[10] === 0x42 &&
-    b[11] === 0x50;
+    const b = new Uint8Array(await dl.data.arrayBuffer()).slice(0, 12);
+    const isJpeg = b.length >= 3 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
+    const isWebP =
+      b.length >= 12 &&
+      b[0] === 0x52 &&
+      b[1] === 0x49 &&
+      b[2] === 0x46 &&
+      b[3] === 0x46 &&
+      b[8] === 0x57 &&
+      b[9] === 0x45 &&
+      b[10] === 0x42 &&
+      b[11] === 0x50;
 
-  if (!isJpeg && !isWebP) {
-    await supabaseAdmin.storage.from(bucket).remove([path]);
-    return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
-  }
+    if (!isJpeg && !isWebP) {
+      await supabaseAdmin.storage.from(bucket).remove([path]);
+      return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
+    }
 
-  const publicUrl = supabaseAdmin.storage.from(bucket).getPublicUrl(path).data.publicUrl;
-  if (!safeAvatarUrl(publicUrl)) {
-    return res.status(500).json({ error: "Could not generate valid avatar URL." });
-  }
+    const publicUrl = supabaseAdmin.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+    if (!safeAvatarUrl(publicUrl)) {
+      return res.status(500).json({ error: "Could not generate valid avatar URL." });
+    }
 
-  const { error } = await supabaseAdmin.from("user_profiles").update({ avatar_url: publicUrl }).eq("id", user.id);
-  if (error) {
+    const { error } = await supabaseAdmin.from("user_profiles").update({ avatar_url: publicUrl }).eq("id", user.id);
+    if (error) {
+      return res.status(500).json({ error: "Could not save profile photo." });
+    }
+
+    return res.json({ avatarUrl: publicUrl });
+  } catch (err) {
+    console.error("[avatar] save failed", err);
     return res.status(500).json({ error: "Could not save profile photo." });
   }
-
-  return res.json({ avatarUrl: publicUrl });
 });
 
 // API: Record Policy Acceptance (Terms of Service & Privacy Policy)
