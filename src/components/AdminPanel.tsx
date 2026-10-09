@@ -9,6 +9,7 @@ import {
 import { Clip } from "../types";
 import { getAuthToken } from "../utils/supabaseClient";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import Avatar from "./Avatar";
 
 interface AdminPanelProps {
   key?: string | number | null;
@@ -64,6 +65,7 @@ type AdminUser = {
   strikes: number;
   isConfirmed?: boolean;
   authSource?: string;
+  avatarUrl?: string | null;
 };
 
 export default function AdminPanel({ onClose, onRefreshClips, onSelectThread }: AdminPanelProps) {
@@ -452,6 +454,23 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
       }
     } catch (err) {
       showToast("Failed to issue strike.");
+    }
+  };
+
+  // Clear User Avatar
+  const handleClearAvatar = async (userId?: string) => {
+    if (!userId) return;
+    try {
+      const res = await adminFetch(`/api/admin/users/${userId}/clear-avatar`, { method: "POST" });
+      if (res.ok) {
+        showToast("Avatar cleared");
+        await loadAdminData();
+      } else {
+        const data = await res.json().catch(() => null);
+        showToast(data?.error || "Failed to clear avatar");
+      }
+    } catch (err: any) {
+      showToast(err?.message || "Failed to clear avatar");
     }
   };
 
@@ -1310,6 +1329,7 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
                                     <div className="flex items-center gap-2">
                                       <span className={`w-2 h-2 rounded-full shrink-0 ${user.suspended ? "bg-red-500" : "bg-emerald-400"}`} />
                                       <div className="flex items-center gap-1.5 flex-wrap">
+                                        <Avatar url={user.avatarUrl} name={user.username} size={20} />
                                         <span className="font-mono text-xs">@{user.username}</span>
                                         {isConfirmed ? (
                                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-bold uppercase tracking-wide">
@@ -1381,6 +1401,16 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
                                     >
                                       Clips
                                     </button>
+
+                                    {user.avatarUrl && (
+                                      <button 
+                                        onClick={() => handleClearAvatar(user.id)}
+                                        className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-rose-400 hover:text-rose-300 rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer"
+                                        title="Clear avatar"
+                                      >
+                                        Clear avatar
+                                      </button>
+                                    )}
 
                                     <button 
                                       onClick={() => handleIssueStrike(user.username)}

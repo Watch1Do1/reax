@@ -15,6 +15,8 @@ import {
 } from "../utils/supabaseClient";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
+import Avatar from "./Avatar";
+import { uploadAvatar } from "../utils/avatarUpload";
 import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "../utils/reservedUsernames";
 
 export interface ProfilePanelProps {
@@ -59,6 +61,11 @@ export default function ProfilePanel({
   const [isSavingUsername, setIsSavingUsername] = useState(false);
   const savedUsernameRef = useRef<string | null>(null);
 
+  // Avatar state
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (!isOpen) {
       savedUsernameRef.current = null;
@@ -81,6 +88,9 @@ export default function ProfilePanel({
         if (!isCurrent || savedUsernameRef.current) return;
         if (profile?.isOfficial) {
           setIsOfficial(true);
+        }
+        if (profile?.avatarUrl !== undefined) {
+          setAvatarUrl(profile.avatarUrl || null);
         }
         if (profile?.username) {
           setEditedUsername(profile.username);
@@ -114,6 +124,32 @@ export default function ProfilePanel({
     const cleanAuthor = (c.authorName || "").trim().toLowerCase().replace(/^@/, "").replace(/^~/, "");
     return cleanAuthor === cleanCurrent && cleanAuthor.length > 0;
   });
+
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingAvatar(true);
+    try {
+      const newUrl = await uploadAvatar(file);
+      setAvatarUrl(newUrl);
+      window.dispatchEvent(
+        new CustomEvent("reax_toast", { detail: { message: "Profile photo updated" } })
+      );
+      onRefreshClips?.();
+    } catch (err: any) {
+      window.dispatchEvent(
+        new CustomEvent("reax_toast", {
+          detail: { message: err?.message || "Failed to update profile photo." },
+        })
+      );
+    } finally {
+      setIsUploadingAvatar(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -273,53 +309,75 @@ export default function ProfilePanel({
               )}
             </div>
 
-            {isEditingUsername ? (
-              <form onSubmit={handleSaveUsername} className="space-y-2 pt-1">
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <span className="absolute left-3 top-2.5 text-xs text-slate-500 font-mono">@</span>
-                    <input
-                      type="text"
-                      value={editedUsername}
-                      onChange={(e) => setEditedUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
-                      className="w-full pl-7 pr-3 py-2 bg-slate-900 border border-indigo-500/50 rounded-lg text-sm text-white font-mono focus:outline-none"
-                      maxLength={20}
-                      autoFocus
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isSavingUsername}
-                    className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold font-mono rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsEditingUsername(false);
-                      setEditedUsername(savedUsernameRef.current || currentUsername);
-                      setUsernameError(null);
-                    }}
-                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono rounded-lg transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-                {usernameError && (
-                  <div className="flex items-center gap-1.5 p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
-                    <span>{usernameError}</span>
+            <div className="flex items-center gap-3.5 pt-1">
+              <Avatar url={avatarUrl} name={currentUsername} size={56} />
+              <div className="min-w-0 flex-1">
+                {isEditingUsername ? (
+                  <form onSubmit={handleSaveUsername} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-2.5 text-xs text-slate-500 font-mono">@</span>
+                        <input
+                          type="text"
+                          value={editedUsername}
+                          onChange={(e) => setEditedUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
+                          className="w-full pl-7 pr-3 py-2 bg-slate-900 border border-indigo-500/50 rounded-lg text-sm text-white font-mono focus:outline-none"
+                          maxLength={20}
+                          autoFocus
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={isSavingUsername}
+                        className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold font-mono rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsEditingUsername(false);
+                          setEditedUsername(savedUsernameRef.current || currentUsername);
+                          setUsernameError(null);
+                        }}
+                        className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono rounded-lg transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {usernameError && (
+                      <div className="flex items-center gap-1.5 p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-mono">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                        <span>{usernameError}</span>
+                      </div>
+                    )}
+                  </form>
+                ) : (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-lg font-bold font-mono text-white truncate">@{editedUsername || currentUsername}</span>
+                    {isOfficial && <OfficialBadge />}
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                   </div>
                 )}
-              </form>
-            ) : (
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-lg font-bold font-mono text-white">@{editedUsername || currentUsername}</span>
-                {isOfficial && <OfficialBadge />}
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <div className="mt-1.5 flex items-center">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                    className="hidden"
+                    onChange={handleAvatarFileChange}
+                  />
+                  <button
+                    type="button"
+                    disabled={isUploadingAvatar}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 font-mono font-medium hover:underline cursor-pointer disabled:opacity-50"
+                  >
+                    {isUploadingAvatar ? "Uploading…" : "Change photo"}
+                  </button>
+                </div>
               </div>
-            )}
+            </div>
 
             {email && (
               <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono">

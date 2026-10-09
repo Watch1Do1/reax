@@ -75,6 +75,15 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && !isPlaceholder(SUPABASE_URL)) {
   }
 }
 
+const AVATAR_PUBLIC_PREFIXES = SUPABASE_URL
+  ? ["media", "reactions"].map(b => `${SUPABASE_URL.replace(/\/+$/, "")}/storage/v1/object/public/${b}/avatars/`)
+  : [];
+function safeAvatarUrl(url: any): string | null {
+  if (typeof url !== "string" || !url) return null;
+  return AVATAR_PUBLIC_PREFIXES.some(p => url.startsWith(p)) ? url : null;
+}
+const AVATAR_MAX_BYTES = 300 * 1024;
+
 // Data Types
 export type Clip = {
   id: string;
@@ -99,6 +108,7 @@ export type Clip = {
   deleted?: boolean;
   reportCount?: number;
   authorIsOfficial?: boolean;
+  authorAvatarUrl?: string | null;
 };
 
 export type Report = {
@@ -125,6 +135,7 @@ export type UserProfile = {
   acceptedTermsAt?: string | null;
   acceptedPrivacyAt?: string | null;
   isOfficial?: boolean;
+  avatarUrl?: string | null;
 };
 
 export type FunnelStats = {
@@ -770,12 +781,16 @@ class SupabaseStore implements Store {
         try {
           const { data: userRows } = await this.client
             .from("user_profiles")
-            .select("id, user_id, username, is_official")
+            .select("id, user_id, username, is_official, avatar_url")
             .or(`id.in.(${authorIds.join(",")}),user_id.in.(${authorIds.join(",")})`);
 
           if (userRows && userRows.length > 0) {
             const userMap = new Map<string, { username: string; isOfficial?: boolean }>();
+            const avatarMap = new Map<string, string | null>();
             for (const u of userRows) {
+              const safeUrl = safeAvatarUrl(u.avatar_url);
+              if (u.id) avatarMap.set(u.id, safeUrl);
+              if (u.user_id) avatarMap.set(u.user_id, safeUrl);
               if (u.username) {
                 const info = { username: u.username, isOfficial: Boolean(u.is_official) };
                 if (u.id) userMap.set(u.id, info);
@@ -784,6 +799,9 @@ class SupabaseStore implements Store {
             }
             for (const c of filtered) {
               const uId = c.userId || c.authorId;
+              if (uId && avatarMap.has(uId)) {
+                c.authorAvatarUrl = avatarMap.get(uId);
+              }
               if (uId && userMap.has(uId)) {
                 const info = userMap.get(uId)!;
                 c.authorName = info.username;
@@ -818,12 +836,15 @@ class SupabaseStore implements Store {
       try {
         const { data: userRow } = await this.client
           .from("user_profiles")
-          .select("username, is_official")
+          .select("username, is_official, avatar_url")
           .or(`id.eq.${uId},user_id.eq.${uId}`)
           .maybeSingle();
-        if (userRow?.username) {
-          clip.authorName = userRow.username;
-          clip.authorIsOfficial = Boolean(userRow.is_official);
+        if (userRow) {
+          clip.authorAvatarUrl = safeAvatarUrl(userRow.avatar_url);
+          if (userRow.username) {
+            clip.authorName = userRow.username;
+            clip.authorIsOfficial = Boolean(userRow.is_official);
+          }
         }
       } catch {}
     }
@@ -1341,7 +1362,8 @@ class SupabaseStore implements Store {
           acceptedPrivacyVersion: u.accepted_privacy_version || authUser?.user_metadata?.accepted_privacy_version || null,
           acceptedTermsAt: u.accepted_terms_at || authUser?.user_metadata?.accepted_terms_at || null,
           acceptedPrivacyAt: u.accepted_privacy_at || authUser?.user_metadata?.accepted_privacy_at || null,
-          isOfficial: Boolean(u.is_official)
+          isOfficial: Boolean(u.is_official),
+          avatarUrl: safeAvatarUrl(u.avatar_url)
         });
       }
 
@@ -1419,7 +1441,8 @@ class SupabaseStore implements Store {
             acceptedPrivacyVersion: data.accepted_privacy_version || null,
             acceptedTermsAt: data.accepted_terms_at || null,
             acceptedPrivacyAt: data.accepted_privacy_at || null,
-            isOfficial: Boolean(data.is_official)
+            isOfficial: Boolean(data.is_official),
+            avatarUrl: safeAvatarUrl(data.avatar_url)
           };
         }
       }
@@ -1451,7 +1474,8 @@ class SupabaseStore implements Store {
               acceptedPrivacyVersion: matched.accepted_privacy_version || null,
               acceptedTermsAt: matched.accepted_terms_at || null,
               acceptedPrivacyAt: matched.accepted_privacy_at || null,
-              isOfficial: Boolean(matched.is_official)
+              isOfficial: Boolean(matched.is_official),
+              avatarUrl: safeAvatarUrl(matched.avatar_url)
             };
           }
         }
@@ -2401,6 +2425,83 @@ app.post("/api/me", async (req, res) => {
     console.error("Error in POST /api/me:", err);
     return res.status(500).json({ error: err?.message || "Failed to update profile" });
   }
+});
+
+// API: Save User Profile Avatar
+app.post("/api/me/avatar", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+
+  const isAnon = Boolean(user.is_anonymous || !user.email);
+  if (isAnon || !user.email_confirmed_at) {
+    return res.status(403).json({ error: "Confirm your email to add a profile photo." });
+  }
+
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "storage_unconfigured" });
+  }
+
+  const { path, bucket } = req.body;
+  if (bucket !== "media" && bucket !== "reactions") {
+    return res.status(400).json({ error: "Invalid bucket." });
+  }
+
+  const avatarPathRegex = new RegExp(`^avatars/${user.id}/[0-9a-f-]{36}\\.(webp|jpg)$`);
+  if (typeof path !== "string" || !avatarPathRegex.test(path)) {
+    return res.status(403).json({ error: "You can only set your own profile photo." });
+  }
+
+  const info = await supabaseAdmin.storage.from(bucket).info(path);
+  if (info.error || !info.data) {
+    return res.status(400).json({ error: "Upload not found." });
+  }
+
+  const size = info.data.size ?? info.data.metadata?.size;
+  const type = (info.data.contentType ?? info.data.metadata?.mimetype ?? "").toLowerCase();
+
+  if (!size || size > AVATAR_MAX_BYTES || (type !== "image/webp" && type !== "image/jpeg")) {
+    await supabaseAdmin.storage.from(bucket).remove([path]);
+    return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
+  }
+
+  const dl = await supabaseAdmin.storage.from(bucket).download(path);
+  if (dl.error || !dl.data) {
+    await supabaseAdmin.storage.from(bucket).remove([path]);
+    return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
+  }
+
+  const b = new Uint8Array(await dl.data.arrayBuffer()).slice(0, 12);
+  const isJpeg = b.length >= 3 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
+  const isWebP =
+    b.length >= 12 &&
+    b[0] === 0x52 &&
+    b[1] === 0x49 &&
+    b[2] === 0x46 &&
+    b[3] === 0x46 &&
+    b[8] === 0x57 &&
+    b[9] === 0x45 &&
+    b[10] === 0x42 &&
+    b[11] === 0x50;
+
+  if (!isJpeg && !isWebP) {
+    await supabaseAdmin.storage.from(bucket).remove([path]);
+    return res.status(400).json({ error: "Profile photo must be a JPEG/WebP under 300 KB." });
+  }
+
+  const publicUrl = supabaseAdmin.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  if (!safeAvatarUrl(publicUrl)) {
+    return res.status(500).json({ error: "Could not generate valid avatar URL." });
+  }
+
+  const { error } = await supabaseAdmin.from("user_profiles").update({ avatar_url: publicUrl }).eq("id", user.id);
+  if (error) {
+    return res.status(500).json({ error: "Could not save profile photo." });
+  }
+
+  return res.json({ avatarUrl: publicUrl });
 });
 
 // API: Record Policy Acceptance (Terms of Service & Privacy Policy)
@@ -3661,6 +3762,28 @@ app.post("/api/upload/sign", async (req, res) => {
   const { user } = authRes.auth;
   const userId = user.id;
 
+  if ((req.body.kind || "").toLowerCase().trim() === "avatar") {
+    const isAnon = Boolean(user.is_anonymous || !user.email);
+    if (isAnon || !user.email_confirmed_at) return res.status(403).json({ error: "Confirm your email to add a profile photo." });
+    const ct = String(req.body.contentType || "").toLowerCase().trim();
+    if (ct !== "image/webp" && ct !== "image/jpeg") return res.status(400).json({ error: "Profile photo must be WebP or JPEG." });
+    const storageClient = supabaseAdmin;
+    if (!storageClient) return res.status(503).json({ error: "storage_unconfigured" });
+    const ext = ct === "image/webp" ? "webp" : "jpg";
+    const avatarPath = `avatars/${user.id}/${crypto.randomUUID()}.${ext}`;
+    let bucket = "media";
+    let signRes = await storageClient.storage.from("media").createSignedUploadUrl(avatarPath);
+    if (signRes.error) {
+      const m = (signRes.error.message || "").toLowerCase();
+      if (m.includes("not found") || m.includes("bucket")) {
+        bucket = "reactions";
+        signRes = await storageClient.storage.from("reactions").createSignedUploadUrl(avatarPath);
+      }
+    }
+    if (signRes.error || !signRes.data) return res.status(400).json({ error: "Could not prepare upload." });
+    return res.json({ signedUrl: signRes.data.signedUrl, token: signRes.data.token, path: avatarPath, bucket, contentType: ct });
+  }
+
   // Guest quota check: anonymous users capped at 3 clips
   const isAnon = Boolean(user.is_anonymous || !user.email);
   if (isAnon) {
@@ -4290,7 +4413,8 @@ app.get("/api/admin/users", async (req, res) => {
       suspended: Boolean(u.suspended),
       strikes: typeof u.strikes === "number" ? u.strikes : 0,
       isConfirmed: typeof u.isConfirmed === "boolean" ? u.isConfirmed : Boolean(u.email),
-      authSource: u.authSource || (u.email ? "profile_email" : "guest")
+      authSource: u.authSource || (u.email ? "profile_email" : "guest"),
+      avatarUrl: u.avatarUrl || null
     }));
     res.json(formatted);
   } catch (err: any) {
@@ -4437,6 +4561,28 @@ app.post("/api/admin/users/:username/strike", async (req, res) => {
   } catch (err: any) {
     console.error("Error adding strike:", err);
     res.status(500).json({ error: "Failed to add strike" });
+  }
+});
+
+// 11b. POST Clear avatar for user
+app.post("/api/admin/users/:id/clear-avatar", async (req, res) => {
+  const { id } = req.params;
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ error: "Invalid user ID" });
+  }
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "storage_unconfigured" });
+  }
+  try {
+    const { error } = await supabaseAdmin.from("user_profiles").update({ avatar_url: null }).eq("id", id);
+    if (error) {
+      console.error("Error clearing avatar:", error);
+      return res.status(500).json({ error: "Failed to clear avatar" });
+    }
+    return res.json({ success: true });
+  } catch (err: any) {
+    console.error("Error clearing avatar:", err);
+    return res.status(500).json({ error: "Failed to clear avatar" });
   }
 });
 

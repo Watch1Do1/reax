@@ -8,6 +8,7 @@ import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import { getAuthToken } from "../utils/supabaseClient";
 import ShareModal from "./ShareModal";
 import OfficialBadge from "./OfficialBadge";
+import Avatar from "./Avatar";
 
 interface ClipCardProps {
   key?: string | number | null;
@@ -569,9 +570,12 @@ export default function ClipCard({
           className="flex items-center gap-2 group cursor-pointer text-left focus:outline-none"
           title={`View @${clip.authorName}'s reactions & profile`}
         >
-          <div className="w-7 h-7 rounded-full bg-slate-800 group-hover:bg-indigo-600 text-slate-200 group-hover:text-white font-bold font-mono text-xs flex items-center justify-center flex-shrink-0 transition-colors shadow-sm">
-            {clip.authorName[0]?.toUpperCase()}
-          </div>
+          <Avatar
+            url={clip.authorAvatarUrl}
+            name={clip.authorName}
+            size={28}
+            className="bg-slate-800 group-hover:bg-indigo-600 text-slate-200 group-hover:text-white font-mono text-xs transition-colors shadow-sm"
+          />
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="font-semibold text-xs text-slate-100 group-hover:text-indigo-300 transition-colors block">

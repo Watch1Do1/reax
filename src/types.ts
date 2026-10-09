@@ -21,6 +21,7 @@ export type Clip = {
   deleted?: boolean;
   reportCount?: number;
   authorIsOfficial?: boolean;
+  authorAvatarUrl?: string | null;
 };
 
 export type Report = {
@@ -47,6 +48,7 @@ export type UserProfile = {
   acceptedTermsAt?: string | null;
   acceptedPrivacyAt?: string | null;
   isOfficial?: boolean;
+  avatarUrl?: string | null;
 };
 
 export type FunnelStats = {

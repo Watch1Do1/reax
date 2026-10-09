@@ -7,6 +7,7 @@ import {
 import { Clip } from "../types";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
+import Avatar from "./Avatar";
 
 export interface UserProfileModalProps {
   isOpen: boolean;
@@ -123,9 +124,12 @@ export default function UserProfileModal({
 
             <div className="flex items-center gap-4">
               {/* User Avatar Initial */}
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-bold font-mono text-xl sm:text-2xl flex items-center justify-center shadow-lg border-2 border-indigo-400/30 flex-shrink-0">
-                {cleanTarget[0]?.toUpperCase() || "U"}
-              </div>
+              <Avatar
+                url={userClips.find((c) => c.authorAvatarUrl)?.authorAvatarUrl}
+                name={cleanTarget}
+                size={64}
+                className="rounded-2xl"
+              />
 
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
