@@ -3,63 +3,34 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script>
-      // Suppress Vite HMR WebSocket connection errors in environments where WebSockets are unsupported/disabled
-      (function() {
-        function isViteWsError(err, msg, filename, stack) {
-          var m = (msg || (err && (err.message || err.toString())) || '') + '';
-          var s = (stack || (err && err.stack) || '') + '';
-          var f = (filename || '') + '';
-          return (
-            m.indexOf('WebSocket') !== -1 ||
-            m.indexOf('vite:ws') !== -1 ||
-            m.indexOf('closed without opened') !== -1 ||
-            s.indexOf('@vite/client') !== -1 ||
-            f.indexOf('@vite/client') !== -1
-          );
-        }
+    <title>Reax: Don't type it. React to it.</title>
+    <meta name="description" content="Reply with video reactions, your own voice, or memes made from your photos. The reaction-first social app. Join the chaos." />
+    <link rel="canonical" href="https://www.getreax.com/" />
 
-        window.addEventListener('unhandledrejection', function (event) {
-          if (isViteWsError(event.reason)) {
-            event.preventDefault();
-            if (typeof event.stopImmediatePropagation === 'function') {
-              event.stopImmediatePropagation();
-            }
-          }
-        }, true);
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Reax" />
+    <meta property="og:url" content="https://www.getreax.com/" />
+    <meta property="og:title" content="Reax: Don't type it. React to it." />
+    <meta property="og:description" content="Reply with video reactions, your own voice, or memes made from your photos. The reaction-first social app. Join the chaos." />
+    <meta property="og:image" content="https://www.getreax.com/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Reax: Don't type it. React to it." />
 
-        window.addEventListener('error', function (event) {
-          if (isViteWsError(event.error, event.message, event.filename)) {
-            event.preventDefault();
-            if (typeof event.stopImmediatePropagation === 'function') {
-              event.stopImmediatePropagation();
-            }
-            return true;
-          }
-        }, true);
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Reax: Don't type it. React to it." />
+    <meta name="twitter:description" content="Reply with video reactions, your own voice, or memes made from your photos. The reaction-first social app. Join the chaos." />
+    <meta name="twitter:image" content="https://www.getreax.com/og-image.png" />
 
-        var origConsoleError = console.error;
-        console.error = function() {
-          var args = Array.prototype.slice.call(arguments);
-          var joined = args.map(function(a) { return (a && a.stack) || a; }).join(' ');
-          if (isViteWsError(null, joined)) {
-            return;
-          }
-          return origConsoleError.apply(console, args);
-        };
-      })();
-    </script>
-    <title>Reax</title>
-    <meta name="description" content="A high-octane social platform where users communicate exclusively using 2-5s expressive video reactions, using AI-generated dialogue and immersive audio." />
-    <meta property="og:title" content="Reax" />
-    <meta property="og:description" content="A high-octane social platform where users communicate exclusively using 2-5s expressive video reactions, using AI-generated dialogue and immersive audio." />
-    
     <!-- Browser Tab Icons & Favicons -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="shortcut icon" href="/favicon.ico" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#4f46e5" />
   </head>

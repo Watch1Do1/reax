@@ -637,7 +637,7 @@ export default function ClipCard({
         className={`relative aspect-video rounded-xl bg-slate-950 overflow-hidden flex items-center justify-center group/media border border-slate-950/40 reax-protected-media ${
           !isVideo && (clip.voiceAudioUrl || clip.voiceAudioData || clip.voiceText || (clip.mediaType === "audio" && clip.mediaUrl)) ? "cursor-pointer" : ""
         }`}
-        onContextMenu={(e) => { e.preventDefault(); handleCopyPicture(); }}
+        onContextMenu={(e) => { e.preventDefault(); if (window.matchMedia?.("(pointer: fine)").matches) handleCopyPicture(); }}
       >
         
         {/* Kinetic animations depending on the tone of the reaction */}

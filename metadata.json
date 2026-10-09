@@ -1,6 +1,6 @@
 {
   "name": "Reax",
-  "description": "A high-octane social platform where users communicate exclusively using 2-5s expressive video reactions, using AI-generated dialogue and immersive audio.",
+  "description": "Reply with video reactions, your own voice, or memes made from your photos. The reaction-first social app. Join the chaos.",
   "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
