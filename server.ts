@@ -1292,12 +1292,15 @@ class SupabaseStore implements Store {
         const authUser = authUsersMap.get(lowerId) || (u.email ? Array.from(authUsersMap.values()).find(a => (a.email || "").toLowerCase() === (u.email || "").toLowerCase()) : null);
 
         const email = u.email || authUser?.email || undefined;
-        const authMetaUname = authUser?.user_metadata?.username || 
+        let authMetaUname = authUser?.user_metadata?.username || 
                               authUser?.raw_user_meta_data?.username || 
                               authUser?.user_metadata?.display_name || 
                               authUser?.raw_user_meta_data?.display_name ||
                               authUser?.user_metadata?.user_name ||
                               authUser?.raw_user_meta_data?.user_name;
+        if (authMetaUname && isReservedUsername(authMetaUname) && authMetaUname.toLowerCase() !== (u.username || "").toLowerCase()) {
+          authMetaUname = undefined;
+        }
         const isPlaceholderUname = !u.username || u.username.startsWith("user_") || u.username.startsWith("Reaxer_");
         const uname = (authMetaUname && (isPlaceholderUname || !u.username))
           ? authMetaUname
@@ -1347,7 +1350,8 @@ class SupabaseStore implements Store {
         if (!mappedUserIds.has(authId)) {
           mappedUserIds.add(authId);
           const email = au.email || undefined;
-          const uname = au.user_metadata?.username || au.user_metadata?.display_name || (email ? email.split("@")[0] : `user_${authId.slice(0, 8)}`);
+          let uname = au.user_metadata?.username || au.user_metadata?.display_name || (email ? email.split("@")[0] : `user_${authId.slice(0, 8)}`);
+          if (isReservedUsername(uname)) uname = `user_${authId.slice(0, 8)}`;
           const clipsTotal = (clipCounts[authId] || 0) + (clipCounts[uname.toLowerCase()] || 0);
 
           const newProfile: UserProfile = {
@@ -2435,9 +2439,12 @@ app.post("/api/policy/accept", async (req, res) => {
 
   try {
     const resolvedUsername = profile?.username || (user.email ? user.email.split("@")[0] : `user_${user.id.slice(0, 8)}`);
+    const safeResolved = (isReservedUsername(resolvedUsername) && resolvedUsername.toLowerCase() !== (profile?.username || "").toLowerCase())
+      ? `user_${user.id.slice(0, 8)}`
+      : resolvedUsername;
     const updatedProfile = await store!.upsertUserProfile({
       id: user.id,
-      username: resolvedUsername,
+      username: safeResolved,
       email: user.email,
       lastActive: now,
       acceptedTermsVersion: termsVersion,
@@ -4309,7 +4316,11 @@ app.post("/api/admin/sync-auth-users", async (req, res) => {
           authCount = authData.users.length;
           for (const au of authData.users) {
             const email = au.email || null;
-            const uname = au.user_metadata?.username || au.user_metadata?.display_name || au.user_metadata?.user_name || (email ? email.split("@")[0] : `user_${au.id.slice(0, 8)}`);
+            let uname = au.user_metadata?.username || au.user_metadata?.display_name || au.user_metadata?.user_name || (email ? email.split("@")[0] : `user_${au.id.slice(0, 8)}`);
+            if (isReservedUsername(uname)) {
+              const existing = await store!.getUserProfile({ id: au.id });
+              uname = existing?.username || `user_${au.id.slice(0, 8)}`;
+            }
             try {
               const { error: upsertErr } = await (supabaseAdmin || supabase)
                 .from("user_profiles")
@@ -4340,10 +4351,14 @@ app.post("/api/admin/sync-auth-users", async (req, res) => {
           authCount = rpcUsers.length;
           for (const ru of rpcUsers) {
             const email = ru.email || null;
-            const uname = ru.raw_user_meta_data?.username || 
+            let uname = ru.raw_user_meta_data?.username || 
                           ru.raw_user_meta_data?.display_name || 
                           ru.raw_user_meta_data?.user_name || 
                           (email ? email.split("@")[0] : `user_${ru.id.slice(0, 8)}`);
+            if (isReservedUsername(uname)) {
+              const existing = await store!.getUserProfile({ id: ru.id });
+              uname = existing?.username || `user_${ru.id.slice(0, 8)}`;
+            }
             try {
               const { error: upsertErr } = await supabase
                 .from("user_profiles")
