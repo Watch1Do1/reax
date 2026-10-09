@@ -14,6 +14,8 @@ import {
   fetchMyProfile
 } from "../utils/supabaseClient";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import OfficialBadge from "./OfficialBadge";
+import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "../utils/reservedUsernames";
 
 export interface ProfilePanelProps {
   isOpen: boolean;
@@ -52,6 +54,7 @@ export default function ProfilePanel({
   // Quick edit username state
   const [isEditingUsername, setIsEditingUsername] = useState(false);
   const [editedUsername, setEditedUsername] = useState(currentUsername);
+  const [isOfficial, setIsOfficial] = useState(false);
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [isSavingUsername, setIsSavingUsername] = useState(false);
   const savedUsernameRef = useRef<string | null>(null);
@@ -76,6 +79,9 @@ export default function ProfilePanel({
       .then(({ profile }) => {
         // Do not reset editedUsername from a stale GET, and do not overwrite if user already saved in this session
         if (!isCurrent || savedUsernameRef.current) return;
+        if (profile?.isOfficial) {
+          setIsOfficial(true);
+        }
         if (profile?.username) {
           setEditedUsername(profile.username);
           if (onUsernameUpdated && profile.username !== currentUsername) {
@@ -151,6 +157,14 @@ export default function ProfilePanel({
     }
     if (clean.length > 20) {
       setUsernameError("Username must be 20 characters or fewer.");
+      return;
+    }
+    if (isOfficial) {
+      setUsernameError(OFFICIAL_RENAME_MESSAGE);
+      return;
+    }
+    if (isReservedUsername(clean) && clean.toLowerCase() !== currentUsername.toLowerCase()) {
+      setUsernameError(RESERVED_USERNAME_MESSAGE);
       return;
     }
 
@@ -244,12 +258,18 @@ export default function ProfilePanel({
                 Username
               </span>
               {!isEditingUsername && (
-                <button
-                  onClick={() => setIsEditingUsername(true)}
-                  className="text-[11px] text-indigo-400 hover:text-indigo-300 font-mono font-bold hover:underline cursor-pointer"
-                >
-                  Edit
-                </button>
+                !isOfficial ? (
+                  <button
+                    onClick={() => setIsEditingUsername(true)}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-mono font-bold hover:underline cursor-pointer"
+                  >
+                    Edit
+                  </button>
+                ) : (
+                  <span className="text-[10px] text-slate-500 font-mono" title={OFFICIAL_RENAME_MESSAGE}>
+                    Official account
+                  </span>
+                )
               )}
             </div>
 
@@ -294,8 +314,9 @@ export default function ProfilePanel({
                 )}
               </form>
             ) : (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-lg font-bold font-mono text-white">@{editedUsername || currentUsername}</span>
+                {isOfficial && <OfficialBadge />}
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
               </div>
             )}

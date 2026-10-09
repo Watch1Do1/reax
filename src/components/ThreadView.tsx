@@ -9,6 +9,7 @@ import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import OfficialBadge from "./OfficialBadge";
 
 interface ThreadViewProps {
   key?: string;
@@ -423,6 +424,7 @@ export default function ThreadView({
                     >
                       @{ultimateRoot.authorName}
                     </button>
+                    {ultimateRoot.authorIsOfficial && <OfficialBadge />}
                     <span className="px-1.5 py-0.2 bg-indigo-500/20 border border-indigo-500/35 rounded text-[8px] font-mono font-black uppercase text-indigo-300 tracking-wider">
                       ROOT
                     </span>
@@ -673,13 +675,16 @@ export default function ThreadView({
                             {directReax.authorName[0]?.toUpperCase()}
                           </button>
                           <div>
-                            <button
-                              type="button"
-                              onClick={() => onViewUser?.(directReax.authorName)}
-                              className="text-xs font-bold text-slate-200 hover:text-indigo-300 transition-colors block text-left cursor-pointer"
-                            >
-                              @{directReax.authorName}
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => onViewUser?.(directReax.authorName)}
+                                className="text-xs font-bold text-slate-200 hover:text-indigo-300 transition-colors block text-left cursor-pointer"
+                              >
+                                @{directReax.authorName}
+                              </button>
+                              {directReax.authorIsOfficial && <OfficialBadge />}
+                            </div>
                             <span className="text-[9px] font-mono text-slate-500 block">
                               {new Date(directReax.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
@@ -877,6 +882,7 @@ export default function ThreadView({
                                         <span className="text-[11px] font-bold text-slate-200 truncate">
                                           @{riff.authorName}
                                         </span>
+                                        {riff.authorIsOfficial && <OfficialBadge />}
                                         <span className="text-[8px] font-mono px-1 rounded bg-slate-800 text-slate-400 uppercase">
                                           {riff.tone}
                                         </span>

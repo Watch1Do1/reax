@@ -15,6 +15,7 @@ import { execFile } from "child_process";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "./src/utils/reservedUsernames";
 
 dotenv.config();
 
@@ -97,6 +98,7 @@ export type Clip = {
   remixedFrom?: string;
   deleted?: boolean;
   reportCount?: number;
+  authorIsOfficial?: boolean;
 };
 
 export type Report = {
@@ -122,6 +124,7 @@ export type UserProfile = {
   acceptedPrivacyVersion?: string | null;
   acceptedTermsAt?: string | null;
   acceptedPrivacyAt?: string | null;
+  isOfficial?: boolean;
 };
 
 export type FunnelStats = {
@@ -306,7 +309,8 @@ class MemoryStore implements Store {
         ...c,
         userId: uId || undefined,
         authorId: uId || undefined,
-        authorName: user ? user.username : c.authorName
+        authorName: user ? user.username : c.authorName,
+        authorIsOfficial: user ? Boolean(user.isOfficial) : Boolean(c.authorIsOfficial)
       };
     });
     return [...resolved].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -321,7 +325,8 @@ class MemoryStore implements Store {
       ...c,
       userId: uId || undefined,
       authorId: uId || undefined,
-      authorName: user ? user.username : c.authorName
+      authorName: user ? user.username : c.authorName,
+      authorIsOfficial: user ? Boolean(user.isOfficial) : Boolean(c.authorIsOfficial)
     };
   }
 
@@ -765,21 +770,24 @@ class SupabaseStore implements Store {
         try {
           const { data: userRows } = await this.client
             .from("user_profiles")
-            .select("id, user_id, username")
+            .select("id, user_id, username, is_official")
             .or(`id.in.(${authorIds.join(",")}),user_id.in.(${authorIds.join(",")})`);
 
           if (userRows && userRows.length > 0) {
-            const userMap = new Map<string, string>();
+            const userMap = new Map<string, { username: string; isOfficial?: boolean }>();
             for (const u of userRows) {
               if (u.username) {
-                if (u.id) userMap.set(u.id, u.username);
-                if (u.user_id) userMap.set(u.user_id, u.username);
+                const info = { username: u.username, isOfficial: Boolean(u.is_official) };
+                if (u.id) userMap.set(u.id, info);
+                if (u.user_id) userMap.set(u.user_id, info);
               }
             }
             for (const c of filtered) {
               const uId = c.userId || c.authorId;
               if (uId && userMap.has(uId)) {
-                c.authorName = userMap.get(uId)!;
+                const info = userMap.get(uId)!;
+                c.authorName = info.username;
+                c.authorIsOfficial = info.isOfficial;
               }
             }
           }
@@ -810,11 +818,12 @@ class SupabaseStore implements Store {
       try {
         const { data: userRow } = await this.client
           .from("user_profiles")
-          .select("username")
+          .select("username, is_official")
           .or(`id.eq.${uId},user_id.eq.${uId}`)
           .maybeSingle();
         if (userRow?.username) {
           clip.authorName = userRow.username;
+          clip.authorIsOfficial = Boolean(userRow.is_official);
         }
       } catch {}
     }
@@ -1328,7 +1337,8 @@ class SupabaseStore implements Store {
           acceptedTermsVersion: u.accepted_terms_version || authUser?.user_metadata?.accepted_terms_version || null,
           acceptedPrivacyVersion: u.accepted_privacy_version || authUser?.user_metadata?.accepted_privacy_version || null,
           acceptedTermsAt: u.accepted_terms_at || authUser?.user_metadata?.accepted_terms_at || null,
-          acceptedPrivacyAt: u.accepted_privacy_at || authUser?.user_metadata?.accepted_privacy_at || null
+          acceptedPrivacyAt: u.accepted_privacy_at || authUser?.user_metadata?.accepted_privacy_at || null,
+          isOfficial: Boolean(u.is_official)
         });
       }
 
@@ -1354,7 +1364,8 @@ class SupabaseStore implements Store {
             acceptedTermsVersion: au.user_metadata?.accepted_terms_version || null,
             acceptedPrivacyVersion: au.user_metadata?.accepted_privacy_version || null,
             acceptedTermsAt: au.user_metadata?.accepted_terms_at || null,
-            acceptedPrivacyAt: au.user_metadata?.accepted_privacy_at || null
+            acceptedPrivacyAt: au.user_metadata?.accepted_privacy_at || null,
+            isOfficial: false
           };
 
           resultProfiles.unshift(newProfile);
@@ -1403,7 +1414,8 @@ class SupabaseStore implements Store {
             acceptedTermsVersion: data.accepted_terms_version || null,
             acceptedPrivacyVersion: data.accepted_privacy_version || null,
             acceptedTermsAt: data.accepted_terms_at || null,
-            acceptedPrivacyAt: data.accepted_privacy_at || null
+            acceptedPrivacyAt: data.accepted_privacy_at || null,
+            isOfficial: Boolean(data.is_official)
           };
         }
       }
@@ -1434,7 +1446,8 @@ class SupabaseStore implements Store {
               acceptedTermsVersion: matched.accepted_terms_version || null,
               acceptedPrivacyVersion: matched.accepted_privacy_version || null,
               acceptedTermsAt: matched.accepted_terms_at || null,
-              acceptedPrivacyAt: matched.accepted_privacy_at || null
+              acceptedPrivacyAt: matched.accepted_privacy_at || null,
+              isOfficial: Boolean(matched.is_official)
             };
           }
         }
@@ -1777,9 +1790,12 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
       // Load profile from store
       let profile = await store!.getUserProfile({ id: user.id });
       if (!profile) {
-        const rawUsername = userData.user.user_metadata?.username || 
-                            userData.user.user_metadata?.display_name || 
-                            `Reaxer_${user.id.slice(0, 5)}`;
+        let rawUsername = userData.user.user_metadata?.username || 
+                          userData.user.user_metadata?.display_name || 
+                          `Reaxer_${user.id.slice(0, 5)}`;
+        if (isReservedUsername(rawUsername)) {
+          rawUsername = `Reaxer_${user.id.slice(0, 5)}`;
+        }
         
         profile = await store!.upsertUserProfile({
           id: user.id,
@@ -1797,7 +1813,7 @@ async function authenticateUser(req: any): Promise<AuthOutcome> {
                           userData.user.user_metadata?.display_name || 
                           userData.user.user_metadata?.user_name;
         const isPlaceholderUname = !profile.username || profile.username.startsWith("user_") || profile.username.startsWith("Reaxer_");
-        if (metaUname && isPlaceholderUname) {
+        if (metaUname && isPlaceholderUname && !isReservedUsername(metaUname)) {
           profile.username = metaUname;
           needsUpdate = true;
         }
@@ -2287,6 +2303,16 @@ app.post("/api/me", async (req, res) => {
   }
 
   try {
+    const currentProfile = await store!.getUserProfile({ id: user.id });
+    if (currentProfile?.isOfficial && currentProfile.username.toLowerCase() !== cleanUsername.toLowerCase()) {
+      return res.status(403).json({ error: OFFICIAL_RENAME_MESSAGE });
+    }
+    if (isReservedUsername(cleanUsername)) {
+      if (!currentProfile || currentProfile.username.toLowerCase() !== cleanUsername.toLowerCase()) {
+        return res.status(403).json({ error: RESERVED_USERNAME_MESSAGE });
+      }
+    }
+
     // Check if another profile has the same LOWER(username) (case-insensitive)
     const existing = await store!.getUserProfile({ username: cleanUsername });
     if (existing && existing.id !== user.id && (existing as any).user_id !== user.id) {
@@ -2469,6 +2495,19 @@ app.get("/api/users/check-username", async (req, res) => {
   }
 
   try {
+    if (isReservedUsername(cleanUsername)) {
+      let allowed = false;
+      if (currentUserId) {
+        const callerProfile = await store!.getUserProfile({ id: currentUserId });
+        if (callerProfile && callerProfile.username.toLowerCase() === cleanUsername.toLowerCase()) {
+          allowed = true;
+        }
+      }
+      if (!allowed) {
+        return res.json({ available: false, error: RESERVED_USERNAME_MESSAGE });
+      }
+    }
+
     const existing = await store!.getUserProfile({ username: cleanUsername });
     if (existing) {
       if (currentUserId && (existing.id === currentUserId || (existing as any).userId === currentUserId)) {
@@ -2635,6 +2674,7 @@ app.post("/api/clips", async (req, res) => {
       userId: user.id,
       authorId: user.id,
       authorName: profile.username,
+      authorIsOfficial: Boolean(profile.isOfficial),
       createdAt: new Date().toISOString(),
       likesCount: 0,
       laughsCount: 0,

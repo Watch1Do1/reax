@@ -7,6 +7,7 @@ import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWaterm
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import { getAuthToken } from "../utils/supabaseClient";
 import ShareModal from "./ShareModal";
+import OfficialBadge from "./OfficialBadge";
 
 interface ClipCardProps {
   key?: string | number | null;
@@ -576,6 +577,7 @@ export default function ClipCard({
               <span className="font-semibold text-xs text-slate-100 group-hover:text-indigo-300 transition-colors block">
                 @{clip.authorName}
               </span>
+              {clip.authorIsOfficial && <OfficialBadge />}
               {clip.authorName.startsWith("~") ? (
                 <span className="text-[9px] px-1 bg-slate-950/60 border border-slate-800/80 rounded text-slate-500 font-bold font-mono">GUEST</span>
               ) : (

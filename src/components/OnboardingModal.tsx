@@ -17,6 +17,7 @@ import {
   getSupabaseClient
 } from "../utils/supabaseClient";
 import PolicyDocumentModal from "./PolicyDocumentModal";
+import { isReservedUsername, RESERVED_USERNAME_MESSAGE } from "../utils/reservedUsernames";
 
 interface OnboardingModalProps {
   key?: string;
@@ -70,7 +71,7 @@ export default function OnboardingModal({
     if (name.length < 3) return "Username must be at least 3 characters";
     if (name.length > 18) return "Username must be 18 characters or fewer";
     if (!/^[a-zA-Z0-9_]+$/.test(name)) return "Allowed: letters, numbers, underscores";
-    if (name.toLowerCase() === "admin" || name.toLowerCase() === "reax") return "This username is reserved";
+    if (isReservedUsername(name)) return RESERVED_USERNAME_MESSAGE;
     return null;
   };
 

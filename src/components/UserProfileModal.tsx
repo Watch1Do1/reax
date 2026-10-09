@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { Clip } from "../types";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import OfficialBadge from "./OfficialBadge";
 
 export interface UserProfileModalProps {
   isOpen: boolean;
@@ -92,6 +93,10 @@ export default function UserProfileModal({
     return userClips;
   }, [userClips, filterTab]);
 
+  const isOfficial = useMemo(() => {
+    return userClips.some((c) => Boolean(c.authorIsOfficial));
+  }, [userClips]);
+
   if (!isOpen || !username) return null;
 
   const isGuest = cleanTarget.startsWith("~") || targetLower === "guest";
@@ -127,6 +132,7 @@ export default function UserProfileModal({
                   <h2 className="text-lg sm:text-xl font-bold text-white font-sans truncate">
                     @{cleanTarget}
                   </h2>
+                  {isOfficial && <OfficialBadge size="md" />}
                   {isGuest ? (
                     <span className="text-[10px] px-2 py-0.5 bg-slate-800 border border-slate-700 rounded-full text-slate-400 font-mono font-bold">
                       GUEST

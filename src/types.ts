@@ -20,6 +20,7 @@ export type Clip = {
   remixedFrom?: string;
   deleted?: boolean;
   reportCount?: number;
+  authorIsOfficial?: boolean;
 };
 
 export type Report = {
@@ -45,6 +46,7 @@ export type UserProfile = {
   acceptedPrivacyVersion?: string | null;
   acceptedTermsAt?: string | null;
   acceptedPrivacyAt?: string | null;
+  isOfficial?: boolean;
 };
 
 export type FunnelStats = {
