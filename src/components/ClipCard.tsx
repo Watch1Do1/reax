@@ -9,6 +9,7 @@ import { getAuthToken } from "../utils/supabaseClient";
 import ShareModal from "./ShareModal";
 import OfficialBadge from "./OfficialBadge";
 import Avatar from "./Avatar";
+import FitMedia from "./FitMedia";
 
 interface ClipCardProps {
   key?: string | number | null;
@@ -647,207 +648,195 @@ export default function ClipCard({
       </div>
 
       {/* Looping Media Box with Kinetic Transform suggestion */}
-      <div 
-        onClick={(e) => {
-          const hasAudio = !!(
-            clip.voiceAudioUrl || 
-            clip.voiceAudioData || 
-            (clip.mediaType === "audio" && clip.mediaUrl) || 
-            (clip.voiceText && (
-              clip.voiceText.startsWith("audio_url:") || 
-              (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4"))) || 
-              (clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction"))
-            ))
-          );
-          if (!isVideo && hasAudio) {
-            handlePlayAudio(e);
-          }
-        }}
-        className={`relative aspect-video rounded-xl bg-slate-950 overflow-hidden flex items-center justify-center group/media border border-slate-950/40 reax-protected-media ${
-          !isVideo && (clip.voiceAudioUrl || clip.voiceAudioData || clip.voiceText || (clip.mediaType === "audio" && clip.mediaUrl)) ? "cursor-pointer" : ""
-        }`}
-        onContextMenu={(e) => { e.preventDefault(); if (window.matchMedia?.("(pointer: fine)").matches) handleCopyPicture(); }}
-      >
+      {(() => {
+        const [kineticEffectName, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "bottom"] = (clip.effect || "zoom").split("|");
         
-        {/* Kinetic animations depending on the tone of the reaction */}
-        {(() => {
-          const [kineticEffectName, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "bottom"] = (clip.effect || "zoom").split("|");
-          
-          const stylePresetClasses: Record<string, string> = {
-            classic: "font-sans font-black text-sm sm:text-base md:text-lg uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
-            bold: "font-sans font-extrabold text-base sm:text-lg md:text-xl uppercase tracking-tighter drop-shadow-md",
-            comic: "font-serif italic font-black text-sm sm:text-base md:text-lg lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
-            glitch: "font-mono font-black text-xs sm:text-sm md:text-base uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
-            cinema: "font-serif font-light text-xs sm:text-sm md:text-base uppercase tracking-[0.25em] text-neutral-100",
-          };
+        const stylePresetClasses: Record<string, string> = {
+          classic: "font-sans font-black text-sm sm:text-base md:text-lg uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
+          bold: "font-sans font-extrabold text-base sm:text-lg md:text-xl uppercase tracking-tighter drop-shadow-md",
+          comic: "font-serif italic font-black text-sm sm:text-base md:text-lg lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
+          glitch: "font-mono font-black text-xs sm:text-sm md:text-base uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
+          cinema: "font-serif font-light text-xs sm:text-sm md:text-base uppercase tracking-[0.25em] text-neutral-100",
+        };
 
-          const textColorClasses: Record<string, string> = {
-            white: "text-white",
-            yellow: "text-yellow-400",
-            red: "text-rose-500",
-            cyan: "text-cyan-400",
-            navy: "text-blue-900",
-            "navy-blue": "text-blue-900",
-          };
+        const textColorClasses: Record<string, string> = {
+          white: "text-white",
+          yellow: "text-yellow-400",
+          red: "text-rose-500",
+          cyan: "text-cyan-400",
+          navy: "text-blue-900",
+          "navy-blue": "text-blue-900",
+        };
 
-          const positionClasses: Record<string, string> = {
-            "top-left": "absolute top-8 left-3 flex justify-start items-start text-left max-w-[80%] z-20 px-3 pointer-events-none",
-            "top": "absolute top-8 inset-x-0 flex justify-center items-start text-center px-3 z-20 pointer-events-none",
-            "top-right": "absolute top-8 right-3 flex justify-end items-start text-right max-w-[80%] z-20 px-3 pointer-events-none",
-            "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
-            "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
-            "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
-            "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
-            "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
-            "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
-            "none": "hidden",
-          };
+        const positionClasses: Record<string, string> = {
+          "top-left": "absolute top-8 left-3 flex justify-start items-start text-left max-w-[80%] z-20 px-3 pointer-events-none",
+          "top": "absolute top-8 inset-x-0 flex justify-center items-start text-center px-3 z-20 pointer-events-none",
+          "top-right": "absolute top-8 right-3 flex justify-end items-start text-right max-w-[80%] z-20 px-3 pointer-events-none",
+          "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
+          "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
+          "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
+          "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
+          "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
+          "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
+          "none": "hidden",
+        };
 
-          return (
-            <>
-              <div className={`w-full h-full overflow-hidden flex items-center justify-center ${
-                kineticEffectName === "zoom" ? "animate-zoom" :
-                kineticEffectName === "pan" ? "animate-pan" :
-                kineticEffectName === "bounce" ? "animate-bounce-subtle" :
-                kineticEffectName === "pulse" ? "animate-pulse-subtle" :
-                kineticEffectName === "shake" ? "animate-shake-chaotic" :
-                kineticEffectName === "glitch" ? "animate-glitch" : "animate-zoom"
-              }`}>
-                {isVideo ? (
-                  <video 
-                    ref={videoRef}
-                    {...protectedMediaProps}
-                    controlsList="nodownload noremoteplayback"
-                    disablePictureInPicture
-                    crossOrigin="anonymous"
-                    src={clip.mediaUrl} 
-                    className="w-full h-full object-cover pointer-events-none reax-protected-media select-none"
-                    loop 
-                    muted={isMuted}
-                    playsInline
-                    preload="metadata"
-                  />
-                ) : (
-                  <img 
-                    ref={imgRef}
-                    {...protectedMediaProps}
-                    crossOrigin="anonymous"
-                    src={clip.mediaUrl} 
-                    className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
-                    alt={`Reaction clip by ${clip.authorName}`}
-                    referrerPolicy="no-referrer"
-                  />
+        const animClass =
+          kineticEffectName === "zoom" ? "animate-zoom" :
+          kineticEffectName === "pan" ? "animate-pan" :
+          kineticEffectName === "bounce" ? "animate-bounce-subtle" :
+          kineticEffectName === "pulse" ? "animate-pulse-subtle" :
+          kineticEffectName === "shake" ? "animate-shake-chaotic" :
+          kineticEffectName === "glitch" ? "animate-glitch" : "animate-zoom";
+
+        const hasAudio = !!(
+          clip.voiceAudioUrl || 
+          clip.voiceAudioData || 
+          (clip.mediaType === "audio" && clip.mediaUrl) || 
+          (clip.voiceText && (
+            clip.voiceText.startsWith("audio_url:") || 
+            (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4"))) || 
+            (clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction"))
+          ))
+        );
+
+        const hasAudioUrl = !!(
+          clip.voiceAudioUrl || 
+          (clip.voiceText && (
+            clip.voiceText.startsWith("audio_url:") || 
+            (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4")))
+          )) || 
+          (clip.mediaType === "audio" && clip.mediaUrl)
+        );
+        const hasVoiceData = !!clip.voiceAudioData;
+        const hasValidVoiceText = !!(clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction") && !clip.voiceText.startsWith("audio_url:"));
+        const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
+
+        return (
+          <FitMedia
+            src={clip.mediaUrl}
+            isVideo={isVideo}
+            mediaRef={isVideo ? videoRef : imgRef}
+            videoProps={{
+              loop: true,
+              muted: isMuted,
+              playsInline: true,
+              preload: "metadata",
+              crossOrigin: "anonymous",
+            }}
+            imgProps={{
+              alt: `Reaction clip by ${clip.authorName}`,
+              referrerPolicy: "no-referrer",
+              crossOrigin: "anonymous",
+            }}
+            animClass={animClass}
+            className={`rounded-xl group/media border border-slate-950/40 ${
+              !isVideo && hasAudio ? "cursor-pointer" : ""
+            }`}
+            onClick={(e) => {
+              if (!isVideo && hasAudio) {
+                handlePlayAudio(e);
+              }
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              if (window.matchMedia?.("(pointer: fine)").matches) handleCopyPicture();
+            }}
+            outerChildren={
+              <>
+                {/* Playing audio visual wave badge */}
+                {isAudioPlaying && (
+                  <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[10px] font-mono font-bold shadow-lg animate-pulse backdrop-blur-md">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                    <span>PLAYING AUDIO</span>
+                  </div>
                 )}
+
+                {/* Media Overlay Controls: Voice button (if voice present) */}
+                {showAudioButton && (
+                  <div className="absolute bottom-2.5 left-2.5 z-20">
+                    <button
+                      type="button"
+                      onClick={handlePlayAudio}
+                      className={`flex items-center gap-1 backdrop-blur-md px-2 py-1 rounded-lg border shadow-lg transition-all active:scale-95 cursor-pointer ${
+                        isAudioPlaying
+                          ? "bg-emerald-600 text-white border-emerald-400 shadow-emerald-500/30 animate-pulse"
+                          : "bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white border-white/10"
+                      }`}
+                      title={
+                        hasAudioUrl || hasVoiceData
+                          ? "Play recorded voice audio"
+                          : `Play AI voice: "${clip.voiceText}"`
+                      }
+                    >
+                      {hasAudioUrl || hasVoiceData ? (
+                        <Mic className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-emerald-400"}`} />
+                      ) : (
+                        <Volume2 className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-indigo-400"}`} />
+                      )}
+                      <span className="text-[10px] font-mono font-bold">
+                        {isAudioPlaying ? "Playing..." : "Voice"}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Play/Pause & Mute/Unmute Overlay controls (Video Only) */}
+                {isVideo && (
+                  <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1 bg-black/75 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 z-20 shadow-lg">
+                    <button 
+                      type="button"
+                      onClick={togglePlay}
+                      className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
+                      title={isPlaying ? "Pause Loop" : "Play Loop"}
+                    >
+                      {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                    </button>
+                    <div className="w-[1px] h-3.5 bg-white/20" />
+                    <button 
+                      type="button"
+                      onClick={toggleMute}
+                      className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
+                      title={isMuted ? "Unmute Audio" : "Mute Audio"}
+                    >
+                      {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume1 className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                )}
+              </>
+            }
+          >
+            {/* Cinema Wide Screen black bars overlay */}
+            {textStylePreset === "cinema" && textStylePosition !== "none" && (
+              <>
+                <div className="absolute top-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
+                <div className="absolute bottom-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
+              </>
+            )}
+
+            {/* Optional Big overlay text */}
+            {clip.overlayText && textStylePosition !== "none" && (
+              <div className={positionClasses[textStylePosition] || positionClasses.bottom}>
+                <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} ${
+                  textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
+                } break-words leading-tight max-w-full`}>
+                  {clip.overlayText}
+                </h2>
               </div>
+            )}
 
-              {/* Cinema Wide Screen black bars overlay */}
-              {textStylePreset === "cinema" && textStylePosition !== "none" && (
-                <>
-                  <div className="absolute top-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
-                  <div className="absolute bottom-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
-                </>
-              )}
-
-              {/* Optional Big overlay text */}
-              {clip.overlayText && textStylePosition !== "none" && (
-                <div className={positionClasses[textStylePosition] || positionClasses.bottom}>
-                  <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} ${
-                    textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
-                  } break-words leading-tight max-w-full`}>
-                    {clip.overlayText}
-                  </h2>
-                </div>
-              )}
-            </>
-          );
-        })()}
-
-        {/* Visible Watermark Pill Stamp */}
-        <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none">
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-sm border border-white/20 text-white shadow-md">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-            <span className="text-[10px] font-mono font-bold tracking-wider text-slate-100">
-              getREAX.com
-            </span>
-          </div>
-        </div>
-
-        {/* Playing audio visual wave badge */}
-        {isAudioPlaying && (
-          <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[10px] font-mono font-bold shadow-lg animate-pulse backdrop-blur-md">
-            <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-            <span>PLAYING AUDIO</span>
-          </div>
-        )}
-
-        {/* Media Overlay Controls: Voice button (if voice present) & Video Play/Mute controls */}
-        {(() => {
-          const hasAudioUrl = !!(
-            clip.voiceAudioUrl || 
-            (clip.voiceText && (
-              clip.voiceText.startsWith("audio_url:") || 
-              (clip.voiceText.startsWith("http") && (clip.voiceText.includes("/storage/") || clip.voiceText.includes(".webm") || clip.voiceText.includes(".mp4")))
-            )) || 
-            (clip.mediaType === "audio" && clip.mediaUrl)
-          );
-          const hasVoiceData = !!clip.voiceAudioData;
-          const hasValidVoiceText = !!(clip.voiceText && clip.voiceText.trim() !== "" && !clip.voiceText.includes("Voice Reaction") && !clip.voiceText.startsWith("audio_url:"));
-          const showAudioButton = hasAudioUrl || hasVoiceData || hasValidVoiceText;
-
-          if (!showAudioButton) return null;
-
-          return (
-            <div className="absolute bottom-2.5 left-2.5 z-20">
-              <button
-                type="button"
-                onClick={handlePlayAudio}
-                className={`flex items-center gap-1 backdrop-blur-md px-2 py-1 rounded-lg border shadow-lg transition-all active:scale-95 cursor-pointer ${
-                  isAudioPlaying
-                    ? "bg-emerald-600 text-white border-emerald-400 shadow-emerald-500/30 animate-pulse"
-                    : "bg-black/75 hover:bg-black/90 text-slate-200 hover:text-white border-white/10"
-                }`}
-                title={
-                  hasAudioUrl || hasVoiceData
-                    ? "Play recorded voice audio"
-                    : `Play AI voice: "${clip.voiceText}"`
-                }
-              >
-                {hasAudioUrl || hasVoiceData ? (
-                  <Mic className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-emerald-400"}`} />
-                ) : (
-                  <Volume2 className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-indigo-400"}`} />
-                )}
-                <span className="text-[10px] font-mono font-bold">
-                  {isAudioPlaying ? "Playing..." : "Voice"}
+            {/* Visible Watermark Pill Stamp */}
+            <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none">
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-sm border border-white/20 text-white shadow-md">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                <span className="text-[10px] font-mono font-bold tracking-wider text-slate-100">
+                  getREAX.com
                 </span>
-              </button>
+              </div>
             </div>
-          );
-        })()}
-
-        {/* Play/Pause & Mute/Unmute Overlay controls (Video Only) */}
-        {isVideo && (
-          <div className="absolute bottom-2.5 right-2.5 flex items-center gap-1 bg-black/75 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 z-20 shadow-lg">
-            <button 
-              type="button"
-              onClick={togglePlay}
-              className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
-              title={isPlaying ? "Pause Loop" : "Play Loop"}
-            >
-              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            </button>
-            <div className="w-[1px] h-3.5 bg-white/20" />
-            <button 
-              type="button"
-              onClick={toggleMute}
-              className="p-1 hover:text-white text-slate-300 transition-colors cursor-pointer"
-              title={isMuted ? "Unmute Audio" : "Mute Audio"}
-            >
-              {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume1 className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-        )}
-      </div>
+          </FitMedia>
+        );
+      })()}
 
       {/* Under the media: one compact row — 1-tap tones + React */}
       <div className="flex items-center gap-1.5 mt-2">

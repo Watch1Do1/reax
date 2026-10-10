@@ -8,31 +8,31 @@
 
 /* Custom visual animations for looping motion clips */
 @keyframes slow-zoom {
-  0%, 100% { transform: scale(1.02); }
-  50% { transform: scale(1.08); }
+  0%, 100% { transform: scale(0.96); }
+  50% { transform: scale(1.0); }
 }
 
 @keyframes slow-pan {
-  0%, 100% { transform: translate(0, 0) scale(1.05); }
-  50% { transform: translate(-3px, -3px) scale(1.08); }
+  0%, 100% { transform: translate(0, 0) scale(0.96); }
+  50% { transform: translate(-3px, -3px) scale(0.97); }
 }
 
 @keyframes bounce-subtle {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
+  0%, 100% { transform: translateY(0) scale(0.97); }
+  50% { transform: translateY(-4px) scale(0.97); }
 }
 
 @keyframes pulse-subtle {
-  0%, 100% { opacity: 0.95; transform: scale(1.03); }
-  50% { opacity: 1; transform: scale(1.05); }
+  0%, 100% { opacity: 0.95; transform: scale(0.97); }
+  50% { opacity: 1; transform: scale(0.99); }
 }
 
 @keyframes shake-chaotic {
-  0%, 100% { transform: rotate(0deg) scale(1.05); }
-  20% { transform: rotate(-2deg) translate(-2px, 1px); }
-  40% { transform: rotate(1deg) translate(1px, -1px); }
-  60% { transform: rotate(-1deg) translate(2px, -2px); }
-  80% { transform: rotate(2deg) translate(-1px, 2px); }
+  0%, 100% { transform: rotate(0deg) scale(0.95); }
+  20% { transform: rotate(-2deg) translate(-2px, 1px) scale(0.95); }
+  40% { transform: rotate(1deg) translate(1px, -1px) scale(0.95); }
+  60% { transform: rotate(-1deg) translate(2px, -2px) scale(0.95); }
+  80% { transform: rotate(2deg) translate(-1px, 2px) scale(0.95); }
 }
 
 @keyframes glitch-effect {
