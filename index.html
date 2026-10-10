@@ -1,23 +1,6 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <script>
-      // Ignore Vite HMR WebSocket errors in AI Studio iframe environment
-      window.addEventListener('unhandledrejection', function(event) {
-        var r = event.reason;
-        var msg = (r && (r.message || r.stack || String(r))) || '';
-        if (msg.includes('WebSocket') || msg.includes('vite') || (r && r.stack && r.stack.includes('@vite/client'))) {
-          event.preventDefault();
-        }
-      });
-      window.addEventListener('error', function(event) {
-        var msg = event.message || '';
-        var file = event.filename || '';
-        if (msg.includes('WebSocket') || file.includes('@vite/client')) {
-          event.preventDefault();
-        }
-      });
-    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Reax: Don't type it. React to it.</title>
