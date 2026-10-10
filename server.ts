@@ -11,6 +11,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import http from "http";
 import { execFile } from "child_process";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
@@ -4795,10 +4796,12 @@ app.post("/api/ai/generate", async (req, res) => {
 
 // Setup Vite development server or production static serving
 async function startServer() {
+  const server = http.createServer(app);
+
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
+      server: { middlewareMode: true, hmr: { server } },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -4811,7 +4814,7 @@ async function startServer() {
   }
 
   if (!process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
+    server.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });
   }
