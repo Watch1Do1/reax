@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Camera, Upload, Film, Sparkles, Volume2, VolumeX, RefreshCw, CheckCircle, 
   Image as ImageIcon, ChevronDown, ChevronUp, Settings2, Sliders, Star, Mic, MicOff,
-  CornerDownRight, Scissors
+  CornerDownRight, Scissors, Crop, Undo2
 } from "lucide-react";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { Clip, SavedReaction } from "../types";
@@ -12,6 +12,7 @@ import { uploadMediaAsset, uploadRawClipAsset, getAuthToken } from "../utils/sup
 import { convertHeicToJpeg, isHeicFile } from "../utils/imageUtils";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import ClipTimelineEditor from "./ClipTimelineEditor";
+import ImageCropper from "./ImageCropper";
 
 interface RespondModalProps {
   key?: string;
@@ -51,6 +52,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   
   // Form State
   const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean; file?: File } | null>(null);
+  const [cropOpen, setCropOpen] = useState(false);
+  const [originalImage, setOriginalImage] = useState<typeof selectedMedia>(null);
   const [trimInfo, setTrimInfo] = useState<TrimInfo | null>(null);
   const [isTrimming, setIsTrimming] = useState(false);
   const [stripAudio, setStripAudio] = useState(false);
@@ -81,6 +84,49 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     revokeAllBlobUrls();
     onClose();
   };
+
+  const canCrop = Boolean(
+    selectedMedia &&
+    !selectedMedia.isVideo &&
+    typeof selectedMedia.data === "string" &&
+    selectedMedia.data.startsWith("data:") &&
+    selectedMedia.mimeType !== "image/gif" &&
+    !trimInfo
+  );
+
+  const handleOpenCrop = () => {
+    if (!selectedMedia) return;
+    if (!originalImage) {
+      setOriginalImage(selectedMedia);
+    }
+    setCropOpen(true);
+  };
+
+  const handleUndoCrop = () => {
+    if (originalImage) {
+      setSelectedMedia(originalImage);
+      setOriginalImage(null);
+    }
+  };
+
+  const handleCropApply = (result: { blob: Blob; dataUrl: string; mimeType: string }) => {
+    const ext = result.mimeType === "image/png" ? "png" : result.mimeType === "image/webp" ? "webp" : "jpg";
+    const croppedFile = new File([result.blob], `reaction-crop-${Date.now()}.${ext}`, {
+      type: result.mimeType
+    });
+    setSelectedMedia({
+      data: result.dataUrl,
+      mimeType: result.mimeType,
+      isVideo: false,
+      file: croppedFile
+    });
+    setCropOpen(false);
+  };
+
+  const handleCropCancel = () => {
+    setCropOpen(false);
+  };
+
   const [tone, setTone] = useState<Clip["tone"]>("funny");
   const [voiceStyle, setVoiceStyle] = useState<Clip["voiceStyle"]>("casual");
   const [guestAuthorName, setGuestAuthorName] = useState("");
@@ -321,6 +367,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         mimeType: isVideo ? "video/mp4" : "image/jpeg",
         isVideo
       });
+      setOriginalImage(null);
       setVoiceText(remixData.voiceText || "");
       setVoiceAudioData(remixData.voiceAudioData || null);
       if (remixData.voiceStyle) {
@@ -360,6 +407,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     // Both starting root threads and replying to threads start in the upload_capture wizard.
     // This allows the user to record, capture, or select their own reaction background first.
     setSelectedMedia(null);
+    setOriginalImage(null);
     setStep("upload_capture");
   }, [initialTone, remixData, parentClip]);
 
@@ -519,6 +567,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         isVideo: false
       };
       stopCamera();
+      setOriginalImage(null);
       onMediaSelected(mediaObj);
     }
   };
@@ -764,6 +813,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     e.target.value = "";
 
     setError(null);
+    setOriginalImage(null);
     const isHeic = isHeicFile(file);
     const isGif = file.type === "image/gif" || file.name.toLowerCase().endsWith(".gif");
     const isVideo = file.type.startsWith("video/") || file.name.match(/\.(mp4|mov|webm)$/i);
@@ -790,14 +840,20 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     if (isHeic) {
       try {
         const converted = await convertHeicToJpeg(file);
+        const jpegRes = await fetch(converted.data);
+        const jpegBlob = await jpegRes.blob();
+        const convertedFile = new File([jpegBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg") || "photo.jpg", {
+          type: "image/jpeg"
+        });
         const mediaObj = {
           data: converted.data,
           mimeType: "image/jpeg",
           isVideo: false,
-          file: file
+          file: convertedFile
         };
         stopCamera();
         setTrimInfo(null);
+        setOriginalImage(null);
         onMediaSelected(mediaObj);
       } catch (err) {
         console.error("HEIC conversion failed:", err);
@@ -1414,6 +1470,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     revokeAllBlobUrls();
                     setTrimInfo(null);
                     setSelectedMedia(null);
+                    setOriginalImage(null);
                     setStep("upload_capture");
                   }}
                   onApplyTrim={({ start, windowDuration, stripAudio: newStripAudio }) => {
@@ -1478,6 +1535,30 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                   <span className="absolute top-2 left-2 px-2 py-0.5 text-[8px] font-mono font-bold bg-black/60 backdrop-blur rounded-full text-indigo-300 border border-slate-800">
                     Background Loaded
                   </span>
+                  {canCrop && (
+                    <div className="absolute bottom-2.5 right-2.5 z-20 flex items-center gap-1.5">
+                      {originalImage && (
+                        <button
+                          type="button"
+                          onClick={handleUndoCrop}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-semibold text-slate-300 hover:text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                          title="Undo crop and restore original photo"
+                        >
+                          <Undo2 className="w-3 h-3 text-slate-400" />
+                          <span>Undo crop</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleOpenCrop}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-bold text-white hover:text-indigo-300 transition-all shadow-md active:scale-95 cursor-pointer"
+                        title="Crop photo"
+                      >
+                        <Crop className="w-3 h-3 text-indigo-400" />
+                        <span>Crop</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Tone select grid */}
@@ -1517,6 +1598,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       revokeAllBlobUrls();
                       setTrimInfo(null);
                       setSelectedMedia(null);
+                      setOriginalImage(null);
                       setStep("upload_capture");
                     }}
                     className="text-xs font-bold font-mono text-slate-400 hover:text-white px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl cursor-pointer"
@@ -1720,6 +1802,32 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                   <span className="absolute top-3 left-3 px-2 py-0.5 text-[9px] font-mono font-bold tracking-widest bg-black/60 backdrop-blur-md rounded-full text-indigo-300 capitalize border border-slate-700/50">
                     ⚡ {tone} mode
                   </span>
+
+                  {/* Crop / Undo Crop button for still images */}
+                  {canCrop && (
+                    <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5">
+                      {originalImage && (
+                        <button
+                          type="button"
+                          onClick={handleUndoCrop}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-semibold text-slate-300 hover:text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                          title="Undo crop and restore original photo"
+                        >
+                          <Undo2 className="w-3 h-3 text-slate-400" />
+                          <span>Undo crop</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleOpenCrop}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-bold text-white hover:text-indigo-300 transition-all shadow-md active:scale-95 cursor-pointer"
+                        title="Crop photo"
+                      >
+                        <Crop className="w-3 h-3 text-indigo-400" />
+                        <span>Crop</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* ✍️ Prominent Manual Caption Editor (No AI required by default!) */}
@@ -2276,6 +2384,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                                 type="button"
                                 onClick={() => {
                                   setSelectedMedia({ data: reax.mediaUrl, mimeType: reax.mediaUrl.endsWith(".mp4") || reax.mediaUrl.endsWith(".webm") ? "video/mp4" : "image/jpeg", isVideo: reax.mediaUrl.endsWith(".mp4") || reax.mediaUrl.endsWith(".webm") });
+                                  setOriginalImage(null);
                                   setVoiceText(reax.voiceText || "");
                                   setOverlayText(reax.overlayText || "");
                                   setTone(reax.tone);
@@ -2583,6 +2692,16 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
               </div>
             </div>
           </div>
+        )}
+
+        {/* Optional Image Cropper Overlay */}
+        {cropOpen && (originalImage || selectedMedia) && (
+          <ImageCropper
+            src={(originalImage ?? selectedMedia)!.data}
+            mimeType={(originalImage ?? selectedMedia)!.mimeType}
+            onApply={handleCropApply}
+            onCancel={handleCropCancel}
+          />
         )}
 
       </div>
