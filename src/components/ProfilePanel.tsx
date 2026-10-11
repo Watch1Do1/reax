@@ -279,9 +279,6 @@ export default function ProfilePanel({
             <div>
               <h2 className="text-base font-bold text-white font-sans flex items-center gap-2">
                 User Profile
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono font-medium border border-indigo-500/30">
-                  Member
-                </span>
               </h2>
               <p className="text-xs text-slate-400 font-mono">Manage your account & loop creations</p>
             </div>

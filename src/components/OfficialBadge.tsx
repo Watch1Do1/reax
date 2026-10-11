@@ -9,12 +9,12 @@ export interface OfficialBadgeProps {
 export function OfficialBadge({ className = "", size = "sm" }: OfficialBadgeProps) {
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-bold font-mono tracking-wide select-none ${
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-indigo-600 border border-indigo-400/60 text-white shadow-sm shadow-indigo-900/40 font-bold font-mono tracking-wide select-none ${
         size === "md" ? "text-[10px]" : "text-[9px]"
       } ${className}`}
       title="Official Account"
     >
-      <BadgeCheck className={`${size === "md" ? "w-3 h-3" : "w-2.5 h-2.5"} text-indigo-400 shrink-0`} />
+      <BadgeCheck className={`${size === "md" ? "w-3 h-3" : "w-2.5 h-2.5"} text-white shrink-0`} />
       <span>Official</span>
     </span>
   );
