@@ -2680,6 +2680,20 @@ app.get("/api/users/lookup", async (req, res) => {
   }
 });
 
+// Public badge lookup
+app.get("/api/users/badge", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const username = String(req.query.username || "").trim().replace(/^@/, "");
+  if (!username || username.length > 40) return res.json({ badgeType: null });
+  try {
+    const p: any = await store!.getUserProfile({ username });
+    return res.json({ badgeType: p?.badgeType ?? (p?.isOfficial ? "official" : null) });
+  } catch (err) {
+    console.error("Error in /api/users/badge:", err);
+    return res.json({ badgeType: null });
+  }
+});
+
 // API: Get all active, non-deleted clips
 app.get("/api/clips", async (req, res) => {
   try {
@@ -4448,6 +4462,59 @@ app.get("/api/admin/users", async (req, res) => {
   } catch (err: any) {
     console.error("Error in /api/admin/users:", err);
     res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+// Admin search (confirmed accounts only)
+app.get("/api/admin/users/search", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const q = String(req.query.q || "").trim().replace(/^@/, "").toLowerCase();
+  if (q.length < 2) return res.json([]);
+  try {
+    const users = await store!.getUsers();
+    const matches = users
+      .filter((u: any) => u.isConfirmed === true && !!u.email)
+      .filter((u: any) => String(u.username || "").toLowerCase().includes(q) || String(u.email || "").toLowerCase().includes(q))
+      .sort((a: any, b: any) => {
+        const ax = String(a.username || "").toLowerCase() === q || String(a.email || "").toLowerCase() === q ? 0 : 1;
+        const bx = String(b.username || "").toLowerCase() === q || String(b.email || "").toLowerCase() === q ? 0 : 1;
+        if (ax !== bx) return ax - bx;
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      })
+      .slice(0, 20)
+      .map((u: any) => ({
+        id: u.id,
+        username: u.username,
+        email: u.email || null,
+        badgeType: normalizeBadge({ badge_type: u.badgeType, is_official: u.isOfficial }),
+        avatarUrl: safeAvatarUrl(u.avatarUrl),
+        createdAt: u.createdAt,
+      }));
+    return res.json(matches);
+  } catch (err: any) {
+    console.error("Error in /api/admin/users/search:", err);
+    return res.status(500).json({ error: "Search failed" });
+  }
+});
+
+// Admin audit list
+app.get("/api/admin/badge-audit", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!supabaseAdmin) return res.status(503).json({ error: "Admin database client not configured" });
+  try {
+    const { data, error } = await supabaseAdmin.from("badge_audit").select("id, user_id, old_badge, new_badge, note, changed_by, changed_at").order("changed_at", { ascending: false }).limit(20);
+    if (error) throw error;
+    const ids = Array.from(new Set((data || []).map((r: any) => r.user_id)));
+    const names: Record<string, string> = {};
+    if (ids.length) {
+      const { data: profs, error: pErr } = await supabaseAdmin.from("user_profiles").select("id, username").in("id", ids);
+      if (pErr) throw pErr;
+      (profs || []).forEach((p: any) => { names[p.id] = p.username; });
+    }
+    return res.json((data || []).map((r: any) => ({ id: r.id, userId: r.user_id, username: names[r.user_id] || null, oldBadge: r.old_badge, newBadge: r.new_badge, note: r.note, changedBy: r.changed_by, changedAt: r.changed_at })));
+  } catch (err: any) {
+    console.error("Error in /api/admin/badge-audit:", err);
+    return res.status(500).json({ error: "Failed to load badge audit" });
   }
 });
 
