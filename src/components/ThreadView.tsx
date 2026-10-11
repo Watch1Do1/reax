@@ -10,6 +10,7 @@ import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/aud
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
+import BusinessBadge from "./BusinessBadge";
 
 interface ThreadViewProps {
   key?: string;
@@ -424,7 +425,11 @@ export default function ThreadView({
                     >
                       @{ultimateRoot.authorName}
                     </button>
-                    {ultimateRoot.authorIsOfficial && <OfficialBadge />}
+                    {ultimateRoot.authorIsOfficial ? (
+                      <OfficialBadge />
+                    ) : ultimateRoot.authorBadgeType === "verified_business" ? (
+                      <BusinessBadge />
+                    ) : null}
                     <span className="px-1.5 py-0.2 bg-indigo-500/20 border border-indigo-500/35 rounded text-[8px] font-mono font-black uppercase text-indigo-300 tracking-wider">
                       ROOT
                     </span>
@@ -683,7 +688,11 @@ export default function ThreadView({
                               >
                                 @{directReax.authorName}
                               </button>
-                              {directReax.authorIsOfficial && <OfficialBadge />}
+                              {directReax.authorIsOfficial ? (
+                                <OfficialBadge />
+                              ) : directReax.authorBadgeType === "verified_business" ? (
+                                <BusinessBadge />
+                              ) : null}
                             </div>
                             <span className="text-[9px] font-mono text-slate-500 block">
                               {new Date(directReax.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -882,7 +891,11 @@ export default function ThreadView({
                                         <span className="text-[11px] font-bold text-slate-200 truncate">
                                           @{riff.authorName}
                                         </span>
-                                        {riff.authorIsOfficial && <OfficialBadge />}
+                                        {riff.authorIsOfficial ? (
+                                          <OfficialBadge />
+                                        ) : riff.authorBadgeType === "verified_business" ? (
+                                          <BusinessBadge />
+                                        ) : null}
                                         <span className="text-[8px] font-mono px-1 rounded bg-slate-800 text-slate-400 uppercase">
                                           {riff.tone}
                                         </span>

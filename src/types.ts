@@ -1,3 +1,5 @@
+export type BadgeType = "official" | "verified_business" | null;
+
 export type Clip = {
   id: string;
   parentId: string | null;
@@ -21,6 +23,7 @@ export type Clip = {
   deleted?: boolean;
   reportCount?: number;
   authorIsOfficial?: boolean;
+  authorBadgeType?: BadgeType;
   authorAvatarUrl?: string | null;
 };
 
@@ -48,6 +51,7 @@ export type UserProfile = {
   acceptedTermsAt?: string | null;
   acceptedPrivacyAt?: string | null;
   isOfficial?: boolean;
+  badgeType?: BadgeType;
   avatarUrl?: string | null;
 };
 

@@ -8,6 +8,7 @@ import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import { getAuthToken } from "../utils/supabaseClient";
 import ShareModal from "./ShareModal";
 import OfficialBadge from "./OfficialBadge";
+import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
 import FitMedia from "./FitMedia";
 
@@ -582,7 +583,11 @@ export default function ClipCard({
               <span className="font-semibold text-xs text-slate-100 group-hover:text-indigo-300 transition-colors block">
                 @{clip.authorName}
               </span>
-              {clip.authorIsOfficial && <OfficialBadge />}
+              {clip.authorIsOfficial ? (
+                <OfficialBadge />
+              ) : clip.authorBadgeType === "verified_business" ? (
+                <BusinessBadge />
+              ) : null}
               {clip.authorName.startsWith("~") ? (
                 <span className="text-[9px] px-1 bg-slate-950/60 border border-slate-800/80 rounded text-slate-500 font-bold font-mono">GUEST</span>
               ) : (

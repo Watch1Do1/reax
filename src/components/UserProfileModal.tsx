@@ -7,6 +7,7 @@ import {
 import { Clip } from "../types";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
+import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
 
 export interface UserProfileModalProps {
@@ -98,6 +99,12 @@ export default function UserProfileModal({
     return userClips.some((c) => Boolean(c.authorIsOfficial));
   }, [userClips]);
 
+  const badgeType = useMemo(() => {
+    if (isOfficial) return "official";
+    const found = userClips.find((c) => c.authorBadgeType);
+    return found ? found.authorBadgeType : null;
+  }, [userClips, isOfficial]);
+
   if (!isOpen || !username) return null;
 
   const isGuest = cleanTarget.startsWith("~") || targetLower === "guest";
@@ -136,7 +143,11 @@ export default function UserProfileModal({
                   <h2 className="text-lg sm:text-xl font-bold text-white font-sans truncate">
                     @{cleanTarget}
                   </h2>
-                  {isOfficial && <OfficialBadge size="md" />}
+                  {isOfficial ? (
+                    <OfficialBadge size="md" />
+                  ) : badgeType === "verified_business" ? (
+                    <BusinessBadge size="md" />
+                  ) : null}
                   {isGuest ? (
                     <span className="text-[10px] px-2 py-0.5 bg-slate-800 border border-slate-700 rounded-full text-slate-400 font-mono font-bold">
                       GUEST

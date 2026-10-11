@@ -85,6 +85,13 @@ function safeAvatarUrl(url: any): string | null {
 }
 const AVATAR_MAX_BYTES = 300 * 1024;
 
+export type BadgeType = "official" | "verified_business" | null;
+function normalizeBadge(row: any): BadgeType {
+  const b = row?.badge_type;
+  if (b === "official" || b === "verified_business") return b;
+  return row?.is_official ? "official" : null;
+}
+
 // Data Types
 export type Clip = {
   id: string;
@@ -109,6 +116,7 @@ export type Clip = {
   deleted?: boolean;
   reportCount?: number;
   authorIsOfficial?: boolean;
+  authorBadgeType?: BadgeType;
   authorAvatarUrl?: string | null;
 };
 
@@ -136,6 +144,7 @@ export type UserProfile = {
   acceptedTermsAt?: string | null;
   acceptedPrivacyAt?: string | null;
   isOfficial?: boolean;
+  badgeType?: BadgeType;
   avatarUrl?: string | null;
 };
 
@@ -317,12 +326,14 @@ class MemoryStore implements Store {
     const resolved = filtered.map(c => {
       const uId = c.userId || c.authorId;
       const user = uId ? this.userProfiles.find(u => u.id === uId) : null;
+      const b = user ? (user.badgeType !== undefined ? user.badgeType : (user.isOfficial ? "official" : null)) : (c.authorBadgeType !== undefined ? c.authorBadgeType : (c.authorIsOfficial ? "official" : null));
       return {
         ...c,
         userId: uId || undefined,
         authorId: uId || undefined,
         authorName: user ? user.username : c.authorName,
-        authorIsOfficial: user ? Boolean(user.isOfficial) : Boolean(c.authorIsOfficial)
+        authorIsOfficial: b === "official",
+        authorBadgeType: b
       };
     });
     return [...resolved].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -333,12 +344,14 @@ class MemoryStore implements Store {
     if (!c) return null;
     const uId = c.userId || c.authorId;
     const user = uId ? this.userProfiles.find(u => u.id === uId) : null;
+    const b = user ? (user.badgeType !== undefined ? user.badgeType : (user.isOfficial ? "official" : null)) : (c.authorBadgeType !== undefined ? c.authorBadgeType : (c.authorIsOfficial ? "official" : null));
     return {
       ...c,
       userId: uId || undefined,
       authorId: uId || undefined,
       authorName: user ? user.username : c.authorName,
-      authorIsOfficial: user ? Boolean(user.isOfficial) : Boolean(c.authorIsOfficial)
+      authorIsOfficial: b === "official",
+      authorBadgeType: b
     };
   }
 
@@ -782,18 +795,19 @@ class SupabaseStore implements Store {
         try {
           const { data: userRows } = await this.client
             .from("user_profiles")
-            .select("id, user_id, username, is_official, avatar_url")
+            .select("id, user_id, username, is_official, badge_type, avatar_url")
             .or(`id.in.(${authorIds.join(",")}),user_id.in.(${authorIds.join(",")})`);
 
           if (userRows && userRows.length > 0) {
-            const userMap = new Map<string, { username: string; isOfficial?: boolean }>();
+            const userMap = new Map<string, { username: string; isOfficial?: boolean; badgeType?: BadgeType }>();
             const avatarMap = new Map<string, string | null>();
             for (const u of userRows) {
               const safeUrl = safeAvatarUrl(u.avatar_url);
+              const b = normalizeBadge(u);
               if (u.id) avatarMap.set(u.id, safeUrl);
               if (u.user_id) avatarMap.set(u.user_id, safeUrl);
               if (u.username) {
-                const info = { username: u.username, isOfficial: Boolean(u.is_official) };
+                const info = { username: u.username, isOfficial: b === "official", badgeType: b };
                 if (u.id) userMap.set(u.id, info);
                 if (u.user_id) userMap.set(u.user_id, info);
               }
@@ -807,6 +821,7 @@ class SupabaseStore implements Store {
                 const info = userMap.get(uId)!;
                 c.authorName = info.username;
                 c.authorIsOfficial = info.isOfficial;
+                c.authorBadgeType = info.badgeType;
               }
             }
           }
@@ -837,14 +852,16 @@ class SupabaseStore implements Store {
       try {
         const { data: userRow } = await this.client
           .from("user_profiles")
-          .select("username, is_official, avatar_url")
+          .select("username, is_official, badge_type, avatar_url")
           .or(`id.eq.${uId},user_id.eq.${uId}`)
           .maybeSingle();
         if (userRow) {
           clip.authorAvatarUrl = safeAvatarUrl(userRow.avatar_url);
+          const b = normalizeBadge(userRow);
+          clip.authorBadgeType = b;
           if (userRow.username) {
             clip.authorName = userRow.username;
-            clip.authorIsOfficial = Boolean(userRow.is_official);
+            clip.authorIsOfficial = b === "official";
           }
         }
       } catch {}
@@ -1363,7 +1380,8 @@ class SupabaseStore implements Store {
           acceptedPrivacyVersion: u.accepted_privacy_version || authUser?.user_metadata?.accepted_privacy_version || null,
           acceptedTermsAt: u.accepted_terms_at || authUser?.user_metadata?.accepted_terms_at || null,
           acceptedPrivacyAt: u.accepted_privacy_at || authUser?.user_metadata?.accepted_privacy_at || null,
-          isOfficial: Boolean(u.is_official),
+          isOfficial: normalizeBadge(u) === "official",
+          badgeType: normalizeBadge(u),
           avatarUrl: safeAvatarUrl(u.avatar_url)
         });
       }
@@ -1392,7 +1410,8 @@ class SupabaseStore implements Store {
             acceptedPrivacyVersion: au.user_metadata?.accepted_privacy_version || null,
             acceptedTermsAt: au.user_metadata?.accepted_terms_at || null,
             acceptedPrivacyAt: au.user_metadata?.accepted_privacy_at || null,
-            isOfficial: false
+            isOfficial: false,
+            badgeType: null
           };
 
           resultProfiles.unshift(newProfile);
@@ -1442,7 +1461,8 @@ class SupabaseStore implements Store {
             acceptedPrivacyVersion: data.accepted_privacy_version || null,
             acceptedTermsAt: data.accepted_terms_at || null,
             acceptedPrivacyAt: data.accepted_privacy_at || null,
-            isOfficial: Boolean(data.is_official),
+            isOfficial: normalizeBadge(data) === "official",
+            badgeType: normalizeBadge(data),
             avatarUrl: safeAvatarUrl(data.avatar_url)
           };
         }
@@ -1475,7 +1495,8 @@ class SupabaseStore implements Store {
               acceptedPrivacyVersion: matched.accepted_privacy_version || null,
               acceptedTermsAt: matched.accepted_terms_at || null,
               acceptedPrivacyAt: matched.accepted_privacy_at || null,
-              isOfficial: Boolean(matched.is_official),
+              isOfficial: normalizeBadge(matched) === "official",
+              badgeType: normalizeBadge(matched),
               avatarUrl: safeAvatarUrl(matched.avatar_url)
             };
           }
@@ -2789,6 +2810,7 @@ app.post("/api/clips", async (req, res) => {
       authorId: user.id,
       authorName: profile.username,
       authorIsOfficial: Boolean(profile.isOfficial),
+      authorBadgeType: profile.badgeType || (profile.isOfficial ? "official" : null),
       createdAt: new Date().toISOString(),
       likesCount: 0,
       laughsCount: 0,
@@ -4589,6 +4611,86 @@ app.post("/api/admin/users/:id/clear-avatar", async (req, res) => {
   } catch (err: any) {
     console.error("Error clearing avatar:", err);
     return res.status(500).json({ error: "Failed to clear avatar" });
+  }
+});
+
+// 11c. POST Set badge for user (Admin Auth)
+app.post("/api/admin/users/:id/badge", async (req, res) => {
+  const { id } = req.params;
+  const { badge, note } = req.body || {};
+
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ error: "Invalid user ID" });
+  }
+
+  const validBadges = [null, "official", "verified_business"];
+  if (badge !== null && badge !== "official" && badge !== "verified_business") {
+    return res.status(400).json({ error: "Badge must be 'official', 'verified_business', or null" });
+  }
+
+  if (note !== undefined && (typeof note !== "string" || note.length > 500)) {
+    return res.status(400).json({ error: "Note must be a string of at most 500 characters" });
+  }
+
+  const dbClient = supabaseAdmin || supabase;
+  if (!dbClient) {
+    return res.status(503).json({ error: "Database unavailable" });
+  }
+
+  try {
+    const { data, error } = await dbClient.rpc("reax_set_business_badge", {
+      p_user_id: id,
+      p_badge: badge,
+      p_note: typeof note === "string" ? note.trim() : null,
+      p_changed_by: "admin"
+    });
+
+    if (error) {
+      console.error("Error in reax_set_business_badge RPC:", error);
+      return res.status(500).json({ error: error.message || "Failed to update user badge" });
+    }
+
+    const row = Array.isArray(data) ? data[0] : data;
+    return res.json({
+      success: true,
+      badge: row?.new_badge !== undefined ? row.new_badge : badge,
+      user_id: id,
+      username: row?.username
+    });
+  } catch (err: any) {
+    console.error("Exception in badge update endpoint:", err);
+    return res.status(500).json({ error: err?.message || "Failed to update user badge" });
+  }
+});
+
+// 11d. GET Badge audit history for user (Admin Auth)
+app.get("/api/admin/users/:id/badge-audit", async (req, res) => {
+  const { id } = req.params;
+  if (!isValidUuid(id)) {
+    return res.status(400).json({ error: "Invalid user ID" });
+  }
+
+  const dbClient = supabaseAdmin || supabase;
+  if (!dbClient) {
+    return res.status(503).json({ error: "Database unavailable" });
+  }
+
+  try {
+    const { data, error } = await dbClient
+      .from("badge_audit")
+      .select("*")
+      .eq("user_id", id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Error fetching badge_audit:", error);
+      return res.status(500).json({ error: error.message || "Failed to fetch badge audit history" });
+    }
+
+    return res.json({ audit: data || [] });
+  } catch (err: any) {
+    console.error("Exception fetching badge audit history:", err);
+    return res.status(500).json({ error: err?.message || "Failed to fetch badge audit history" });
   }
 });
 

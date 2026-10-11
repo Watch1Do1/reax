@@ -15,6 +15,7 @@ import {
 } from "../utils/supabaseClient";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
+import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
 import { uploadAvatar } from "../utils/avatarUpload";
 import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "../utils/reservedUsernames";
@@ -57,6 +58,7 @@ export default function ProfilePanel({
   const [isEditingUsername, setIsEditingUsername] = useState(false);
   const [editedUsername, setEditedUsername] = useState(currentUsername);
   const [isOfficial, setIsOfficial] = useState(false);
+  const [badgeType, setBadgeType] = useState<"official" | "verified_business" | null>(null);
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [isSavingUsername, setIsSavingUsername] = useState(false);
   const savedUsernameRef = useRef<string | null>(null);
@@ -88,6 +90,15 @@ export default function ProfilePanel({
         if (!isCurrent || savedUsernameRef.current) return;
         if (profile?.isOfficial) {
           setIsOfficial(true);
+        } else {
+          setIsOfficial(false);
+        }
+        if (profile?.badgeType !== undefined) {
+          setBadgeType(profile.badgeType);
+        } else if (profile?.isOfficial) {
+          setBadgeType("official");
+        } else {
+          setBadgeType(null);
         }
         if (profile?.avatarUrl !== undefined) {
           setAvatarUrl(profile.avatarUrl || null);
@@ -355,7 +366,11 @@ export default function ProfilePanel({
                 ) : (
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-lg font-bold font-mono text-white truncate">@{editedUsername || currentUsername}</span>
-                    {isOfficial && <OfficialBadge />}
+                    {isOfficial ? (
+                      <OfficialBadge />
+                    ) : badgeType === "verified_business" ? (
+                      <BusinessBadge />
+                    ) : null}
                     <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                   </div>
                 )}
