@@ -4,7 +4,7 @@ import {
   X, Shield, Users, Settings, Trash2, 
   RefreshCw, Eye, UserX, AlertTriangle, 
   Tv, CheckCircle, Database, ShieldAlert, Copy,
-  Mail, Search, Check
+  Mail, Search, Check, Building2, BadgeCheck
 } from "lucide-react";
 import { Clip } from "../types";
 import { getAuthToken } from "../utils/supabaseClient";
@@ -19,7 +19,7 @@ interface AdminPanelProps {
   onSelectThread: (id: string) => void;
 }
 
-type AdminTab = "reports" | "content" | "dashboard" | "users" | "settings";
+type AdminTab = "reports" | "content" | "dashboard" | "users" | "badges" | "settings";
 
 type AdminStats = {
   overview?: {
@@ -567,6 +567,7 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
       desc: "Auth-backed profiles", 
       badge: confirmedUsersCount > 0 ? confirmedUsersCount : usersList.length 
     }] : []),
+    { id: "badges", label: "Business badges", desc: "Give or remove Verified" },
     { id: "settings", label: "⚙️ Settings", desc: "Database diagnostics" },
   ];
 
@@ -678,6 +679,7 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
               {activeTab === "content" && "📝 Content Browser"}
               {activeTab === "dashboard" && "📊 Dashboard Analytics"}
               {activeTab === "users" && "👥 Community User Directory"}
+              {activeTab === "badges" && "🏷️ Business Badges"}
               {activeTab === "settings" && "⚙️ System Configuration"}
             </h1>
           </div>
@@ -1514,8 +1516,18 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
                       </div>
                     )}
                   </AnimatePresence>
-
                 </div>
+              )}
+
+              {/* TAB: BADGES MANAGER */}
+              {activeTab === "badges" && (
+                <BadgesTab
+                  adminFetch={adminFetch}
+                  showToast={showToast}
+                  onRefreshClips={onRefreshClips}
+                  onSyncAuth={handleSyncAuthUsers}
+                  isSyncingAuth={isSyncingAuth}
+                />
               )}
 
               {/* TAB 5: SETTINGS (REAL DATABASE CONNECTIVITY DIAGNOSTICS ONLY) */}
@@ -1698,6 +1710,576 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
         )}
       </AnimatePresence>
 
+    </div>
+  );
+}
+
+// ----------------------------------------------------
+// Phone-friendly BadgesTab Component
+// ----------------------------------------------------
+interface BadgesTabProps {
+  adminFetch: (url: string, options?: any) => Promise<Response>;
+  showToast: (msg: string) => void;
+  onRefreshClips: () => void;
+  onSyncAuth: () => Promise<void>;
+  isSyncingAuth: boolean;
+}
+
+interface BadgeAuditEntry {
+  id: string;
+  user_id: string;
+  username: string;
+  old_badge: string | null;
+  new_badge: string | null;
+  changed_by: string;
+  note: string | null;
+  created_at: string;
+}
+
+interface BadgeUserResult {
+  id: string;
+  user_id?: string;
+  username: string;
+  email?: string | null;
+  badge_type?: string | null;
+  is_official?: boolean;
+  avatar_url?: string | null;
+  created_at?: string;
+  last_active?: string;
+}
+
+function BadgesTab({ adminFetch, showToast, onRefreshClips, onSyncAuth, isSyncingAuth }: BadgesTabProps) {
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<BadgeUserResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<BadgeUserResult | null>(null);
+
+  // Note and confirmation modal
+  const [note, setNote] = useState("");
+  const [pendingBadge, setPendingBadge] = useState<"verified_business" | null | undefined>(undefined);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Audit history
+  const [auditLog, setAuditLog] = useState<BadgeAuditEntry[]>([]);
+  const [isLoadingAudit, setIsLoadingAudit] = useState(false);
+
+  const searchRequestIdRef = React.useRef(0);
+  const debounceTimerRef = React.useRef<any>(null);
+
+  // Fetch recent audit entries
+  const loadRecentAudit = async () => {
+    setIsLoadingAudit(true);
+    try {
+      // Prompt notes: GET /api/admin/badge-audit or user audit
+      const res = await adminFetch("/api/admin/badge-audit");
+      if (res.ok) {
+        const data = await res.json();
+        setAuditLog(Array.isArray(data?.audit) ? data.audit : Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.warn("Failed to fetch badge audit log:", err);
+    } finally {
+      setIsLoadingAudit(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRecentAudit();
+  }, []);
+
+  // Search executor
+  const performSearch = async (rawSearch: string) => {
+    const clean = rawSearch.trim().replace(/^@+/, "");
+    if (!clean) {
+      setSearchResults([]);
+      setIsSearching(false);
+      setHasSearched(false);
+      return;
+    }
+
+    const currentRequestId = ++searchRequestIdRef.current;
+    setIsSearching(true);
+    setHasSearched(true);
+
+    try {
+      const res = await adminFetch(`/api/admin/users/search?q=${encodeURIComponent(clean)}`);
+      if (currentRequestId !== searchRequestIdRef.current) return; // Stale response
+
+      if (res.ok) {
+        const data = await res.json();
+        const users = Array.isArray(data?.users) ? data.users : Array.isArray(data) ? data : [];
+        setSearchResults(users);
+      } else {
+        setSearchResults([]);
+      }
+    } catch (err) {
+      if (currentRequestId === searchRequestIdRef.current) {
+        setSearchResults([]);
+        showToast("Error searching users.");
+      }
+    } finally {
+      if (currentRequestId === searchRequestIdRef.current) {
+        setIsSearching(false);
+      }
+    }
+  };
+
+  // Handle typing input with debounce
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setQuery(val);
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    const clean = val.trim().replace(/^@+/, "");
+    if (clean.length >= 2) {
+      debounceTimerRef.current = setTimeout(() => {
+        performSearch(clean);
+      }, 350);
+    } else if (clean.length === 0) {
+      setSearchResults([]);
+      setHasSearched(false);
+    }
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    performSearch(query);
+  };
+
+  const handleSelectUser = (user: BadgeUserResult) => {
+    setSelectedUser(user);
+    setNote("");
+  };
+
+  // Trigger Confirmation Modal
+  const requestBadgeChange = (badgeToSet: "verified_business" | null) => {
+    setPendingBadge(badgeToSet);
+    setShowConfirmModal(true);
+  };
+
+  // Execute badge RPC
+  const confirmBadgeChange = async () => {
+    if (!selectedUser) return;
+    setIsSubmitting(true);
+    try {
+      const userId = selectedUser.id || selectedUser.user_id;
+      const res = await adminFetch(`/api/admin/users/${userId}/badge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          badge: pendingBadge,
+          note: note.trim() || undefined
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && (data.success || data.badge !== undefined)) {
+        const newBadge = data.badge !== undefined ? data.badge : pendingBadge;
+        // Update selectedUser state
+        setSelectedUser(prev => prev ? { ...prev, badge_type: newBadge, is_official: newBadge === "official" } : null);
+
+        // Update in searchResults list
+        setSearchResults(prev => prev.map(u => {
+          if ((u.id || u.user_id) === userId) {
+            return { ...u, badge_type: newBadge, is_official: newBadge === "official" };
+          }
+          return u;
+        }));
+
+        showToast(newBadge === "verified_business" ? "Verified badge applied!" : "Badge removed.");
+        setShowConfirmModal(false);
+        setNote("");
+
+        // Refresh feed / clips & audits
+        onRefreshClips();
+        await loadRecentAudit();
+      } else {
+        showToast(data.error || "Failed to update badge.");
+      }
+    } catch (err: any) {
+      showToast(err?.message || "Error updating badge.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6 max-w-3xl w-full mx-auto">
+      {/* Search Header Form */}
+      <div className="bg-slate-950 border border-slate-900 rounded-3xl p-4 sm:p-6 space-y-4">
+        <div>
+          <h2 className="text-base font-bold text-white flex items-center gap-2">
+            <Building2 className="w-5 h-5 text-amber-400" />
+            <span>Search & Manage Badges</span>
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">
+            Search users by username or email to grant or revoke Verified Business or Official badges.
+          </p>
+        </div>
+
+        <form onSubmit={handleFormSubmit} className="flex flex-col sm:flex-row items-stretch gap-2.5">
+          <div className="relative flex-1">
+            <input
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="Username or email"
+              value={query}
+              onChange={handleInputChange}
+              className="text-base h-12 w-full rounded-xl bg-[#0a0c10] border border-slate-800 focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/30 text-white px-4 placeholder:text-slate-500 outline-none transition-all"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={isSearching}
+            className="h-12 min-w-[88px] px-5 rounded-xl bg-amber-500 hover:bg-amber-450 active:scale-95 text-slate-950 font-bold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-amber-950/20 disabled:opacity-60"
+          >
+            {isSearching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            <span>{isSearching ? "Searching…" : "Search"}</span>
+          </button>
+        </form>
+
+        {/* Searching indicator */}
+        {isSearching && (
+          <div className="flex items-center gap-2 text-xs font-mono text-amber-400 py-2">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            <span>Searching…</span>
+          </div>
+        )}
+
+        {/* Empty state with sync button */}
+        {!isSearching && hasSearched && searchResults.length === 0 && (
+          <div className="p-4 rounded-2xl bg-[#0a0c10] border border-slate-900 text-center space-y-3">
+            <p className="text-xs text-slate-300">
+              No account found for &ldquo;{query}&rdquo;. If they just signed up, a sync might be needed.
+            </p>
+            <button
+              type="button"
+              onClick={onSyncAuth}
+              disabled={isSyncingAuth}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-bold text-white transition-all cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAuth ? "animate-spin text-amber-400" : ""}`} />
+              <span>{isSyncingAuth ? "Syncing accounts…" : "Sync Auth Users"}</span>
+            </button>
+          </div>
+        )}
+
+        {/* Search Results List */}
+        {!isSearching && searchResults.length > 0 && (
+          <div className="space-y-2 pt-2">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500">
+              Results ({searchResults.length})
+            </span>
+            <div className="divide-y divide-slate-900/60 rounded-2xl border border-slate-900 bg-[#0a0c10] overflow-hidden">
+              {searchResults.map((user) => {
+                const uid = user.id || user.user_id || "";
+                const isSelected = (selectedUser?.id || selectedUser?.user_id) === uid;
+                const bType = user.badge_type || (user.is_official ? "official" : null);
+
+                return (
+                  <div
+                    key={uid}
+                    onClick={() => handleSelectUser(user)}
+                    className={`p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer transition-colors ${
+                      isSelected ? "bg-amber-500/10 border-l-4 border-l-amber-500" : "hover:bg-slate-900/40"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar
+                        name={user.username}
+                        url={user.avatar_url || null}
+                        size={36}
+                        className="shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-bold text-white truncate">@{user.username}</span>
+                          {bType === "verified_business" && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500 border border-amber-300/60 text-slate-950 font-bold font-mono text-[9px]">
+                              <Building2 className="w-2.5 h-2.5" />
+                              <span>Verified</span>
+                            </span>
+                          )}
+                          {bType === "official" && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-indigo-600 border border-indigo-400/60 text-white font-bold font-mono text-[9px]">
+                              <BadgeCheck className="w-2.5 h-2.5" />
+                              <span>Official</span>
+                            </span>
+                          )}
+                        </div>
+                        {user.email && (
+                          <span className="text-xs text-slate-400 block truncate mt-0.5">{user.email}</span>
+                        )}
+                        <span className="text-[10px] font-mono text-slate-600 block mt-0.5">ID: {uid.slice(0, 8)}...</span>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 self-end sm:self-center">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSelectUser(user);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          isSelected
+                            ? "bg-amber-500 text-slate-950 shadow-sm"
+                            : "bg-slate-900 text-slate-300 hover:text-white hover:bg-slate-800"
+                        }`}
+                      >
+                        {isSelected ? "Selected" : "Select"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Badge Management Panel for Selected User */}
+      {selectedUser && (
+        <div className="bg-slate-950 border border-amber-500/30 rounded-3xl p-4 sm:p-6 space-y-5 shadow-lg shadow-amber-950/10">
+          <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-900">
+            <div className="flex items-center gap-3 min-w-0">
+              <Avatar
+                name={selectedUser.username}
+                url={selectedUser.avatar_url || null}
+                size={44}
+                className="shrink-0"
+              />
+              <div className="min-w-0">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400 block">Active Account</span>
+                <h3 className="text-lg font-black text-white truncate">@{selectedUser.username}</h3>
+                {selectedUser.email && <p className="text-xs text-slate-400 truncate">{selectedUser.email}</p>}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedUser(null)}
+              className="p-1.5 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+              title="Deselect user"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Current Badge Status */}
+          <div className="bg-[#0a0c10] border border-slate-900 rounded-2xl p-4 flex items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-mono text-slate-500 uppercase font-bold block">Current Badge Status</span>
+              <div className="mt-1 flex items-center gap-2">
+                {selectedUser.badge_type === "verified_business" ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500 border border-amber-300/60 text-slate-950 font-bold font-mono text-xs shadow-sm shadow-amber-900/40">
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span>Verified</span>
+                  </span>
+                ) : selectedUser.badge_type === "official" || selectedUser.is_official ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-600 border border-indigo-400/60 text-white font-bold font-mono text-xs shadow-sm shadow-indigo-900/40">
+                    <BadgeCheck className="w-3.5 h-3.5" />
+                    <span>Official</span>
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-400 italic">No badge assigned</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Optional Note Field */}
+          <div className="space-y-1.5">
+            <label className="block text-xs font-bold text-slate-300">
+              Audit Note <span className="text-slate-500 font-normal">(optional, stored in badge_audit)</span>
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Registered LLC verified via support ticket #123"
+              maxLength={500}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="w-full h-11 rounded-xl bg-[#0a0c10] border border-slate-800 text-white text-xs px-3 placeholder:text-slate-600 outline-none focus:border-amber-500/50"
+            />
+          </div>
+
+          {/* Action Buttons */}
+          {(selectedUser.badge_type === "official" || selectedUser.is_official) ? (
+            <div className="flex items-center gap-2.5 pt-1">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-600 border border-indigo-400/60 text-white font-bold font-mono text-xs shadow-sm shadow-indigo-900/40">
+                <BadgeCheck className="w-3.5 h-3.5 text-white" />
+                <span>Official</span>
+              </span>
+              <span className="text-xs text-slate-400 font-medium">
+                Official account — can&apos;t be changed here
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => requestBadgeChange("verified_business")}
+                className="flex-1 min-w-[140px] h-11 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-amber-950/30"
+              >
+                <Building2 className="w-4 h-4" />
+                <span>Give Verified</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => requestBadgeChange(null)}
+                className="h-11 px-4 rounded-xl bg-red-950/40 hover:bg-red-900 border border-red-900/40 text-red-300 hover:text-white font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Remove badge</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Confirmation Modal */}
+      <AnimatePresence>
+        {showConfirmModal && selectedUser && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-950 border border-slate-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl text-slate-100"
+            >
+              <div className="flex items-center gap-3 pb-3 border-b border-slate-900">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                  pendingBadge === "verified_business" ? "bg-amber-500/20 text-amber-400" : "bg-red-500/20 text-red-400"
+                }`}>
+                  {pendingBadge === "verified_business" ? <Building2 className="w-5 h-5" /> : <Trash2 className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="font-sans font-bold text-base text-white">
+                    {pendingBadge === "verified_business" ? "Confirm Verified Badge" : "Confirm Badge Removal"}
+                  </h3>
+                  <span className="text-[10px] font-mono text-slate-400">Database RPC Action</span>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-300 space-y-2">
+                <p>
+                  Target user: <strong className="text-white">@{selectedUser.username}</strong>
+                </p>
+                <p>
+                  New badge state:{" "}
+                  <strong className={pendingBadge === "verified_business" ? "text-amber-400" : "text-red-400"}>
+                    {pendingBadge === "verified_business" ? "Verified business" : "None (Remove)"}
+                  </strong>
+                </p>
+                {note.trim() && (
+                  <p className="text-[11px] text-slate-400 italic bg-[#0a0c10] p-2.5 rounded-xl border border-slate-900">
+                    &ldquo;{note.trim()}&rdquo;
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => setShowConfirmModal(false)}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={confirmBadgeChange}
+                  className={`px-4 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer ${
+                    pendingBadge === "verified_business"
+                      ? "bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold"
+                      : "bg-red-600 hover:bg-red-500 text-white"
+                  }`}
+                >
+                  {isSubmitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSubmitting ? "Applying…" : "Confirm & Save"}</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Badge Audit Log */}
+      <div className="bg-slate-950 border border-slate-900 rounded-3xl p-4 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Shield className="w-4 h-4 text-slate-400" />
+              <span>Recent Badge Audit Log</span>
+            </h3>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Historical record of all badge assignments and revocations.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={loadRecentAudit}
+            disabled={isLoadingAudit}
+            className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+            title="Refresh audit log"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingAudit ? "animate-spin text-amber-400" : ""}`} />
+          </button>
+        </div>
+
+        {isLoadingAudit ? (
+          <div className="flex items-center justify-center py-8 text-xs text-slate-500 gap-2">
+            <RefreshCw className="w-4 h-4 animate-spin text-slate-400" />
+            <span>Loading audit log…</span>
+          </div>
+        ) : auditLog.length === 0 ? (
+          <div className="p-6 text-center text-xs text-slate-500 bg-[#0a0c10] border border-slate-900 rounded-2xl">
+            No badge changes recorded in audit history yet.
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-900/60 rounded-2xl border border-slate-900 bg-[#0a0c10] overflow-hidden">
+            {auditLog.map((entry) => (
+              <div key={entry.id} className="p-3 sm:p-4 text-xs space-y-1">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-white">@{entry.username || "user"}</span>
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {entry.old_badge || "none"} →{" "}
+                      <span className={entry.new_badge === "verified_business" ? "text-amber-400 font-bold" : entry.new_badge === "official" ? "text-indigo-400 font-bold" : "text-slate-400"}>
+                        {entry.new_badge || "none"}
+                      </span>
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {entry.created_at ? new Date(entry.created_at).toLocaleString() : ""}
+                  </span>
+                </div>
+                {entry.note && (
+                  <p className="text-[11px] text-slate-400 italic">
+                    Note: &ldquo;{entry.note}&rdquo;
+                  </p>
+                )}
+                <div className="text-[9px] font-mono text-slate-600">
+                  Changed by: {entry.changed_by || "admin"}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
