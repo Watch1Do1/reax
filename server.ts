@@ -2404,6 +2404,62 @@ app.get("/api/me/reactions", async (req, res) => {
   }
 });
 
+// API: Current user's liked posts, newest like first. Likes are private, so this
+// only ever returns the signed-in user's own likes.
+// GET /api/me/liked?limit=20&cursor=<like created_at ISO> -> { clips, nextCursor, hasMore }
+app.get("/api/me/liked", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+  const limit = Math.max(1, Math.min(50, parseInt(String(req.query.limit || "20"), 10) || 20));
+  const rawCursor = typeof req.query.cursor === "string" ? req.query.cursor : "";
+  const cursor = rawCursor && !isNaN(new Date(rawCursor).getTime()) ? new Date(rawCursor).toISOString() : null;
+
+  const dbClient = supabaseAdmin || supabase;
+  if (!dbClient) {
+    return res.json({ clips: [], nextCursor: null, hasMore: false });
+  }
+  try {
+    let likesQuery = dbClient
+      .from("clip_likes")
+      .select("clip_id, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(limit + 1);
+    if (cursor) likesQuery = likesQuery.lt("created_at", cursor);
+    const { data: likeRows, error: likesErr } = await likesQuery;
+    if (likesErr) {
+      console.error("GET /api/me/liked likes error:", likesErr.message || likesErr);
+      return res.status(500).json({ error: "Could not load liked posts" });
+    }
+    const rows = likeRows || [];
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const nextCursor = hasMore && pageRows.length > 0 ? new Date(pageRows[pageRows.length - 1].created_at).toISOString() : null;
+
+    const ids = pageRows.map((r: any) => String(r.clip_id));
+    if (ids.length === 0) {
+      return res.json({ clips: [], nextCursor, hasMore });
+    }
+    const { data: clipRows, error: clipsErr } = await dbClient.from("clips").select("*").in("id", ids);
+    if (clipsErr) {
+      console.error("GET /api/me/liked clips error:", clipsErr.message || clipsErr);
+      return res.status(500).json({ error: "Could not load liked posts" });
+    }
+    // Keep like order; deleted or missing clips are dropped.
+    const byId = new Map<string, Clip>();
+    (clipRows || []).map(mapDbToClip).forEach((c: Clip) => { if (!c.deleted) byId.set(String(c.id), c); });
+    const clips = ids.map((id) => byId.get(id)).filter(Boolean);
+    return res.json({ clips, nextCursor, hasMore });
+  } catch (err: any) {
+    console.error("GET /api/me/liked", err?.message || err);
+    return res.status(500).json({ error: "Could not load liked posts" });
+  }
+});
+
 // API: Upsert / Update Current Authenticated User Profile (Username & Policy Acceptance)
 app.post("/api/me", async (req, res) => {
   const authRes = await authenticateUser(req);

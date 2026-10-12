@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, User, Heart, MessageCircle, Sparkles, Film, 
@@ -10,6 +10,7 @@ import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
+import { getAuthToken } from "../utils/supabaseClient";
 
 export interface UserProfileModalProps {
   isOpen: boolean;
@@ -18,6 +19,12 @@ export interface UserProfileModalProps {
   allClips: Clip[];
   onSelectClip: (clipId: string) => void;
   onRespondToClip?: (clip: Clip) => void;
+  /** True when this profile belongs to the signed-in user. The Liked tab is only shown then (likes are private). */
+  isOwnProfile?: boolean;
+  /** Open a liked post that may not be loaded in the feed yet. */
+  onSelectLikedClip?: (clip: Clip) => void;
+  /** Tab to show when the modal opens (e.g. "liked" from the profile panel). */
+  initialTab?: "all" | "roots" | "replies" | "liked";
 }
 
 export default function UserProfileModal({
@@ -26,9 +33,69 @@ export default function UserProfileModal({
   username,
   allClips,
   onSelectClip,
-  onRespondToClip
+  onRespondToClip,
+  isOwnProfile = false,
+  onSelectLikedClip,
+  initialTab = "all"
 }: UserProfileModalProps) {
-  const [filterTab, setFilterTab] = useState<"all" | "roots" | "replies">("all");
+  const [filterTab, setFilterTab] = useState<"all" | "roots" | "replies" | "liked">("all");
+  const [likedClips, setLikedClips] = useState<Clip[]>([]);
+  const [likedCursor, setLikedCursor] = useState<string | null>(null);
+  const [likedHasMore, setLikedHasMore] = useState(false);
+  const [likedLoading, setLikedLoading] = useState(false);
+  const [likedLoaded, setLikedLoaded] = useState(false);
+  const [likedError, setLikedError] = useState<string | null>(null);
+
+  // Reset per profile open so another account's view never shows stale likes.
+  useEffect(() => {
+    setFilterTab(initialTab === "liked" && !isOwnProfile ? "all" : initialTab);
+    setLikedClips([]);
+    setLikedCursor(null);
+    setLikedHasMore(false);
+    setLikedLoaded(false);
+    setLikedError(null);
+  }, [username, isOpen, initialTab, isOwnProfile]);
+
+  const loadLiked = useCallback(async (cursor: string | null) => {
+    setLikedLoading(true);
+    setLikedError(null);
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        setLikedError("Sign in to see posts you like.");
+        return;
+      }
+      const params = new URLSearchParams({ limit: "20" });
+      if (cursor) params.set("cursor", cursor);
+      const res = await fetch(`/api/me/liked?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        setLikedError("Couldn't load liked posts. Try again.");
+        return;
+      }
+      const data = await res.json();
+      const incoming: Clip[] = Array.isArray(data?.clips) ? data.clips : [];
+      setLikedClips((prev) => {
+        const seen = new Set(prev.map((c) => c.id));
+        return [...prev, ...incoming.filter((c) => !seen.has(c.id))];
+      });
+      setLikedCursor(data?.nextCursor || null);
+      setLikedHasMore(Boolean(data?.hasMore));
+      setLikedLoaded(true);
+    } catch (err) {
+      console.error("Failed to load liked posts:", err);
+      setLikedError("Couldn't load liked posts. Try again.");
+    } finally {
+      setLikedLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isOpen && isOwnProfile && filterTab === "liked" && !likedLoaded && !likedLoading && !likedError) {
+      loadLiked(null);
+    }
+  }, [isOpen, isOwnProfile, filterTab, likedLoaded, likedLoading, likedError, loadLiked]);
 
   // Clean target username
   const cleanTarget = (username || "").trim().replace(/^@/, "");
@@ -87,6 +154,9 @@ export default function UserProfileModal({
 
   // Filtered list based on active tab
   const filteredClips = useMemo(() => {
+    if (filterTab === "liked") {
+      return likedClips;
+    }
     if (filterTab === "roots") {
       return userClips.filter(c => c.parentId === null);
     }
@@ -94,7 +164,7 @@ export default function UserProfileModal({
       return userClips.filter(c => c.parentId !== null);
     }
     return userClips;
-  }, [userClips, filterTab]);
+  }, [userClips, filterTab, likedClips]);
 
   const isOfficial = useMemo(() => {
     return userClips.some((c) => Boolean(c.authorIsOfficial));
@@ -105,6 +175,14 @@ export default function UserProfileModal({
     const found = userClips.find((c) => c.authorBadgeType);
     return found ? found.authorBadgeType : null;
   }, [userClips, isOfficial]);
+
+  const openClip = (clip: Clip) => {
+    if (filterTab === "liked" && onSelectLikedClip) {
+      onSelectLikedClip(clip);
+    } else {
+      onSelectClip(clip.id);
+    }
+  };
 
   if (!isOpen || !username) return null;
 
@@ -239,14 +317,49 @@ export default function UserProfileModal({
             >
               Reactions ({stats.reactions})
             </button>
+            {isOwnProfile && (
+              <button
+                onClick={() => setFilterTab("liked")}
+                className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                  filterTab === "liked"
+                    ? "bg-rose-600 text-white font-bold"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
+                }`}
+                title="Only you can see your likes"
+              >
+                <Heart className="w-3 h-3" />
+                Liked
+              </button>
+            )}
           </div>
 
           {/* Clips List / Grid */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
-            {filteredClips.length === 0 ? (
+            {filterTab === "liked" && filteredClips.length === 0 && (likedLoading || !likedLoaded) && !likedError ? (
+              <div className="text-center py-12 text-xs text-slate-500">Loading liked posts…</div>
+            ) : filterTab === "liked" && filteredClips.length === 0 && likedError ? (
+              <div className="text-center py-12 space-y-3 text-slate-500">
+                <p className="text-xs">{likedError}</p>
+                <button
+                  onClick={() => loadLiked(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-xs hover:bg-slate-700 cursor-pointer"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : filteredClips.length === 0 ? (
               <div className="text-center py-12 space-y-2 text-slate-500">
-                <Film className="w-8 h-8 mx-auto opacity-40 text-slate-400" />
-                <p className="text-xs">No reactions found in this category.</p>
+                {filterTab === "liked" ? (
+                  <>
+                    <Heart className="w-8 h-8 mx-auto opacity-40 text-rose-400" />
+                    <p className="text-xs">Posts you like will show up here.</p>
+                  </>
+                ) : (
+                  <>
+                    <Film className="w-8 h-8 mx-auto opacity-40 text-slate-400" />
+                    <p className="text-xs">No reactions found in this category.</p>
+                  </>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -265,7 +378,7 @@ export default function UserProfileModal({
                       <div 
                         onClick={() => {
                           onClose();
-                          onSelectClip(clip.id);
+                          openClip(clip);
                         }}
                         onContextMenu={blockMediaEvent}
                         className="w-full aspect-video rounded-xl bg-slate-900 overflow-hidden relative border border-slate-800/80 cursor-pointer reax-protected-media"
@@ -340,7 +453,7 @@ export default function UserProfileModal({
                           <button
                             onClick={() => {
                               onClose();
-                              onSelectClip(clip.id);
+                              openClip(clip);
                             }}
                             className="text-indigo-400 hover:text-indigo-300 font-bold hover:underline flex items-center gap-0.5 cursor-pointer"
                           >
@@ -353,6 +466,21 @@ export default function UserProfileModal({
                   );
                 })}
               </div>
+            )}
+
+            {filterTab === "liked" && likedHasMore && filteredClips.length > 0 && (
+              <div className="flex justify-center pt-2">
+                <button
+                  onClick={() => loadLiked(likedCursor)}
+                  disabled={likedLoading}
+                  className="px-4 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-slate-200 text-xs hover:bg-slate-700 disabled:opacity-60 cursor-pointer"
+                >
+                  {likedLoading ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            )}
+            {filterTab === "liked" && likedError && filteredClips.length > 0 && (
+              <p className="text-center text-xs text-rose-400 pt-2">{likedError}</p>
             )}
           </div>
 

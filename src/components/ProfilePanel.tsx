@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   X, User, Mail, Lock, LogOut, Film, Sparkles, Check, 
   AlertCircle, CheckCircle, KeyRound, Clock, Flame, ShieldCheck,
-  Eye, EyeOff
+  Eye, EyeOff, Heart
 } from "lucide-react";
 import { Clip } from "../types";
 import { 
@@ -29,6 +29,8 @@ export interface ProfilePanelProps {
   onRefreshClips?: () => void;
   clips?: Clip[];
   onClipSelect?: (clipId: string) => void;
+  /** Opens the private "Liked" list for the signed-in user. */
+  onOpenLiked?: () => void;
 }
 
 export default function ProfilePanel({
@@ -39,7 +41,8 @@ export default function ProfilePanel({
   onUsernameUpdated,
   onRefreshClips,
   clips = [],
-  onClipSelect
+  onClipSelect,
+  onOpenLiked
 }: ProfilePanelProps) {
   const [email, setEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
@@ -516,6 +519,16 @@ export default function ProfilePanel({
                 <Film className="w-3.5 h-3.5 text-indigo-400" />
                 Your Loops ({userClips.length})
               </h3>
+              {onOpenLiked && (
+                <button
+                  onClick={onOpenLiked}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-slate-700/70 text-rose-300 text-[11px] font-mono font-bold cursor-pointer"
+                  title="Only you can see your likes"
+                >
+                  <Heart className="w-3 h-3" />
+                  Liked
+                </button>
+              )}
             </div>
 
             {userClips.length === 0 ? (

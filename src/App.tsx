@@ -36,6 +36,25 @@ import {
   acceptPolicies
 } from "./utils/supabaseClient";
 
+type FeedType = "hot" | "latest" | "most_reacted" | "audio_hot";
+const FEED_TYPES: FeedType[] = ["hot", "latest", "most_reacted", "audio_hot"];
+const DEFAULT_FEED_STORAGE_KEY = "reax_default_feed";
+const FEED_LABELS: Record<FeedType, string> = {
+  hot: "Hot",
+  latest: "Latest",
+  most_reacted: "Most Reacted",
+  audio_hot: "Voice"
+};
+function readDefaultFeedType(): FeedType {
+  try {
+    const saved = localStorage.getItem(DEFAULT_FEED_STORAGE_KEY);
+    if (saved && (FEED_TYPES as string[]).includes(saved)) return saved as FeedType;
+  } catch {
+    // localStorage unavailable (private mode): fall back to Latest
+  }
+  return "latest";
+}
+
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [loading, setLoading] = useState(true);
@@ -331,10 +350,21 @@ export default function App() {
   const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(false);
   const [remixData, setRemixData] = useState<SavedReaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const [feedType, setFeedType] = useState<"hot" | "latest" | "most_reacted" | "audio_hot">("latest");
+  // The user's chosen default feed tab lives in localStorage (no account setting needed).
+  const [defaultFeedType, setDefaultFeedType] = useState<FeedType>(() => readDefaultFeedType());
+  const [feedType, setFeedType] = useState<FeedType>(defaultFeedType);
+  const makeFeedDefault = (type: FeedType) => {
+    try {
+      localStorage.setItem(DEFAULT_FEED_STORAGE_KEY, type);
+    } catch (err) {
+      console.error("Could not save default feed tab:", err);
+    }
+    setDefaultFeedType(type);
+  };
 
   // User Search & Public Profile State
   const [selectedUserProfileUsername, setSelectedUserProfileUsername] = useState<string | null>(null);
+  const [userProfileInitialTab, setUserProfileInitialTab] = useState<"all" | "liked">("all");
   const [activeUserFilter, setActiveUserFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -530,6 +560,7 @@ export default function App() {
       setSearchQuery(`#${tag}`);
       setSelectedThreadRootId(null);
       setSelectedUserProfileUsername(null);
+      setUserProfileInitialTab("all");
       window.scrollTo({ top: 0, behavior: "smooth" });
     };
     window.addEventListener(HASHTAG_EVENT, onTag);
@@ -1402,6 +1433,20 @@ export default function App() {
             </button>
           </div>
         )}
+        {!loading && clips.length > 0 && (
+          <div className="flex justify-center mb-2 text-[11px]">
+            {feedType === defaultFeedType ? (
+              <span className="text-slate-500">{FEED_LABELS[feedType]} is your default feed</span>
+            ) : (
+              <button
+                onClick={() => makeFeedDefault(feedType)}
+                className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
+              >
+                Make {FEED_LABELS[feedType]} my default
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Loading feed list placeholder */}
         {loading && clips.length === 0 ? (
@@ -1865,14 +1910,34 @@ export default function App() {
         onRefreshClips={() => setRefreshTrigger(prev => prev + 1)}
         clips={clips}
         onClipSelect={(targetId) => setSelectedThreadRootId(targetId)}
+        onOpenLiked={() => {
+          setIsProfileOpen(false);
+          setUserProfileInitialTab("liked");
+          setSelectedUserProfileUsername(username);
+        }}
       />
 
       {/* PUBLIC USER PROFILE & REACTIONS MODAL */}
       <UserProfileModal
         isOpen={!!selectedUserProfileUsername}
         username={selectedUserProfileUsername}
-        onClose={() => setSelectedUserProfileUsername(null)}
+        onClose={() => {
+          setSelectedUserProfileUsername(null);
+          setUserProfileInitialTab("all");
+        }}
         allClips={clips}
+        initialTab={userProfileInitialTab}
+        isOwnProfile={Boolean(
+          isLoggedIn && username && selectedUserProfileUsername &&
+          selectedUserProfileUsername.trim().replace(/^@/, "").toLowerCase() === username.trim().replace(/^@/, "").toLowerCase()
+        )}
+        onSelectLikedClip={(likedClip) => {
+          // A liked post may be older than what the feed has loaded; add it so the thread can open.
+          mergeClips([likedClip]);
+          setSelectedUserProfileUsername(null);
+          setUserProfileInitialTab("all");
+          setSelectedThreadRootId(likedClip.id);
+        }}
         onSelectClip={(targetId) => {
           setSelectedUserProfileUsername(null);
           setSelectedThreadRootId(targetId);
