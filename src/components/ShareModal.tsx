@@ -189,11 +189,31 @@ export default function ShareModal({
 
         {/* Primary Action Buttons */}
         <div className="space-y-2.5">
+          {/* 0. Share with Sound (voice pictures only) - same action as the watermarked video button */}
           {isVoicePicture && (
-            <div className="pt-0.5">
-              <div className="text-xs font-bold uppercase tracking-wide text-indigo-300">Share with sound</div>
-              <div className="text-xs text-slate-400">Saves as a video so your voice plays.</div>
-            </div>
+            <button
+              type="button"
+              onClick={isVideoReady && onSaveVideo ? onSaveVideo : onDownloadVideo}
+              disabled={isGeneratingVideo}
+              className="flex items-center justify-between w-full px-4 py-3 bg-gradient-to-r from-pink-600/30 via-purple-600/30 to-indigo-600/30 hover:from-pink-600/45 hover:via-purple-600/45 hover:to-indigo-600/45 border border-pink-500/50 hover:border-pink-400 rounded-xl transition-all cursor-pointer group shadow-xl"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-pink-500/20 text-pink-300 flex items-center justify-center group-hover:scale-105 transition-transform border border-pink-500/30">
+                  <Film className="w-5 h-5" />
+                </div>
+                <div className="text-left">
+                  <div className="text-sm font-bold text-white">
+                    {isGeneratingVideo ? `Share with Sound... ${videoProgress || 0}%` : "Share with Sound"}
+                  </div>
+                  <div className="text-xs text-slate-300">
+                    {isVideoReady ? "Ready: tap to share or save" : "Saves as a video so your voice plays"}
+                  </div>
+                </div>
+              </div>
+              <span className="text-xs font-semibold text-pink-300 group-hover:text-white px-2 py-1 rounded-md bg-pink-500/10">
+                {isGeneratingVideo ? `${videoProgress || 0}%` : isVideoReady ? "Share" : "Go"}
+              </span>
+            </button>
           )}
           {/* 1. Download Watermarked Video (MP4) - Ideal for TikTok, Instagram, Twitter, Discord */}
           {(canCreateVideo ?? clip.mediaType === "video") && onDownloadVideo && (
@@ -209,13 +229,9 @@ export default function ShareModal({
                 </div>
                 <div className="text-left">
                   <div className="text-sm font-bold text-white flex items-center gap-1.5">
-                    {isVoicePicture
-                      ? isGeneratingVideo
-                        ? `Making video with sound... ${videoProgress || 0}%`
-                        : isVideoReady ? "Save / Share video" : "Make video with sound"
-                      : isGeneratingVideo 
-                      ? `Creating Video... ${videoProgress || 0}%` 
-                      : isVideoReady ? "Save Video" : "Create Watermarked Video"}
+                    {isGeneratingVideo
+                      ? `Creating Video... ${videoProgress || 0}%`
+                      : isVideoReady ? "Save Video" : "Download Watermarked Video"}
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-400/20 text-indigo-300 border border-indigo-400/30">
                       MP4
                     </span>
@@ -235,9 +251,6 @@ export default function ShareModal({
             </button>
           )}
 
-          {isVoicePicture && (
-            <div className="pt-2 text-xs font-bold uppercase tracking-wide text-slate-400">Picture only (no sound)</div>
-          )}
 
           {/* 2. Copy Picture (Paste directly into Email / Slack / Discord) */}
           {onCopyPicture && (
