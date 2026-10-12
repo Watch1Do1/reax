@@ -14,7 +14,8 @@ import {
   formatAuthError,
   isInAppBrowser,
   checkUsernameAvailable,
-  getSupabaseClient
+  getSupabaseClient,
+  resendSignupEmail
 } from "../utils/supabaseClient";
 import PolicyDocumentModal from "./PolicyDocumentModal";
 import { isReservedUsername, RESERVED_USERNAME_MESSAGE } from "../utils/reservedUsernames";
@@ -55,6 +56,15 @@ export default function OnboardingModal({
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showSignupConfirmPassword, setShowSignupConfirmPassword] = useState(false);
+  const [confirmEmail, setConfirmEmail] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [isResending, setIsResending] = useState(false);
+
+  React.useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
 
   const isInApp = isInAppBrowser();
 
@@ -66,6 +76,26 @@ export default function OnboardingModal({
   }, [triggerReason, isOpen]);
 
   if (!isOpen) return null;
+
+  const toast = (message: string) => {
+    window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message } }));
+  };
+
+  const handleResend = async () => {
+    if (resendCooldown > 0 || isResending || !confirmEmail) return;
+    setIsResending(true);
+    try {
+      const res = await resendSignupEmail(confirmEmail);
+      if (res.success) {
+        toast(`Confirmation email sent to ${confirmEmail}`);
+        setResendCooldown(60);
+      } else {
+        toast(res.error || "Couldn't resend the email. Please try again.");
+      }
+    } finally {
+      setIsResending(false);
+    }
+  };
 
   const validateUsername = (name: string): string | null => {
     if (name.length < 3) return "Username must be at least 3 characters";
@@ -122,6 +152,13 @@ export default function OnboardingModal({
     try {
       const res = await signInWithEmail({ email: cleanEmail, password });
       if (!res.success) {
+        if (res.needsEmailConfirm) {
+          setConfirmEmail(cleanEmail);
+          setNeedsEmailConfirm(true);
+          setError(null);
+          setIsSubmitting(false);
+          return;
+        }
         setError(res.error || "Sign in failed. Please check your credentials.");
         setIsSubmitting(false);
         return;
@@ -233,6 +270,8 @@ export default function OnboardingModal({
         try {
           await syncUserProfile(cleanUsername);
         } catch {}
+        setConfirmEmail(cleanEmail);
+        setResendCooldown(60);
         setNeedsEmailConfirm(true);
         setError(null);
       } else {
@@ -389,23 +428,37 @@ export default function OnboardingModal({
           
           {/* Email Confirmation Notice */}
           {needsEmailConfirm ? (
-            <div className="space-y-4 py-2 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400 shadow-lg">
-                <Mail className="w-6 h-6" />
+            <div className="space-y-4 py-4 text-center">
+              <div className="w-20 h-20 rounded-3xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400 shadow-lg">
+                <Mail className="w-10 h-10" />
               </div>
               <div className="space-y-2">
-                <h3 className="text-base font-bold text-white font-sans">
-                  {triggerReason === "post_limit"
-                    ? "Keep these loops. Confirm your email, then sign in."
-                    : "Check your email to confirm. Then sign in."}
-                </h3>
-                <p className="text-xs text-slate-300 font-mono leading-relaxed max-w-xs mx-auto">
-                  {triggerReason === "post_limit"
-                    ? "We sent a confirmation link to your email. Confirm your email, then sign in."
-                    : "We sent a confirmation link to your email. Click the link to verify your account, then sign in with your password."}
+                <h3 className="text-xl font-bold text-white font-sans">Check your email</h3>
+                <p className="text-sm text-slate-200 font-sans leading-relaxed">
+                  We sent a confirmation link to{" "}
+                  <span className="font-bold text-white break-all">{confirmEmail || "your email"}</span>
+                </p>
+                <p className="text-xs text-slate-400 font-mono">From: support@getreax.com</p>
+                <p className="text-xs text-slate-400 font-mono leading-relaxed max-w-xs mx-auto">
+                  Check spam/promotions if you don't see it in a minute.
+                </p>
+                <p className="text-xs text-slate-400 font-mono leading-relaxed max-w-xs mx-auto">
+                  Tap the link to confirm your account, then sign in.
                 </p>
               </div>
               <div className="pt-2 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={resendCooldown > 0 || isResending || !confirmEmail}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isResending
+                    ? "Sending..."
+                    : resendCooldown > 0
+                    ? `Resend email (${resendCooldown}s)`
+                    : "Resend email"}
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -415,16 +468,25 @@ export default function OnboardingModal({
                     setError(null);
                     setSuccessMsg(null);
                   }}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md"
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs rounded-xl transition-colors cursor-pointer"
                 >
-                  Go to Sign In
+                  I've confirmed, sign in
                 </button>
                 <button
                   type="button"
-                  onClick={onClose}
-                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-xs rounded-xl transition-colors cursor-pointer"
+                  onClick={() => {
+                    setNeedsEmailConfirm(false);
+                    setTab("signup");
+                    setEmail("");
+                    setConfirmEmail("");
+                    setResendCooldown(0);
+                    setIsForgotPassword(false);
+                    setError(null);
+                    setSuccessMsg(null);
+                  }}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 underline font-mono cursor-pointer pt-1"
                 >
-                  Close
+                  Use a different email
                 </button>
               </div>
             </div>
@@ -745,6 +807,11 @@ export default function OnboardingModal({
                       <span>{successMsg}</span>
                     </div>
                   )}
+
+                  <p className="flex items-center justify-center gap-1.5 text-[11px] text-slate-300 font-mono">
+                    <Mail className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                    We'll email you a link to confirm your account.
+                  </p>
 
                   <button
                     type="submit"

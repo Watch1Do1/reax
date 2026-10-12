@@ -162,6 +162,42 @@ export function formatAuthError(
 }
 
 /**
+ * Origin used for confirmation-link redirects. Uses the current origin on
+ * getreax.com or local dev; otherwise falls back to https://www.getreax.com.
+ */
+export function getEmailRedirectOrigin(): string {
+  const fallback = "https://www.getreax.com";
+  if (typeof window === "undefined" || !window.location?.origin) return fallback;
+  const { origin, hostname } = window.location;
+  if (hostname === "getreax.com" || hostname.endsWith(".getreax.com")) return origin;
+  if (hostname === "localhost" || hostname === "127.0.0.1") return origin;
+  return fallback;
+}
+
+/**
+ * Re-sends the signup confirmation email.
+ */
+export async function resendSignupEmail(email: string): Promise<{ success: boolean; error?: string }> {
+  const cleanEmail = email.trim();
+  if (!cleanEmail || !cleanEmail.includes("@")) {
+    return { success: false, error: "Please enter a valid email address." };
+  }
+  try {
+    const supabase = await getSupabaseClient();
+    if (!supabase) return { success: true };
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email: cleanEmail,
+      options: { emailRedirectTo: getEmailRedirectOrigin() }
+    });
+    if (error) return { success: false, error: formatAuthError(error, "Couldn't resend the email. Please try again.") };
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: formatAuthError(err, "Couldn't resend the email. Please try again.") };
+  }
+}
+
+/**
  * Signs up a new account using Email + Password + Username.
  * - If current session is anonymous, calls updateUser so the same user ID is kept.
  * - Otherwise calls signUp with emailRedirectTo = window.location.origin.
@@ -250,12 +286,11 @@ export async function signUpWithEmail({
 
       createdUser = data.user;
     } else {
-      const origin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "";
       const { data, error } = await supabase.auth.signUp({
         email: cleanEmail,
         password: cleanPassword,
         options: {
-          emailRedirectTo: origin || undefined,
+          emailRedirectTo: getEmailRedirectOrigin(),
           data: policyMetadata
         }
       });
@@ -321,6 +356,7 @@ export async function signInWithEmail({
   password: string;
 }): Promise<{
   success: boolean;
+  needsEmailConfirm?: boolean;
   user?: User | null;
   session?: Session | null;
   error?: string;
@@ -347,7 +383,10 @@ export async function signInWithEmail({
     });
 
     if (error) {
-      return { success: false, error: formatAuthError(error) };
+      const raw = String((error as any)?.message || "");
+      const isUnconfirmed =
+        raw.toLowerCase().includes("email not confirmed") || (error as any)?.code === "email_not_confirmed";
+      return { success: false, needsEmailConfirm: isUnconfirmed || undefined, error: formatAuthError(error) };
     }
 
     const checkUser = data.user;
@@ -382,6 +421,7 @@ export async function signInWithEmail({
       }
       return {
         success: false,
+        needsEmailConfirm: true,
         error: "Please check your email to confirm your account before signing in."
       };
     }
