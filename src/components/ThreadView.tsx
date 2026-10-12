@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Heart, Volume2, Plus, ChevronRight, ArrowLeft, 
   CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2, Mic, 
-  Flame, ListOrdered, ChevronDown, ChevronUp, Radio, Check
+  Flame, ListOrdered, ChevronDown, ChevronUp, Radio, Check, Share2
 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
@@ -11,6 +11,8 @@ import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
+import ShareModal from "./ShareModal";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
 
 interface ThreadViewProps {
   key?: string;
@@ -331,6 +333,79 @@ export default function ThreadView({
     setSavedReactions(loadAndSanitizeReactions());
   }, []);
 
+  // Share State (mirrors ClipCard share behaviour)
+  const [shareClip, setShareClip] = useState<Clip | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [isCopyingPicture, setIsCopyingPicture] = useState(false);
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
+  const [videoProgress, setVideoProgress] = useState(0);
+  const [exportedVideo, setExportedVideo] = useState<File | null>(null);
+
+  useEffect(() => {
+    setExportedVideo(null);
+  }, [shareClip]);
+
+  const handleDownloadVideo = async () => {
+    if (!shareClip || isGeneratingVideo) return;
+    setIsGeneratingVideo(true);
+    setVideoProgress(0);
+    try {
+      const { file } = await exportWatermarkedVideo(shareClip, null, (pct) => setVideoProgress(pct));
+      setExportedVideo(file);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Video ready! Tap Save Video." } }));
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: err?.message || "Couldn't create the video. Please try again." } }));
+    } finally {
+      setIsGeneratingVideo(false);
+      setVideoProgress(0);
+    }
+  };
+
+  const handleSaveVideo = () => {
+    if (!shareClip || !exportedVideo) return;
+    deliverVideoFile(exportedVideo, shareClip).catch(() => {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Couldn't save the video. Please try again." } }));
+    });
+  };
+
+  const handleDownloadWatermark = async () => {
+    if (!shareClip || isSharing) return;
+    setIsSharing(true);
+    try {
+      await downloadWatermarkedImage(shareClip, null);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Watermarked picture saved!" } }));
+    } catch (err) {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Failed to save picture" } }));
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const handleCopyPicture = async () => {
+    if (!shareClip || isCopyingPicture) return;
+    setIsCopyingPicture(true);
+    try {
+      const res = await copyWatermarkedImageToClipboard(shareClip, null);
+      if (res.success) {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "📋 Copied to clipboard!" } }));
+      } else if (res.fallbackDownloaded) {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Picture downloaded" } }));
+      } else {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: res.error || "Failed to copy picture" } }));
+      }
+    } catch (err: any) {
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Could not copy picture" } }));
+    } finally {
+      setIsCopyingPicture(false);
+    }
+  };
+
+  const openShare = (clip: Clip, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setShareClip(clip);
+  };
+
   if (!ultimateRoot) return null;
 
   return (
@@ -561,6 +636,17 @@ export default function ThreadView({
                 >
                   <Mic className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Voice</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => openShare(ultimateRoot, e)}
+                  aria-label="Share"
+                  title="Share reaction via text, email, link, or download"
+                  className="flex items-center gap-1 px-2.5 py-1 min-h-[32px] rounded-lg text-xs font-mono font-bold border bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800 cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Share</span>
                 </button>
               </div>
 
@@ -822,6 +908,17 @@ export default function ThreadView({
                             <Mic className="w-3 h-3 text-emerald-400" />
                             <span className="hidden sm:inline">Voice</span>
                           </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => openShare(directReax, e)}
+                            aria-label="Share"
+                            title="Share reaction via text, email, link, or download"
+                            className="flex items-center gap-1 px-2 py-0.5 min-h-[32px] min-w-[32px] justify-center rounded-lg text-xs font-mono font-bold border bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800 cursor-pointer"
+                          >
+                            <Share2 className="w-3 h-3 text-indigo-400" />
+                            <span className="hidden sm:inline">Share</span>
+                          </button>
                         </div>
 
                         <div className="flex items-center gap-2">
@@ -964,6 +1061,16 @@ export default function ThreadView({
                                       <Mic className="w-3 h-3 text-emerald-400" />
                                     </button>
 
+                                    <button
+                                      type="button"
+                                      onClick={(e) => openShare(riff, e)}
+                                      aria-label="Share"
+                                      title="Share reaction via text, email, link, or download"
+                                      className="p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded border transition-colors bg-slate-900 text-slate-400 hover:text-white border-slate-800"
+                                    >
+                                      <Share2 className="w-3 h-3 text-indigo-400" />
+                                    </button>
+
                                     {/* Small Riff Action on this card (posts with parentId = riff.id) */}
                                     <button
                                       type="button"
@@ -994,6 +1101,25 @@ export default function ThreadView({
         </div>
 
       </div>
+
+      {shareClip && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <ShareModal
+            isOpen={!!shareClip}
+            onClose={() => setShareClip(null)}
+            clip={shareClip}
+            onDownloadVideo={handleDownloadVideo}
+            isGeneratingVideo={isGeneratingVideo}
+            videoProgress={videoProgress}
+            isVideoReady={!!exportedVideo}
+            onSaveVideo={handleSaveVideo}
+            onDownloadWatermark={handleDownloadWatermark}
+            isGeneratingWatermark={isSharing}
+            onCopyPicture={handleCopyPicture}
+            isCopyingPicture={isCopyingPicture}
+          />
+        </div>
+      )}
     </div>
   );
 }
