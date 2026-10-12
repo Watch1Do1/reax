@@ -830,15 +830,6 @@ export default function ClipCard({
               </div>
             )}
 
-            {/* Visible Watermark Pill Stamp */}
-            <div className="absolute top-2.5 right-2.5 z-20 pointer-events-none select-none">
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/75 backdrop-blur-sm border border-white/20 text-white shadow-md">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                <span className="text-[10px] font-mono font-bold tracking-wider text-slate-100">
-                  getREAX.com
-                </span>
-              </div>
-            </div>
           </FitMedia>
         );
       })()}

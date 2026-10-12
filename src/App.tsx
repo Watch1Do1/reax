@@ -296,7 +296,7 @@ export default function App() {
   const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(false);
   const [remixData, setRemixData] = useState<SavedReaction | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const [feedType, setFeedType] = useState<"hot" | "latest" | "most_reacted" | "audio_hot">("hot");
+  const [feedType, setFeedType] = useState<"hot" | "latest" | "most_reacted" | "audio_hot">("latest");
 
   // User Search & Public Profile State
   const [selectedUserProfileUsername, setSelectedUserProfileUsername] = useState<string | null>(null);

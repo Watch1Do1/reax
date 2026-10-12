@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { X, RotateCcw, Check, Loader2 } from "lucide-react";
 import { loadOrientedBitmap, renderCrop } from "../utils/cropImage";
 import { blockMediaEvent } from "../utils/mediaProtection";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
+import { useBackToClose } from "../hooks/useBackToClose";
 
 interface ImageCropperProps {
   src: string;
@@ -28,6 +31,9 @@ interface DragState {
 }
 
 export default function ImageCropper({ src, mimeType, onApply, onCancel }: ImageCropperProps) {
+  useBodyScrollLock(true);
+  useBackToClose(true, onCancel);
+
   const [source, setSource] = useState<ImageBitmap | HTMLImageElement | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -126,18 +132,30 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
   const displayedWidth = Math.round(srcWidth * scale);
   const displayedHeight = Math.round(srcHeight * scale);
 
-  // Paint to canvas once source is ready
+  // Paint to canvas at screen resolution (scaled down to visible area times devicePixelRatio, max 2048 long side)
   useEffect(() => {
-    if (!source || !canvasRef.current) return;
+    if (!source || !canvasRef.current || displayedWidth <= 0 || displayedHeight <= 0) return;
     const canvas = canvasRef.current;
-    canvas.width = srcWidth;
-    canvas.height = srcHeight;
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    let canvasW = Math.round(displayedWidth * dpr);
+    let canvasH = Math.round(displayedHeight * dpr);
+    const maxDim = Math.max(canvasW, canvasH);
+    if (maxDim > 2048) {
+      const downscale = 2048 / maxDim;
+      canvasW = Math.max(1, Math.round(canvasW * downscale));
+      canvasH = Math.max(1, Math.round(canvasH * downscale));
+    }
+
+    canvas.width = canvasW;
+    canvas.height = canvasH;
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      ctx.clearRect(0, 0, srcWidth, srcHeight);
-      ctx.drawImage(source, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.clearRect(0, 0, canvasW, canvasH);
+      ctx.drawImage(source, 0, 0, canvasW, canvasH);
     }
-  }, [source, srcWidth, srcHeight]);
+  }, [source, displayedWidth, displayedHeight]);
 
   // Aspect ratio presets
   const PRESETS = [
@@ -206,20 +224,76 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
     }
   };
 
-  // Keyboard navigation: Escape cancels, Enter applies
+  // Keep latest handlers and values in refs for stable one-time listeners
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  const handleApplyRef = useRef(handleApply);
+  handleApplyRef.current = handleApply;
+  const isApplyingRef = useRef(isApplying);
+  isApplyingRef.current = isApplying;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  const srcWidthRef = useRef(srcWidth);
+  srcWidthRef.current = srcWidth;
+  const srcHeightRef = useRef(srcHeight);
+  srcHeightRef.current = srcHeight;
+  const aspectPresetRef = useRef(aspectPreset);
+  aspectPresetRef.current = aspectPreset;
+  const dragStateRef = useRef(dragState);
+  dragStateRef.current = dragState;
+
+  // Single-attachment keyboard navigation listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onCancel();
-      } else if (e.key === "Enter" && !isApplying) {
+        onCancelRef.current();
+      } else if (e.key === "Enter" && !isApplyingRef.current) {
+        // Pressing Enter while Cancel or Reset button is focused must NOT apply crop
+        const activeEl = document.activeElement as HTMLElement | null;
+        if (activeEl) {
+          if (activeEl.getAttribute("data-action") === "cancel" || activeEl.getAttribute("data-action") === "reset") {
+            return;
+          }
+          const text = (activeEl.textContent || "").trim().toLowerCase();
+          if (activeEl.tagName === "BUTTON" && (text.includes("cancel") || text.includes("reset"))) {
+            return;
+          }
+        }
         e.preventDefault();
-        handleApply();
+        handleApplyRef.current();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isApplying, crop, source, mimeType]);
+  }, []);
+
+  // requestAnimationFrame throttling for pointer drag/resize
+  const rafIdRef = useRef<number | null>(null);
+  const pendingCropRef = useRef<CropRect | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+    };
+  }, []);
+
+  const queueCropUpdate = (nextCrop: CropRect) => {
+    pendingCropRef.current = nextCrop;
+    if (rafIdRef.current === null) {
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        if (pendingCropRef.current) {
+          setCrop(pendingCropRef.current);
+          pendingCropRef.current = null;
+        }
+      });
+    }
+  };
 
   // Pointer drag handling
   const handleBoxPointerDown = (e: React.PointerEvent) => {
@@ -248,51 +322,57 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!dragState || !source) return;
+    e.stopPropagation();
+    const currentDrag = dragStateRef.current;
+    if (!currentDrag || !sourceRef.current) return;
     e.preventDefault();
 
-    const dx = (e.clientX - dragState.startClientX) / scale;
-    const dy = (e.clientY - dragState.startClientY) / scale;
+    const currentScale = scaleRef.current || 1;
+    const currentSrcW = srcWidthRef.current;
+    const currentSrcH = srcHeightRef.current;
 
-    if (dragState.type === "move") {
-      let newX = dragState.startCrop.x + dx;
-      let newY = dragState.startCrop.y + dy;
-      newX = Math.max(0, Math.min(srcWidth - dragState.startCrop.w, newX));
-      newY = Math.max(0, Math.min(srcHeight - dragState.startCrop.h, newY));
-      setCrop({
-        ...dragState.startCrop,
+    const dx = (e.clientX - currentDrag.startClientX) / currentScale;
+    const dy = (e.clientY - currentDrag.startClientY) / currentScale;
+
+    if (currentDrag.type === "move") {
+      let newX = currentDrag.startCrop.x + dx;
+      let newY = currentDrag.startCrop.y + dy;
+      newX = Math.max(0, Math.min(currentSrcW - currentDrag.startCrop.w, newX));
+      newY = Math.max(0, Math.min(currentSrcH - currentDrag.startCrop.h, newY));
+      queueCropUpdate({
+        ...currentDrag.startCrop,
         x: Math.round(newX),
         y: Math.round(newY),
       });
-    } else if (dragState.type === "handle" && dragState.handle) {
+    } else if (currentDrag.type === "handle" && currentDrag.handle) {
       const minCrop = 32;
-      const h = dragState.handle;
-      const activePreset = PRESETS.find((p) => p.id === aspectPreset);
+      const h = currentDrag.handle;
+      const activePreset = PRESETS.find((p) => p.id === aspectPresetRef.current);
       const targetRatio = activePreset?.ratio ?? null;
 
       if (targetRatio === null) {
         // Free ratio: drag corners or edges
-        let { x, y, w, h: cropH } = dragState.startCrop;
+        let { x, y, w, h: cropH } = currentDrag.startCrop;
         if (h === "tl" || h === "l" || h === "bl") {
-          const maxX = dragState.startCrop.x + dragState.startCrop.w - minCrop;
-          const candidateX = Math.min(maxX, Math.max(0, dragState.startCrop.x + dx));
-          w = dragState.startCrop.x + dragState.startCrop.w - candidateX;
+          const maxX = currentDrag.startCrop.x + currentDrag.startCrop.w - minCrop;
+          const candidateX = Math.min(maxX, Math.max(0, currentDrag.startCrop.x + dx));
+          w = currentDrag.startCrop.x + currentDrag.startCrop.w - candidateX;
           x = candidateX;
         }
         if (h === "tr" || h === "r" || h === "br") {
-          w = Math.max(minCrop, Math.min(srcWidth - dragState.startCrop.x, dragState.startCrop.w + dx));
+          w = Math.max(minCrop, Math.min(currentSrcW - currentDrag.startCrop.x, currentDrag.startCrop.w + dx));
         }
         if (h === "tl" || h === "t" || h === "tr") {
-          const maxY = dragState.startCrop.y + dragState.startCrop.h - minCrop;
-          const candidateY = Math.min(maxY, Math.max(0, dragState.startCrop.y + dy));
-          cropH = dragState.startCrop.y + dragState.startCrop.h - candidateY;
+          const maxY = currentDrag.startCrop.y + currentDrag.startCrop.h - minCrop;
+          const candidateY = Math.min(maxY, Math.max(0, currentDrag.startCrop.y + dy));
+          cropH = currentDrag.startCrop.y + currentDrag.startCrop.h - candidateY;
           y = candidateY;
         }
         if (h === "bl" || h === "b" || h === "br") {
-          cropH = Math.max(minCrop, Math.min(srcHeight - dragState.startCrop.y, dragState.startCrop.h + dy));
+          cropH = Math.max(minCrop, Math.min(currentSrcH - currentDrag.startCrop.y, currentDrag.startCrop.h + dy));
         }
 
-        setCrop({
+        queueCropUpdate({
           x: Math.round(x),
           y: Math.round(y),
           w: Math.round(w),
@@ -301,64 +381,64 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
       } else {
         // Fixed ratio: corner drags only
         if (h === "br") {
-          const x0 = dragState.startCrop.x;
-          const y0 = dragState.startCrop.y;
-          const maxW = Math.min(srcWidth - x0, (srcHeight - y0) * targetRatio);
-          const wFromDx = dragState.startCrop.w + dx;
-          const wFromDy = (dragState.startCrop.h + dy) * targetRatio;
+          const x0 = currentDrag.startCrop.x;
+          const y0 = currentDrag.startCrop.y;
+          const maxW = Math.min(currentSrcW - x0, (currentSrcH - y0) * targetRatio);
+          const wFromDx = currentDrag.startCrop.w + dx;
+          const wFromDy = (currentDrag.startCrop.h + dy) * targetRatio;
           const chosenW = Math.abs(dx) >= Math.abs(dy * targetRatio) ? wFromDx : wFromDy;
           const newW = Math.max(minCrop, Math.min(maxW, chosenW));
           const newH = newW / targetRatio;
-          setCrop({
+          queueCropUpdate({
             x: x0,
             y: y0,
             w: Math.round(newW),
             h: Math.round(newH),
           });
         } else if (h === "tr") {
-          const x0 = dragState.startCrop.x;
-          const y1 = dragState.startCrop.y + dragState.startCrop.h;
-          const maxW = Math.min(srcWidth - x0, y1 * targetRatio);
-          const wFromDx = dragState.startCrop.w + dx;
-          const wFromDy = (dragState.startCrop.h - dy) * targetRatio;
+          const x0 = currentDrag.startCrop.x;
+          const y1 = currentDrag.startCrop.y + currentDrag.startCrop.h;
+          const maxW = Math.min(currentSrcW - x0, y1 * targetRatio);
+          const wFromDx = currentDrag.startCrop.w + dx;
+          const wFromDy = (currentDrag.startCrop.h - dy) * targetRatio;
           const chosenW = Math.abs(dx) >= Math.abs(dy * targetRatio) ? wFromDx : wFromDy;
           const newW = Math.max(minCrop, Math.min(maxW, chosenW));
           const newH = newW / targetRatio;
           const newY = y1 - newH;
-          setCrop({
+          queueCropUpdate({
             x: x0,
             y: Math.round(newY),
             w: Math.round(newW),
             h: Math.round(newH),
           });
         } else if (h === "bl") {
-          const x1 = dragState.startCrop.x + dragState.startCrop.w;
-          const y0 = dragState.startCrop.y;
-          const maxW = Math.min(x1, (srcHeight - y0) * targetRatio);
-          const wFromDx = dragState.startCrop.w - dx;
-          const wFromDy = (dragState.startCrop.h + dy) * targetRatio;
+          const x1 = currentDrag.startCrop.x + currentDrag.startCrop.w;
+          const y0 = currentDrag.startCrop.y;
+          const maxW = Math.min(x1, (currentSrcH - y0) * targetRatio);
+          const wFromDx = currentDrag.startCrop.w - dx;
+          const wFromDy = (currentDrag.startCrop.h + dy) * targetRatio;
           const chosenW = Math.abs(dx) >= Math.abs(dy * targetRatio) ? wFromDx : wFromDy;
           const newW = Math.max(minCrop, Math.min(maxW, chosenW));
           const newH = newW / targetRatio;
           const newX = x1 - newW;
-          setCrop({
+          queueCropUpdate({
             x: Math.round(newX),
             y: y0,
             w: Math.round(newW),
             h: Math.round(newH),
           });
         } else if (h === "tl") {
-          const x1 = dragState.startCrop.x + dragState.startCrop.w;
-          const y1 = dragState.startCrop.y + dragState.startCrop.h;
+          const x1 = currentDrag.startCrop.x + currentDrag.startCrop.w;
+          const y1 = currentDrag.startCrop.y + currentDrag.startCrop.h;
           const maxW = Math.min(x1, y1 * targetRatio);
-          const wFromDx = dragState.startCrop.w - dx;
-          const wFromDy = (dragState.startCrop.h - dy) * targetRatio;
+          const wFromDx = currentDrag.startCrop.w - dx;
+          const wFromDy = (currentDrag.startCrop.h - dy) * targetRatio;
           const chosenW = Math.abs(dx) >= Math.abs(dy * targetRatio) ? wFromDx : wFromDy;
           const newW = Math.max(minCrop, Math.min(maxW, chosenW));
           const newH = newW / targetRatio;
           const newX = x1 - newW;
           const newY = y1 - newH;
-          setCrop({
+          queueCropUpdate({
             x: Math.round(newX),
             y: Math.round(newY),
             w: Math.round(newW),
@@ -370,9 +450,18 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    e.stopPropagation();
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {}
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    if (pendingCropRef.current) {
+      setCrop(pendingCropRef.current);
+      pendingCropRef.current = null;
+    }
     setDragState(null);
   };
 
@@ -382,9 +471,16 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
   const boxWidth = Math.round(crop.w * scale);
   const boxHeight = Math.round(crop.h * scale);
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[80] bg-slate-950/95 backdrop-blur-md flex flex-col justify-between text-white select-none"
+      className="fixed inset-0 z-[80] flex flex-col bg-slate-950 text-white select-none"
+      style={{
+        height: "100dvh",
+        touchAction: "none",
+        overscrollBehavior: "none",
+        paddingTop: "env(safe-area-inset-top)",
+        paddingBottom: "env(safe-area-inset-bottom)",
+      }}
       onContextMenu={blockMediaEvent}
     >
       {/* Top Header */}
@@ -398,6 +494,7 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
         <div className="flex items-center gap-2">
           <button
             type="button"
+            data-action="reset"
             onClick={handleReset}
             disabled={isApplying || isLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
@@ -408,6 +505,7 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
           </button>
           <button
             type="button"
+            data-action="cancel"
             onClick={onCancel}
             disabled={isApplying}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition-all cursor-pointer active:scale-95"
@@ -606,7 +704,10 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
       {/* Bottom Toolbar & Action Buttons */}
       <div className="px-4 py-3 sm:py-4 border-t border-slate-800/80 bg-slate-900/60 flex flex-col sm:flex-row items-center justify-between gap-3">
         {/* Preset Chips */}
-        <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1 sm:pb-0 scrollbar-none">
+        <div
+          className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1 sm:pb-0 scrollbar-none"
+          style={{ touchAction: "pan-x" }}
+        >
           {PRESETS.map((p) => {
             const isActive = aspectPreset === p.id;
             return (
@@ -631,6 +732,7 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
         <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
           <button
             type="button"
+            data-action="cancel"
             onClick={onCancel}
             disabled={isApplying}
             className="flex-1 sm:flex-initial h-11 min-h-[44px] px-5 rounded-xl border border-slate-700 bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white font-semibold text-xs transition-all active:scale-95 cursor-pointer disabled:opacity-50"
@@ -657,6 +759,7 @@ export default function ImageCropper({ src, mimeType, onApply, onCancel }: Image
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Camera, Upload, Film, Sparkles, Volume2, VolumeX, RefreshCw, CheckCircle, 
   Image as ImageIcon, ChevronDown, ChevronUp, Settings2, Sliders, Star, Mic, MicOff,
-  CornerDownRight, Scissors, Crop, Undo2
+  CornerDownRight, Scissors, Crop, Undo2, Loader2
 } from "lucide-react";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { Clip, SavedReaction } from "../types";
@@ -11,6 +12,8 @@ import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { uploadMediaAsset, uploadRawClipAsset, getAuthToken } from "../utils/supabaseClient";
 import { convertHeicToJpeg, isHeicFile } from "../utils/imageUtils";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
+import { useBackToClose } from "../hooks/useBackToClose";
 import ClipTimelineEditor from "./ClipTimelineEditor";
 import ImageCropper from "./ImageCropper";
 
@@ -35,6 +38,9 @@ export interface TrimInfo {
 }
 
 export default function RespondModal({ parentId, parentClip, initialTone = null, onClose, onSuccess, username, remixData = null }: RespondModalProps) {
+  useBodyScrollLock(true);
+  useBackToClose(true, onClose);
+
   const [step, setStep] = useState<"upload_capture" | "choose_tone" | "ai_generate" | "preview" | "trim_editor">(
     "upload_capture"
   );
@@ -54,6 +60,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const [selectedMedia, setSelectedMedia] = useState<{ data: string; mimeType: string; isVideo: boolean; file?: File } | null>(null);
   const [cropOpen, setCropOpen] = useState(false);
   const [originalImage, setOriginalImage] = useState<typeof selectedMedia>(null);
+  const [isConvertingHeic, setIsConvertingHeic] = useState(false);
   const [trimInfo, setTrimInfo] = useState<TrimInfo | null>(null);
   const [isTrimming, setIsTrimming] = useState(false);
   const [stripAudio, setStripAudio] = useState(false);
@@ -838,18 +845,67 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
 
     // iPhone HEIC / HEIF in-browser canvas conversion
     if (isHeic) {
+      setIsConvertingHeic(true);
       try {
         const converted = await convertHeicToJpeg(file);
-        const jpegRes = await fetch(converted.data);
-        const jpegBlob = await jpegRes.blob();
-        const convertedFile = new File([jpegBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg") || "photo.jpg", {
-          type: "image/jpeg"
+        let finalData = converted.data;
+        let finalFile: File;
+
+        // Check if converted image exceeds 8MB or 4096px
+        const img = new Image();
+        img.src = finalData;
+        await new Promise((res) => {
+          img.onload = () => res(null);
+          img.onerror = () => res(null);
         });
+
+        const maxDim = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
+        const jpegRes = await fetch(finalData);
+        const rawBlob = await jpegRes.blob();
+
+        if (rawBlob.size > 8 * 1024 * 1024 || maxDim > 4096) {
+          const scale = maxDim > 4096 ? 4096 / maxDim : 1;
+          const nw = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+          const nh = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = nw;
+          canvas.height = nh;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, 0, 0, nw, nh);
+            const shrunkBlob: Blob | null = await new Promise((res) => canvas.toBlob((b) => res(b), "image/jpeg", 0.9));
+            if (shrunkBlob) {
+              finalFile = new File([shrunkBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg") || "photo.jpg", {
+                type: "image/jpeg"
+              });
+              finalData = await new Promise((res) => {
+                const r = new FileReader();
+                r.onload = () => res(r.result as string);
+                r.readAsDataURL(shrunkBlob);
+              });
+            } else {
+              finalFile = new File([rawBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg") || "photo.jpg", {
+                type: "image/jpeg"
+              });
+            }
+          } else {
+            finalFile = new File([rawBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg") || "photo.jpg", {
+              type: "image/jpeg"
+            });
+          }
+        } else {
+          finalFile = new File([rawBlob], file.name.replace(/\.(heic|heif)$/i, ".jpg") || "photo.jpg", {
+            type: "image/jpeg"
+          });
+        }
+
         const mediaObj = {
-          data: converted.data,
+          data: finalData,
           mimeType: "image/jpeg",
           isVideo: false,
-          file: convertedFile
+          file: finalFile
         };
         stopCamera();
         setTrimInfo(null);
@@ -858,19 +914,96 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       } catch (err) {
         console.error("HEIC conversion failed:", err);
         setError("This iPhone photo couldn't be converted. Try choosing a JPEG.");
-        return;
+      } finally {
+        setIsConvertingHeic(false);
       }
       return;
     }
 
     // Process image or GIF normally
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
+      let initialData = reader.result as string;
+      let targetFile = file;
+      let targetMime = isGif ? "image/gif" : (file.type || "image/jpeg");
+
+      // Shrink oversized non-GIF images (>8MB or >4096px)
+      if (!isGif) {
+        try {
+          const img = new Image();
+          img.src = initialData;
+          await new Promise((res) => {
+            img.onload = () => res(null);
+            img.onerror = () => res(null);
+          });
+          const maxDim = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
+          if (file.size > 8 * 1024 * 1024 || maxDim > 4096) {
+            const scale = maxDim > 4096 ? 4096 / maxDim : 1;
+            const nw = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+            const nh = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
+            const canvas = document.createElement("canvas");
+            canvas.width = nw;
+            canvas.height = nh;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = "high";
+
+              // Check if PNG has alpha
+              let isTransparentPng = false;
+              if (file.type === "image/png" || file.name.toLowerCase().endsWith(".png")) {
+                const sampleCanvas = document.createElement("canvas");
+                sampleCanvas.width = 64;
+                sampleCanvas.height = 64;
+                const sCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+                if (sCtx) {
+                  sCtx.drawImage(img, 0, 0, 64, 64);
+                  try {
+                    const data = sCtx.getImageData(0, 0, 64, 64).data;
+                    for (let i = 3; i < data.length; i += 4) {
+                      if (data[i] < 255) {
+                        isTransparentPng = true;
+                        break;
+                      }
+                    }
+                  } catch {}
+                }
+              }
+
+              let shrunkBlob: Blob | null = null;
+              if (isTransparentPng) {
+                ctx.clearRect(0, 0, nw, nh);
+                ctx.drawImage(img, 0, 0, nw, nh);
+                shrunkBlob = await new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
+                targetMime = "image/png";
+              } else {
+                ctx.fillStyle = "#0f172a";
+                ctx.fillRect(0, 0, nw, nh);
+                ctx.drawImage(img, 0, 0, nw, nh);
+                shrunkBlob = await new Promise((res) => canvas.toBlob((b) => res(b), "image/jpeg", 0.9));
+                targetMime = "image/jpeg";
+              }
+
+              if (shrunkBlob) {
+                targetFile = new File([shrunkBlob], file.name, { type: targetMime });
+                initialData = await new Promise((res) => {
+                  const r = new FileReader();
+                  r.onload = () => res(r.result as string);
+                  r.readAsDataURL(shrunkBlob!);
+                });
+              }
+            }
+          }
+        } catch (shrinkErr) {
+          console.warn("Image shrink check error:", shrinkErr);
+        }
+      }
+
       const mediaObj = {
-        data: reader.result as string,
-        mimeType: isGif ? "image/gif" : (file.type || "image/jpeg"),
+        data: initialData,
+        mimeType: targetMime,
         isVideo: false,
-        file: file
+        file: targetFile
       };
       stopCamera();
       setTrimInfo(null);
@@ -1160,11 +1293,17 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const isMobileDevice = typeof window !== "undefined" && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 overflow-y-auto">
-      <div className="relative w-full max-w-lg bg-[#08090c]/95 backdrop-blur-2xl border border-slate-800/40 rounded-3xl overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.7)] flex flex-col max-h-[92vh]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 overflow-hidden"
+      style={{ overscrollBehavior: "none" }}
+    >
+      <div
+        className="relative w-full max-w-lg bg-slate-950/95 border border-slate-800/40 rounded-3xl overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.7)] flex flex-col max-h-[92vh]"
+        style={{ overscrollBehavior: "contain" }}
+      >
         
         {/* Header with zero-friction automatic context */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800/80 bg-slate-950/20">
+        <div className="flex items-center justify-between p-4 border-b border-slate-800/80 bg-slate-950/20 shrink-0">
           <div>
             <h3 className="font-sans font-black text-sm text-white tracking-tight flex items-center gap-1.5 uppercase">
               <span>🚀 REACT / JUMP IN</span>
@@ -1209,7 +1348,10 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         )}
 
         {/* Modal Content Area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div
+          className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 overscroll-contain"
+          style={{ WebkitOverflowScrolling: "touch" }}
+        >
           <AnimatePresence mode="wait">
 
             {/* STEP: CHOOSE OR CAPTURE MEDIA */}
@@ -2624,7 +2766,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         </div>
 
         {/* GEMINI PRO AI CO-PILOT PAYWALL MODAL */}
-        {isPaywallOpen && (
+        {isPaywallOpen && createPortal(
           <div className="fixed inset-0 z-55 bg-black/95 backdrop-blur-md flex items-center justify-center p-4">
             <div className="w-full max-w-sm bg-slate-950 border border-amber-500/25 rounded-3xl p-6 shadow-2xl relative overflow-hidden text-center space-y-6">
               {/* Amber/Gold radial highlight */}
@@ -2691,7 +2833,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 </button>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
 
         {/* Optional Image Cropper Overlay */}
@@ -2702,6 +2845,20 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
             onApply={handleCropApply}
             onCancel={handleCropCancel}
           />
+        )}
+
+        {/* HEIC Conversion Preparing photo... Spinner */}
+        {isConvertingHeic && createPortal(
+          <div className="fixed inset-0 z-[85] flex flex-col items-center justify-center bg-black/85 text-white select-none">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl px-6 py-5 flex flex-col items-center gap-3 shadow-2xl">
+              <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
+              <div className="text-center space-y-1">
+                <p className="text-sm font-bold text-white">Preparing photo…</p>
+                <p className="text-xs text-slate-400">Converting iPhone photo for editing</p>
+              </div>
+            </div>
+          </div>,
+          document.body
         )}
 
       </div>
