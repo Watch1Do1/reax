@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   X, Heart, Volume2, Plus, ChevronRight, ArrowLeft, 
   CornerDownRight, Play, Pause, VolumeX, Volume1, Star, Trash2, Mic, 
-  Flame, ListOrdered, ChevronDown, ChevronUp, Radio, Check, Share2
+  Flame, ListOrdered, ChevronDown, ChevronUp, Radio, Check, Share2, Maximize2
 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
@@ -12,6 +12,7 @@ import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import ShareModal from "./ShareModal";
+import MediaLightbox from "./MediaLightbox";
 import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
 
 interface ThreadViewProps {
@@ -335,6 +336,12 @@ export default function ThreadView({
 
   // Share State (mirrors ClipCard share behaviour)
   const [shareClip, setShareClip] = useState<Clip | null>(null);
+  const [lightboxClip, setLightboxClip] = useState<Clip | null>(null);
+  const openLightbox = (clip: Clip, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setLightboxClip(clip);
+  };
   const [isSharing, setIsSharing] = useState(false);
   const [isCopyingPicture, setIsCopyingPicture] = useState(false);
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
@@ -573,6 +580,15 @@ export default function ThreadView({
                 />
               )}
 
+              <button
+                type="button"
+                onClick={(e) => openLightbox(ultimateRoot, e)}
+                aria-label="View full size"
+                title="View full size"
+                className="absolute top-2 right-2 z-20 p-1.5 rounded-lg bg-black/60 border border-white/10 text-white hover:bg-black/80 cursor-pointer"
+              >
+                <Maximize2 className="w-4 h-4" />
+              </button>
               {/* Overlay Text */}
               {ultimateRoot.overlayText && (
                 <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none">
@@ -850,7 +866,16 @@ export default function ThreadView({
                           />
                         )}
 
-                        {directReax.overlayText && (
+                        <button
+                type="button"
+                onClick={(e) => openLightbox(directReax, e)}
+                aria-label="View full size"
+                title="View full size"
+                className="absolute top-2 right-2 z-20 p-1.5 rounded-lg bg-black/60 border border-white/10 text-white hover:bg-black/80 cursor-pointer"
+              >
+                <Maximize2 className="w-4 h-4" />
+              </button>
+              {directReax.overlayText && (
                           <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-3 z-10 pointer-events-none">
                             <h2 className="font-sans font-black text-sm sm:text-base text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight">
                               {directReax.overlayText}
@@ -996,7 +1021,7 @@ export default function ThreadView({
                                 >
                                   {/* Left: Thumbnail & Info */}
                                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                    <div className="w-14 aspect-video rounded-lg bg-black overflow-hidden flex-shrink-0 relative border border-slate-800 reax-protected-media" onContextMenu={blockMediaEvent}>
+                                    <div role="button" aria-label="View full size" title="View full size" onClick={(e) => openLightbox(riff, e)} className="w-14 aspect-video rounded-lg bg-black overflow-hidden flex-shrink-0 relative border border-slate-800 cursor-zoom-in hover:border-indigo-400 reax-protected-media" onContextMenu={blockMediaEvent}>
                                       {riff.mediaUrl.endsWith(".mp4") || riff.mediaUrl.endsWith(".webm") || riff.mediaUrl.includes("mixkit-") ? (
                                         <video {...protectedMediaProps} controlsList="nodownload noremoteplayback" disablePictureInPicture src={riff.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" muted playsInline />
                                       ) : (
@@ -1102,6 +1127,14 @@ export default function ThreadView({
 
       </div>
 
+      <MediaLightbox
+        clip={lightboxClip}
+        onClose={() => setLightboxClip(null)}
+        onShare={(c) => {
+          setLightboxClip(null);
+          setShareClip(c);
+        }}
+      />
       {shareClip && (
         <div onClick={(e) => e.stopPropagation()}>
           <ShareModal
