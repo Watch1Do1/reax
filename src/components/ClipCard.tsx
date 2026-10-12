@@ -3,7 +3,7 @@ import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Pla
 import { Clip, SavedReaction } from "../types";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
-import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo } from "../utils/watermarkExporter";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import { getAuthToken } from "../utils/supabaseClient";
 import ShareModal from "./ShareModal";
@@ -97,7 +97,8 @@ export default function ClipCard({
     setIsGeneratingVideo(true);
     setVideoProgress(0);
     try {
-      const { file } = await exportWatermarkedVideo(clip, videoRef.current, (pct) => setVideoProgress(pct));
+      const exportClip = !isVideo && legacyParentImage ? { ...clip, mediaUrl: legacyParentImage } : clip;
+      const { file } = await exportWatermarkedVideo(exportClip, isVideo ? videoRef.current : null, (pct) => setVideoProgress(pct));
       setExportedVideo(file);
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Video ready! Tap Save Video." } }));
     } catch (err: any) {
@@ -1219,6 +1220,7 @@ export default function ClipCard({
         onClose={() => setIsShareModalOpen(false)}
         clip={clip}
         onDownloadVideo={handleDownloadVideo}
+        canCreateVideo={isVideo || canExportAsVideo(clip, legacyParentImage)}
         isGeneratingVideo={isGeneratingVideo}
         videoProgress={videoProgress}
         isVideoReady={!!exportedVideo}

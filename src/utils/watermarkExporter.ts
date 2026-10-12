@@ -478,6 +478,21 @@ export function renderOverlayPngDataUrl(clip: Clip, width: number, height: numbe
   return canvas.toDataURL("image/png");
 }
 
+function isVideoClip(clip: Clip): boolean {
+  const u = clip.mediaUrl || "";
+  return clip.mediaType === "video" || /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(u) || u.includes("mixkit-") || u.includes("uploads/clip-");
+}
+
+/** True when "Create Video" should be offered: a video, or a picture/GIF with a voice note.
+ *  imageUrl overrides the picture (old audio-only replies that reuse the parent's picture). */
+export function canExportAsVideo(clip: Clip | null | undefined, imageUrl?: string | null): boolean {
+  if (!clip || clip.deleted) return false;
+  if (isVideoClip(clip)) return true;
+  if (!clip.voiceAudioUrl) return false;
+  const u = imageUrl || (clip.mediaType === "audio" ? "" : clip.mediaUrl || "");
+  return u.startsWith("https://") && !/\.(mp3|m4a|wav|ogg|aac)(\?|#|$)/i.test(u);
+}
+
 /** Asks the server to render the watermarked MP4, then downloads it as a File (does NOT save/share). */
 export async function exportWatermarkedVideo(
   clip: Clip,
@@ -485,7 +500,15 @@ export async function exportWatermarkedVideo(
   onProgress?: (pct: number) => void
 ): Promise<{ file: File; downloadUrl: string; fileName: string }> {
   onProgress?.(5);
-  const { width, height } = await getVideoDimensions(clip, videoEl);
+  const still = !isVideoClip(clip);
+  let width: number, height: number;
+  if (still) {
+    // Picture/GIF + voice note: the server makes a still-image MP4; size the overlay to the picture.
+    const img = await loadCORSImage(clip.mediaUrl);
+    width = img.naturalWidth || 1080; height = img.naturalHeight || 1080;
+  } else {
+    ({ width, height } = await getVideoDimensions(clip, videoEl));
+  }
   const overlayPng = renderOverlayPngDataUrl(clip, width, height);
   onProgress?.(15);
 

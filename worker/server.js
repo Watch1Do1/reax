@@ -394,13 +394,56 @@ function buildExportArgs({ inputPath, overlayPath, voicePath, outputPath, width,
   return args;
 }
 
+// Still image (JPG/PNG/WebP/GIF) + voice note -> MP4. Input 0 = image (looped), 1 = overlay PNG, 2 = voice.
+// Same watermark overlay chain and encoder settings as buildExportArgs.
+function buildStillExportArgs({ inputPath, overlayPath, voicePath, outputPath, width, height, isGif, maxSec, useFpsMode = true }) {
+  const scale = Math.min(1, 1920 / Math.max(width, height));
+  const W = Math.max(2, Math.round((width * scale) / 2) * 2);
+  const H = Math.max(2, Math.round((height * scale) / 2) * 2);
+  const cap = Math.max(1, Math.min(60, maxSec)).toFixed(3);
+  const args = ["-y"];
+  if (isGif) args.push("-ignore_loop", "0", "-i", inputPath);          // animated GIF keeps looping
+  else args.push("-loop", "1", "-framerate", "30", "-i", inputPath);  // still image held for the whole clip
+  args.push("-i", overlayPath, "-i", voicePath);
+  const fmt = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo";
+  const filters = [
+    `[0:v]fps=30,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p[base]`,
+    `[1:v]scale=${W}:${H},format=rgba[ov]`,
+    `[base][ov]overlay=0:0:format=auto,format=yuv420p[v]`,
+    `[2:a]${fmt},apad=pad_dur=0.5[a]`                                   // voice length + 0.5s tail
+  ];
+  args.push(
+    "-filter_complex", filters.join(";"),
+    "-map", "[v]", "-map", "[a]",
+    "-c:v", "libx264", "-profile:v", "high", "-level:v", "4.1", "-pix_fmt", "yuv420p",
+    "-preset", "veryfast", "-crf", "20", "-r", "30",
+    ...(useFpsMode ? ["-fps_mode", "cfr"] : ["-vsync", "cfr"]),
+    "-g", "60",
+    "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+    "-shortest", "-t", cap,
+    "-movflags", "+faststart",
+    outputPath
+  );
+  return args;
+}
+
+async function runWithFpsFallback(build, opts) {
+  try {
+    await runFfmpeg(build({ ...opts, useFpsMode: true }));
+  } catch (e) {
+    if (/fps_mode|Unrecognized option/i.test(`${e.stderr || ""} ${e.message}`)) await runFfmpeg(build({ ...opts, useFpsMode: false }));
+    else throw e;
+  }
+}
+
 app.post("/export", async (req, res) => {
   // 1. Same mandatory WORKER_SECRET check as /trim
   if (!WORKER_SECRET) return res.status(500).json({ error: "Server misconfiguration: WORKER_SECRET is not configured." });
   const incomingSecret = req.headers["x-worker-secret"] || req.body?.workerSecret;
   if (!incomingSecret || incomingSecret !== WORKER_SECRET) return res.status(401).json({ error: "Unauthorized worker request" });
 
-  const { clipId, mediaUrl, voiceAudioUrl, overlayPng, userId } = req.body || {};
+  const { clipId, mediaUrl, voiceAudioUrl, overlayPng, userId, mode } = req.body || {};
+  const isStill = mode === "still";
   if (!clipId || !mediaUrl || !userId || typeof overlayPng !== "string" || !overlayPng.startsWith("data:image/png;base64,")) {
     return res.status(400).json({ error: "Missing required parameters (clipId, mediaUrl, userId, overlayPng)" });
   }
@@ -418,6 +461,19 @@ app.post("/export", async (req, res) => {
     await downloadToFile(mediaUrl, inputPath);
     fs.writeFileSync(overlayPath, Buffer.from(overlayPng.replace(/^data:image\/png;base64,/, ""), "base64"));
 
+    if (isStill) {
+      // Picture/GIF + voice note: the voice note is required here.
+      const img = await probeMedia(inputPath).catch(() => null);
+      if (!img || !img.hasVideo || !img.width || !img.height) { cleanup(); return res.status(400).json({ error: "Could not read that picture." }); }
+      if (!voiceAudioUrl) { cleanup(); return res.status(400).json({ error: "This picture has no voice note." }); }
+      let voice;
+      try { await downloadToFile(voiceAudioUrl, voicePath); voice = await probeMedia(voicePath); } catch { voice = null; }
+      if (!voice || !voice.hasAudio) { cleanup(); return res.status(400).json({ error: "Couldn't load the voice note." }); }
+      const isGif = await new Promise((resolve) => execFile("ffprobe", ["-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0", inputPath], { timeout: 15000 }, (err, out) => resolve(!err && /gif/i.test(String(out)))));
+      // Voice length is often unknown for browser recordings, so -shortest ends it; -t is only a safety cap.
+      const maxSec = voice.duration > 0 ? voice.duration + 0.5 : 30.5;
+      await runWithFpsFallback(buildStillExportArgs, { inputPath, overlayPath, voicePath, outputPath, width: img.width, height: img.height, isGif, maxSec });
+    } else {
     const probe = await probeMedia(inputPath);
     if (!probe.hasVideo || !probe.width || !probe.height || !probe.duration) {
       cleanup();
@@ -445,6 +501,7 @@ app.post("/export", async (req, res) => {
       } else {
         throw e;
       }
+    }
     }
     if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) throw new Error("FFmpeg produced empty output file");
 

@@ -12,6 +12,8 @@ interface ShareModalProps {
   onCopyPicture?: () => void;
   isCopyingPicture?: boolean;
   onDownloadVideo?: () => void;
+  /** Show "Create Video" (videos, and pictures with a voice note). Defaults to clip.mediaType === "video". */
+  canCreateVideo?: boolean;
   isGeneratingVideo?: boolean;
   videoProgress?: number;
   isVideoReady?: boolean;
@@ -27,6 +29,7 @@ export default function ShareModal({
   onCopyPicture,
   isCopyingPicture = false,
   onDownloadVideo,
+  canCreateVideo,
   isGeneratingVideo = false,
   videoProgress = 0,
   isVideoReady = false,
@@ -184,7 +187,7 @@ export default function ShareModal({
         {/* Primary Action Buttons */}
         <div className="space-y-2.5">
           {/* 1. Download Watermarked Video (MP4) - Ideal for TikTok, Instagram, Twitter, Discord */}
-          {clip.mediaType === "video" && onDownloadVideo && (
+          {(canCreateVideo ?? clip.mediaType === "video") && onDownloadVideo && (
             <button
               type="button"
               onClick={isVideoReady && onSaveVideo ? onSaveVideo : onDownloadVideo}
@@ -207,7 +210,9 @@ export default function ShareModal({
                   <div className="text-xs text-slate-300">
                     {isVideoReady 
                       ? "Ready: saves to Photos on phones, downloads on computers" 
-                      : "MP4 with your caption + getREAX.com watermark. Works on X, TikTok, Instagram, Discord"}
+                      : clip.mediaType === "video"
+                        ? "MP4 with your caption + getREAX.com watermark. Works on X, TikTok, Instagram, Discord"
+                        : "MP4 of this picture with the voice note + getREAX.com watermark. Works on X, TikTok, Instagram"}
                   </div>
                 </div>
               </div>

@@ -14,7 +14,7 @@ import BusinessBadge from "./BusinessBadge";
 import ShareModal from "./ShareModal";
 import MediaLightbox from "./MediaLightbox";
 import { isVoiceItEligible, openVoiceIt } from "../utils/voiceIt";
-import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo } from "../utils/watermarkExporter";
 
 interface ThreadViewProps {
   key?: string;
@@ -353,12 +353,20 @@ export default function ThreadView({
     setExportedVideo(null);
   }, [shareClip]);
 
+  // Old audio-only replies to a picture reuse the parent's picture for the video export.
+  const shareLegacyImage = React.useMemo(() => {
+    if (!shareClip || shareClip.mediaType !== "audio" || !shareClip.parentId) return null;
+    const parent = clips.find((c) => c.id === shareClip.parentId);
+    return parent && isVoiceItEligible(parent) ? parent.mediaUrl : null;
+  }, [shareClip, clips]);
+
   const handleDownloadVideo = async () => {
     if (!shareClip || isGeneratingVideo) return;
     setIsGeneratingVideo(true);
     setVideoProgress(0);
     try {
-      const { file } = await exportWatermarkedVideo(shareClip, null, (pct) => setVideoProgress(pct));
+      const exportClip = shareLegacyImage ? { ...shareClip, mediaUrl: shareLegacyImage } : shareClip;
+      const { file } = await exportWatermarkedVideo(exportClip, null, (pct) => setVideoProgress(pct));
       setExportedVideo(file);
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Video ready! Tap Save Video." } }));
     } catch (err: any) {
@@ -1186,6 +1194,7 @@ export default function ThreadView({
             onClose={() => setShareClip(null)}
             clip={shareClip}
             onDownloadVideo={handleDownloadVideo}
+            canCreateVideo={canExportAsVideo(shareClip, shareLegacyImage)}
             isGeneratingVideo={isGeneratingVideo}
             videoProgress={videoProgress}
             isVideoReady={!!exportedVideo}

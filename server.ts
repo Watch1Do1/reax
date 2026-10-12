@@ -3666,7 +3666,18 @@ app.post("/api/clips/:id/export", async (req, res) => {
   const clip = await store!.getClip(req.params.id);
   if (!clip || clip.deleted) return res.status(404).json({ error: "Clip not found" });
   const looksLikeVideo = clip.mediaType === "video" || /\.(mp4|webm|mov)(\?|$)/i.test(clip.mediaUrl || "") || (clip.mediaUrl || "").includes("mixkit-");
-  if (!looksLikeVideo) return res.status(400).json({ error: "Only video clips can be exported as video." });
+  // Pictures/GIFs with a voice note export as a still-image MP4 ("still" mode on the worker).
+  // Old audio-only replies (mediaType "audio") reuse the parent's picture, as the feed shows them.
+  let stillImageUrl: string | null = null;
+  if (!looksLikeVideo && clip.voiceAudioUrl) {
+    const isImageUrl = (c: any) => !!c && typeof c.mediaUrl === "string" && /^https:\/\//.test(c.mediaUrl) && c.mediaType !== "video" && c.mediaType !== "audio" && !/\.(mp4|webm|mov|m4v|mp3|m4a|wav|ogg|aac)(\?|#|$)/i.test(c.mediaUrl);
+    if (isImageUrl(clip)) stillImageUrl = clip.mediaUrl;
+    else if (clip.mediaType === "audio" && clip.parentId) {
+      const parent = await store!.getClip(clip.parentId);
+      if (parent && !parent.deleted && isImageUrl(parent)) stillImageUrl = parent.mediaUrl;
+    }
+  }
+  if (!looksLikeVideo && !stillImageUrl) return res.status(400).json({ error: "Only videos, or pictures with a voice note, can be exported as video." });
 
   const overlayPng = req.body?.overlayPng;
   if (typeof overlayPng !== "string" || !overlayPng.startsWith("data:image/png;base64,") || overlayPng.length > 4_000_000) {
@@ -3682,7 +3693,8 @@ app.post("/api/clips/:id/export", async (req, res) => {
       headers: { "Content-Type": "application/json", "x-worker-secret": process.env.WORKER_SECRET || "" },
       body: JSON.stringify({
         clipId: clip.id,
-        mediaUrl: clip.mediaUrl,                 // from DB, never from the client
+        mediaUrl: stillImageUrl || clip.mediaUrl, // from DB, never from the client
+        mode: stillImageUrl ? "still" : "video",
         voiceAudioUrl: clip.voiceAudioUrl || null,
         overlayPng,
         userId: user.id                          // session user, never client-provided
