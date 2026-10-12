@@ -175,6 +175,8 @@ export interface ContactMessage {
 export interface ClipsPageOptions {
   limit: number;
   cursor?: string | null;
+  /** Optional search text (e.g. "#cats" or "coffee"); matched case-insensitively against captions, voice text and author. */
+  q?: string | null;
 }
 export interface ClipsPage {
   clips: Clip[];
@@ -184,6 +186,15 @@ export interface ClipsPage {
 
 // Feed paging cursor = ISO created_at of the last top-level post on the previous page.
 const CLIPS_PAGE_MAX = 500;
+
+// Normalize a search term for ilike: trim, cap length, drop characters that are
+// PostgREST filter syntax or LIKE wildcards. "_" is kept (valid in hashtags); it can
+// only widen matches, and the client re-filters exactly.
+function normalizeClipSearch(q: unknown): string | null {
+  if (typeof q !== "string") return null;
+  const clean = q.trim().replace(/^@/, "").replace(/[,()"'*%\\:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+  return clean.length > 0 ? clean : null;
+}
 function encodeClipsCursor(createdAt: string | null | undefined): string | null {
   if (!createdAt) return null;
   return Buffer.from(String(createdAt), "utf8").toString("base64url");
@@ -369,8 +380,10 @@ class MemoryStore implements Store {
     const all = await this.getClips(false);
     const after = decodeClipsCursor(opts.cursor);
     const afterMs = after ? new Date(after).getTime() : Infinity;
+    const term = normalizeClipSearch(opts.q)?.toLowerCase() || null;
     const roots = all
-      .filter(c => !c.parentId && new Date(c.createdAt).getTime() < afterMs);
+      .filter(c => !c.parentId && new Date(c.createdAt).getTime() < afterMs)
+      .filter(c => !term || [c.overlayText, c.voiceText, c.authorName].some(v => (v || "").toLowerCase().includes(term)));
     const page = roots.slice(0, limit);
     const hasMore = roots.length > limit;
     const out: Clip[] = [...page];
@@ -842,6 +855,11 @@ class SupabaseStore implements Store {
         .order("created_at", { ascending: false })
         .limit(limit + 1);
       if (after) query = query.lt("created_at", after);
+      const term = normalizeClipSearch(opts.q);
+      if (term) {
+        const pat = `*${term}*`;
+        query = query.or(`overlay_text.ilike.${pat},voice_text.ilike.${pat},author_name.ilike.${pat}`);
+      }
       return query;
     }, "clips page");
     if (error) {
@@ -2754,7 +2772,8 @@ app.get("/api/clips", async (req, res) => {
     try {
       const limit = parseInt(String(req.query.limit), 10) || 20;
       const cursor = typeof req.query.cursor === "string" ? req.query.cursor : null;
-      const page = await store!.getClipsPage({ limit, cursor });
+      const q = typeof req.query.q === "string" ? req.query.q : null;
+      const page = await store!.getClipsPage({ limit, cursor, q });
       return res.json(page);
     } catch (err: any) {
       console.error("GET /api/clips (paged)", err?.message || err);

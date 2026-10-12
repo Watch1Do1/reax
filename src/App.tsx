@@ -3,7 +3,7 @@ import {
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
   ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User,
-  MoreVertical, Mail, FileText, Clock, Mic, Loader2
+  MoreVertical, Mail, FileText, Clock, Mic, Loader2, X
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -25,6 +25,7 @@ import PolicyReacceptModal from "./components/PolicyReacceptModal";
 import { TERMS_VERSION, PRIVACY_VERSION } from "./constants/policy";
 import { Clip, SavedReaction } from "./types";
 import { generateUniqueId, loadAndSanitizeReactions, detectDuplicateIds } from "./utils/keyUtils";
+import { extractHashtags, parseTagQuery, HASHTAG_EVENT } from "./utils/hashtags";
 import { 
   getAuthToken, 
   fetchMyProfile, 
@@ -467,6 +468,74 @@ export default function App() {
   const [feedCursor, setFeedCursor] = useState<string | null>(null);
   const [feedHasMore, setFeedHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // ---- Server-side search (so results aren't limited to posts already loaded) ----
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [searchCursor, setSearchCursor] = useState<string | null>(null);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchSeqRef = useRef(0);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  const mergeClips = useCallback((incoming: Clip[]) => {
+    setClips(prev => {
+      const seen = new Set(prev.map(c => c.id));
+      const add = incoming.filter(c => c && c.id && !seen.has(c.id) && (seen.add(c.id), true));
+      return add.length ? [...prev, ...add] : prev;
+    });
+  }, []);
+
+  const fetchSearchPage = useCallback(async (q: string, cursor: string | null) => {
+    const seq = ++searchSeqRef.current;
+    setSearchLoading(true);
+    try {
+      const url = `/api/clips?limit=${FEED_SERVER_PAGE}&q=${encodeURIComponent(q)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}&_t=${Date.now()}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Search failed (${res.status})`);
+      const page = await res.json();
+      if (seq !== searchSeqRef.current) return;
+      mergeClips(Array.isArray(page?.clips) ? page.clips : []);
+      setSearchCursor(page?.nextCursor || null);
+      setSearchHasMore(Boolean(page?.hasMore && page?.nextCursor));
+    } catch (err) {
+      if (seq !== searchSeqRef.current) return;
+      console.error(err);
+      setSearchHasMore(false);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Search couldn't reach the server. Showing loaded posts only." } }));
+    } finally {
+      if (seq === searchSeqRef.current) setSearchLoading(false);
+    }
+  }, [mergeClips]);
+
+  useEffect(() => {
+    const term = debouncedSearch.replace(/^[@#]/, "");
+    setSearchCursor(null);
+    setSearchHasMore(false);
+    if (term.length < 2) {
+      searchSeqRef.current++;
+      setSearchLoading(false);
+      return;
+    }
+    fetchSearchPage(debouncedSearch, null);
+  }, [debouncedSearch, fetchSearchPage]);
+
+  // Tapping a #hashtag anywhere opens the feed filtered to that tag.
+  useEffect(() => {
+    const onTag = (e: Event) => {
+      const tag = (e as CustomEvent<{ tag?: string }>).detail?.tag;
+      if (!tag) return;
+      setSearchQuery(`#${tag}`);
+      setSelectedThreadRootId(null);
+      setSelectedUserProfileUsername(null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    window.addEventListener(HASHTAG_EVENT, onTag);
+    return () => window.removeEventListener(HASHTAG_EVENT, onTag);
+  }, []);
+
   const loadedRootCountRef = useRef(0);
   const loadingMoreRef = useRef(false);
 
@@ -1017,12 +1086,14 @@ export default function App() {
     // Apply text search query
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase().replace(/^@/, "");
+      const tag = parseTagQuery(searchQuery);
+      const matches = (c: Clip) => tag
+        ? extractHashtags(c.overlayText).includes(tag) || extractHashtags(c.voiceText).includes(tag)
+        : (c.authorName || "").toLowerCase().includes(q) ||
+          (c.overlayText || "").toLowerCase().includes(q) ||
+          (c.voiceText || "").toLowerCase().includes(q);
       baseRoots = baseRoots.filter((root) => {
-        const rootAuthor = (root.authorName || "").toLowerCase();
-        const overlay = (root.overlayText || "").toLowerCase();
-        const voice = (root.voiceText || "").toLowerCase();
-        if (rootAuthor.includes(q) || overlay.includes(q) || voice.includes(q)) return true;
-
+        if (matches(root)) return true;
         const findDescendants = (parentId: string): Clip[] => {
           const direct = clips.filter(c => c.parentId === parentId);
           let list = [...direct];
@@ -1031,15 +1102,10 @@ export default function App() {
           });
           return list;
         };
-        const allDescendants = findDescendants(root.id);
-        return allDescendants.some(d => 
-          (d.authorName || "").toLowerCase().includes(q) ||
-          (d.overlayText || "").toLowerCase().includes(q) ||
-          (d.voiceText || "").toLowerCase().includes(q)
-        );
+        return findDescendants(root.id).some(matches);
       });
     }
-    
+
     switch (feedType) {
       case "latest":
         return [...baseRoots].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -1095,7 +1161,9 @@ export default function App() {
     setVisibleCount(FEED_PAGE_SIZE);
   }, [feedType, searchQuery, activeUserFilter]);
   const visibleRootClips = rootClips.slice(0, visibleCount);
-  const hasMoreClips = rootClips.length > visibleCount || feedHasMore;
+  const isSearching = searchQuery.trim().replace(/^[@#]/, "").length >= 2;
+  const hasMoreClips = rootClips.length > visibleCount || (isSearching ? searchHasMore : feedHasMore);
+  const activeTag = parseTagQuery(searchQuery);
 
   // Hot / Most Reacted / Voice rank by reply counts and recent activity, which are not
   // database columns, so for those tabs we widen the loaded window once (up to ~220 newest posts)
@@ -1109,7 +1177,14 @@ export default function App() {
   }, [feedType, feedHasMore, loading, loadMoreFromServer]);
 
   const handleLoadMore = async () => {
-    if (loadingMore) return;
+    if (loadingMore || searchLoading) return;
+    if (isSearching) {
+      if (rootClips.length < visibleCount + FEED_PAGE_SIZE && searchHasMore && searchCursor) {
+        await fetchSearchPage(searchQuery.trim(), searchCursor);
+      }
+      setVisibleCount((n) => n + FEED_PAGE_SIZE);
+      return;
+    }
     if (rootClips.length < visibleCount + FEED_PAGE_SIZE && feedHasMore) {
       await loadMoreFromServer(FEED_SERVER_PAGE);
     }
@@ -1345,6 +1420,30 @@ export default function App() {
               </div>
             ))}
           </div>
+        ) : rootClips.length === 0 && searchQuery.trim() ? (
+          <div className="text-center py-12 bg-slate-900/20 border border-slate-800/40 rounded-3xl p-8 space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-slate-500 text-lg">
+              {activeTag ? "#" : "🔍"}
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-white">
+                {searchLoading || searchQuery.trim() !== debouncedSearch
+                  ? "Searching…"
+                  : activeTag ? `No posts for #${activeTag}` : `No posts match "${searchQuery.trim()}"`}
+              </h3>
+              {!searchLoading && searchQuery.trim() === debouncedSearch && (
+                <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
+                  {activeTag ? "Be the first: add this hashtag to your caption when you post." : "Try a different word, a #hashtag or an @username."}
+                </p>
+              )}
+            </div>
+            <button
+              onClick={() => setSearchQuery("")}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl shadow-md transition-all uppercase tracking-wider font-mono"
+            >
+              Clear search
+            </button>
+          </div>
         ) : rootClips.length === 0 ? (
           /* Contextual Empty State */
           <div className="text-center py-12 bg-slate-900/20 border border-slate-800/40 rounded-3xl p-8 space-y-4">
@@ -1389,6 +1488,24 @@ export default function App() {
                 Sorted by {feedType === "hot" ? "Engagement Velocity" : (feedType === "most_reacted" ? "Thread Depth" : (feedType === "audio_hot" ? "Voice Activity" : "Date Stamp"))}
               </span>
             </div>
+
+            {searchQuery.trim() && (
+              <div className="flex items-center justify-between gap-2 bg-sky-950/40 border border-sky-500/30 rounded-xl px-3 py-1.5 text-xs">
+                <span className="text-slate-300 truncate">
+                  {activeTag ? <>Posts tagged <span className="font-bold text-sky-300">#{activeTag}</span></> : <>Results for <span className="font-bold text-sky-300">"{searchQuery.trim()}"</span></>}
+                  {searchLoading && <span className="text-slate-500"> · searching…</span>}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="p-1 text-slate-400 hover:text-rose-400 rounded transition-colors cursor-pointer"
+                  title="Clear search"
+                  aria-label="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             <div className="space-y-6">
               {visibleRootClips.map((clip, index) => (

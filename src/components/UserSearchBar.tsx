@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Search, X, User, Sparkles, ChevronRight, Film } from "lucide-react";
 import { Clip } from "../types";
+import { extractHashtags } from "../utils/hashtags";
 
 export interface UserSearchBarProps {
   clips: Clip[];
@@ -55,12 +56,27 @@ export default function UserSearchBar({
     return Array.from(map.values()).sort((a, b) => b.totalClips - a.totalClips);
   }, [clips]);
 
+  // Hashtags used in loaded posts, most used first
+  const tags = useMemo(() => {
+    const counts = new Map<string, number>();
+    clips.forEach(c => {
+      new Set([...extractHashtags(c.overlayText), ...extractHashtags(c.voiceText)]).forEach(t => counts.set(t, (counts.get(t) || 0) + 1));
+    });
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([tag, count]) => ({ tag, count }));
+  }, [clips]);
+
   // Filter creators based on search query
-  const queryLower = searchQuery.trim().toLowerCase().replace(/^@/, "");
+  const isTagQuery = searchQuery.trim().startsWith("#");
+  const queryLower = searchQuery.trim().toLowerCase().replace(/^[@#]/, "");
+  const matchingTags = useMemo(() => {
+    const list = queryLower ? tags.filter(t => t.tag.includes(queryLower)) : tags;
+    return list.slice(0, 6);
+  }, [tags, queryLower]);
   const matchingCreators = useMemo(() => {
+    if (isTagQuery) return [];
     if (!queryLower) return creators.slice(0, 5); // Default top creators
     return creators.filter(c => c.clean.toLowerCase().includes(queryLower));
-  }, [creators, queryLower]);
+  }, [creators, queryLower, isTagQuery]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -86,7 +102,15 @@ export default function UserSearchBar({
           value={searchQuery}
           onChange={(e) => onSearchQueryChange(e.target.value)}
           onFocus={() => setIsFocused(true)}
-          placeholder="Search user @username or text..."
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "Escape") {
+              setIsFocused(false);
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          enterKeyHint="search"
+          aria-label="Search posts, #hashtags or @users"
+          placeholder="Search posts, #hashtags or @users..."
           className="w-full bg-transparent py-2.5 px-3 text-xs sm:text-sm text-slate-100 placeholder-slate-500 outline-none"
         />
 
@@ -135,6 +159,27 @@ export default function UserSearchBar({
       {/* Suggested Users Dropdown (Opens on Focus or Typing) */}
       {isFocused && (
         <div className="absolute top-full left-0 right-0 mt-1.5 bg-slate-900/98 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl py-2 z-40 overflow-hidden">
+          {matchingTags.length > 0 && (
+            <div className="px-3 py-2 border-b border-slate-800/60">
+              <div className="text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5">Hashtags</div>
+              <div className="flex flex-wrap gap-1.5">
+                {matchingTags.map(t => (
+                  <button
+                    key={`tag-${t.tag}`}
+                    type="button"
+                    onClick={() => {
+                      setIsFocused(false);
+                      onSearchQueryChange(`#${t.tag}`);
+                    }}
+                    className="px-2 py-0.5 rounded-lg bg-sky-950/50 hover:bg-sky-900/60 border border-sky-500/30 text-[11px] font-mono text-sky-300 cursor-pointer"
+                  >
+                    #{t.tag} <span className="text-slate-500">{t.count}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="px-3 py-1.5 flex items-center justify-between border-b border-slate-800/60 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
             <span>{queryLower ? `Matching Users (${matchingCreators.length})` : "Active Creators"}</span>
             <span className="text-slate-500">Tap to inspect reactions</span>
@@ -143,7 +188,9 @@ export default function UserSearchBar({
           <div className="max-h-56 overflow-y-auto divide-y divide-slate-800/40">
             {matchingCreators.length === 0 ? (
               <div className="p-4 text-center text-xs text-slate-500">
-                No users found matching "@{queryLower}".
+                {isTagQuery
+                  ? (matchingTags.length ? "Tap a hashtag above, or close to see matching posts." : `No hashtags like #${queryLower} in loaded posts yet. Close to search all posts.`)
+                  : `No users found matching "@${queryLower}". Close to see matching posts.`}
               </div>
             ) : (
               matchingCreators.map((creator) => (

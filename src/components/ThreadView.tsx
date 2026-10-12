@@ -6,6 +6,7 @@ import {
   Flame, ListOrdered, ChevronDown, ChevronUp, Radio, Check, Share2, Maximize2
 } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
+import { renderWithHashtags } from "../utils/hashtags";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
@@ -602,7 +603,7 @@ export default function ThreadView({
               {ultimateRoot.overlayText && (
                 <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none">
                   <h2 className="font-sans font-black text-base sm:text-lg text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight">
-                    {ultimateRoot.overlayText}
+                    {renderWithHashtags(ultimateRoot.overlayText)}
                   </h2>
                 </div>
               )}
@@ -900,7 +901,7 @@ export default function ThreadView({
               {directReax.overlayText && (
                           <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-3 z-10 pointer-events-none">
                             <h2 className="font-sans font-black text-sm sm:text-base text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight">
-                              {directReax.overlayText}
+                              {renderWithHashtags(directReax.overlayText)}
                             </h2>
                           </div>
                         )}
@@ -1084,7 +1085,7 @@ export default function ThreadView({
                                         </span>
                                       </div>
                                       <p className="text-[10px] text-slate-400 truncate italic mt-0.5">
-                                        "{riff.overlayText || riff.voiceText || "Riff response"}"
+                                        "{renderWithHashtags(riff.overlayText || riff.voiceText || "Riff response")}"
                                       </p>
                                     </div>
                                   </div>

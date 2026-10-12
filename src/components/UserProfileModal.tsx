@@ -5,6 +5,7 @@ import {
   CornerDownRight, Mic, Calendar, Flame, ChevronRight, ExternalLink
 } from "lucide-react";
 import { Clip } from "../types";
+import { renderWithHashtags } from "../utils/hashtags";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
@@ -322,7 +323,7 @@ export default function UserProfileModal({
 
                         {(clip.overlayText || clip.voiceText) && (
                           <p className="text-xs text-slate-200 line-clamp-2 italic">
-                            "{clip.overlayText || (clip.voiceText && !clip.voiceText.startsWith("audio_url:") ? clip.voiceText : "Visual reaction")}"
+                            "{renderWithHashtags(clip.overlayText || (clip.voiceText && !clip.voiceText.startsWith("audio_url:") ? clip.voiceText : "Visual reaction"))}"
                           </p>
                         )}
 

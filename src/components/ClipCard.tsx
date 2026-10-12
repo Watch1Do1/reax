@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Heart, Volume2, CornerDownRight, Film, MessageCircle, ChevronRight, Play, Pause, VolumeX, Volume1, Star, Mic, Flag, Trash2, Share2, Copy, Check, Flame } from "lucide-react";
 import { Clip, SavedReaction } from "../types";
+import { renderWithHashtags } from "../utils/hashtags";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
 import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo } from "../utils/watermarkExporter";
@@ -839,7 +840,7 @@ export default function ClipCard({
                 <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} ${
                   textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
                 } break-words leading-tight max-w-full`}>
-                  {clip.overlayText}
+                  {renderWithHashtags(clip.overlayText)}
                 </h2>
               </div>
             )}
