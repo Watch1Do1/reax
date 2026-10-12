@@ -58,6 +58,9 @@ export default function ShareModal({
   const emailBody = `Hey,\n\nCheck out this reaction by @${clip.authorName} on Reax:\n\n${clip.overlayText ? `"${clip.overlayText}"\n\n` : ""}Watch and react back here:\n${shareUrl}\n\nShared via getREAX.com`;
   const mailtoUrl = `mailto:?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
 
+  // Picture (or GIF) with a voice note: export is a video with sound.
+  const isVoicePicture = !!(canCreateVideo && clip.mediaType !== "video" && onDownloadVideo);
+
   const handleCopyLink = async () => {
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -186,6 +189,12 @@ export default function ShareModal({
 
         {/* Primary Action Buttons */}
         <div className="space-y-2.5">
+          {isVoicePicture && (
+            <div className="pt-0.5">
+              <div className="text-xs font-bold uppercase tracking-wide text-indigo-300">Share with sound</div>
+              <div className="text-xs text-slate-400">Saves as a video so your voice plays.</div>
+            </div>
+          )}
           {/* 1. Download Watermarked Video (MP4) - Ideal for TikTok, Instagram, Twitter, Discord */}
           {(canCreateVideo ?? clip.mediaType === "video") && onDownloadVideo && (
             <button
@@ -200,7 +209,11 @@ export default function ShareModal({
                 </div>
                 <div className="text-left">
                   <div className="text-sm font-bold text-white flex items-center gap-1.5">
-                    {isGeneratingVideo 
+                    {isVoicePicture
+                      ? isGeneratingVideo
+                        ? `Making video with sound... ${videoProgress || 0}%`
+                        : isVideoReady ? "Save / Share video" : "Make video with sound"
+                      : isGeneratingVideo 
                       ? `Creating Video... ${videoProgress || 0}%` 
                       : isVideoReady ? "Save Video" : "Create Watermarked Video"}
                     <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-400/20 text-indigo-300 border border-indigo-400/30">
@@ -220,6 +233,10 @@ export default function ShareModal({
                 {isGeneratingVideo ? `${videoProgress || 0}%` : isVideoReady ? "Save" : "Create"}
               </span>
             </button>
+          )}
+
+          {isVoicePicture && (
+            <div className="pt-2 text-xs font-bold uppercase tracking-wide text-slate-400">Picture only (no sound)</div>
           )}
 
           {/* 2. Copy Picture (Paste directly into Email / Slack / Discord) */}
