@@ -11,6 +11,7 @@ import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
 import FitMedia from "./FitMedia";
+import { isVoiceItEligible, openVoiceIt } from "../utils/voiceIt";
 
 interface ClipCardProps {
   key?: string | number | null;
@@ -76,11 +77,19 @@ export default function ClipCard({
     return curr;
   }, [clip, allClips]);
 
-  const isVideo = clip.mediaType === "video" || 
+  // Old audio-only replies (mediaType "audio") to a picture post: show the parent picture instead of a blank window
+  const legacyParentImage = React.useMemo(() => {
+    if (clip.mediaType !== "audio" || !clip.parentId) return null;
+    const parent = allClips.find(c => c.id === clip.parentId);
+    return parent && isVoiceItEligible(parent) ? parent.mediaUrl : null;
+  }, [clip.mediaType, clip.parentId, allClips]);
+  const displayMediaUrl = legacyParentImage || clip.mediaUrl;
+
+  const isVideo = !legacyParentImage && (clip.mediaType === "video" || 
     clip.mediaUrl.endsWith(".mp4") || 
     clip.mediaUrl.endsWith(".webm") || 
     clip.mediaUrl.includes("mixkit-") || 
-    clip.mediaUrl.includes("uploads/clip-");
+    clip.mediaUrl.includes("uploads/clip-"));
 
   // High-res Watermark & Video Exporter Handlers
   const handleDownloadVideo = async () => {          // "Create" step
@@ -703,7 +712,7 @@ export default function ClipCard({
 
         return (
           <FitMedia
-            src={clip.mediaUrl}
+            src={displayMediaUrl}
             isVideo={isVideo}
             mediaRef={isVideo ? videoRef : imgRef}
             videoProps={{
@@ -758,14 +767,34 @@ export default function ClipCard({
                           : `Play AI voice: "${clip.voiceText}"`
                       }
                     >
-                      {hasAudioUrl || hasVoiceData ? (
-                        <Mic className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-emerald-400"}`} />
+                      {!isVideo && (hasAudioUrl || hasVoiceData) ? (
+                        <>
+                          <Avatar url={clip.authorAvatarUrl} name={clip.authorName} size={18} />
+                          <span className="flex items-end gap-[2px] h-3" aria-hidden="true">
+                            {[5, 9, 12, 7, 10, 6].map((h, i) => (
+                              <span
+                                key={i}
+                                className={`w-[2px] rounded-full ${isAudioPlaying ? "bg-white animate-pulse" : "bg-emerald-400"}`}
+                                style={{ height: `${h}px`, animationDelay: `${i * 90}ms` }}
+                              />
+                            ))}
+                          </span>
+                          <span className="text-[10px] font-mono font-bold">
+                            {isAudioPlaying ? "Playing..." : "Tap to hear"}
+                          </span>
+                        </>
                       ) : (
-                        <Volume2 className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-indigo-400"}`} />
+                        <>
+                          {hasAudioUrl || hasVoiceData ? (
+                            <Mic className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-emerald-400"}`} />
+                          ) : (
+                            <Volume2 className={`w-3.5 h-3.5 ${isAudioPlaying ? "text-white" : "text-indigo-400"}`} />
+                          )}
+                          <span className="text-[10px] font-mono font-bold">
+                            {isAudioPlaying ? "Playing..." : "Voice"}
+                          </span>
+                        </>
                       )}
-                      <span className="text-[10px] font-mono font-bold">
-                        {isAudioPlaying ? "Playing..." : "Voice"}
-                      </span>
                     </button>
                   </div>
                 )}
@@ -947,6 +976,20 @@ export default function ClipCard({
             )}
             <span className="text-[10px] hidden sm:inline">{copiedPicture ? "Copied!" : "Copy"}</span>
           </button>
+
+          {/* Voice it: quick voice reply on the same picture */}
+          {isVoiceItEligible(clip) && (
+            <button
+              type="button"
+              onClick={(e) => openVoiceIt(clip, e)}
+              className="flex items-center gap-1 min-h-[32px] text-slate-400 hover:text-emerald-300 transition-colors cursor-pointer"
+              aria-label="Voice it"
+              title="Voice it: reply with your voice on this same picture"
+            >
+              <Mic className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-[10px] hidden sm:inline">Voice it</span>
+            </button>
+          )}
 
           {/* Share Button (opens ShareModal) */}
           <button 

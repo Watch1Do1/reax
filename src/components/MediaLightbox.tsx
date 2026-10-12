@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { createPortal } from "react-dom";
-import { X, Share2 } from "lucide-react";
+import { X, Share2, Mic } from "lucide-react";
+import { isVoiceItEligible } from "../utils/voiceIt";
 import { Clip } from "../types";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import { useBackToClose } from "../hooks/useBackToClose";
@@ -10,12 +11,13 @@ interface MediaLightboxProps {
   clip: Clip | null;
   onClose: () => void;
   onShare?: (clip: Clip) => void;
+  onVoiceIt?: (clip: Clip) => void;
 }
 
 const isVideoUrl = (url: string) =>
   /\.(mp4|webm|mov)(\?.*)?$/i.test(url) || url.includes("mixkit-");
 
-export default function MediaLightbox({ clip, onClose, onShare }: MediaLightboxProps) {
+export default function MediaLightbox({ clip, onClose, onShare, onVoiceIt }: MediaLightboxProps) {
   const isOpen = !!clip;
   useBackToClose(isOpen, onClose);
   useBodyScrollLock(isOpen);
@@ -47,6 +49,18 @@ export default function MediaLightbox({ clip, onClose, onShare }: MediaLightboxP
       aria-modal="true"
     >
       <div className="absolute top-3 right-3 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+        {onVoiceIt && isVoiceItEligible(clip) && (
+          <button
+            type="button"
+            onClick={() => onVoiceIt(clip)}
+            aria-label="Voice it"
+            title="Voice it: reply with your voice on this same picture"
+            className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-mono font-bold border bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 cursor-pointer"
+          >
+            <Mic className="w-4 h-4 text-emerald-400" />
+            <span>Voice it</span>
+          </button>
+        )}
         {onShare && (
           <button
             type="button"

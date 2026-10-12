@@ -8,6 +8,8 @@ import {
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
 import RespondModal from "./components/RespondModal";
+import VoiceItModal from "./components/VoiceItModal";
+import { VOICE_IT_EVENT, isVoiceItEligible } from "./utils/voiceIt";
 import ThreadView from "./components/ThreadView";
 import FastReaxPanel from "./components/FastReaxPanel";
 import SavedReactionsVault from "./components/SavedReactionsVault";
@@ -853,6 +855,20 @@ export default function App() {
     setIsRespondModalOpen(true);
   };
 
+  // "Voice it": quick voice reply that reuses the parent picture
+  const [voiceItParent, setVoiceItParent] = useState<Clip | null>(null);
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const clip = (e as CustomEvent).detail?.clip as Clip | undefined;
+      if (!clip || !isVoiceItEligible(clip)) return;
+      const quotaExceeded = await checkGuestQuotaBeforeComposer();
+      if (quotaExceeded) return;
+      setVoiceItParent(clip);
+    };
+    window.addEventListener(VOICE_IT_EVENT, handler);
+    return () => window.removeEventListener(VOICE_IT_EVENT, handler);
+  });
+
   // Fast tap-to-reax pipeline handler - opens RespondModal directly at capture step
   const handleFastRespond = async (parentClip: Clip, tone: Clip["tone"]) => {
     const quotaExceeded = await checkGuestQuotaBeforeComposer();
@@ -1453,6 +1469,20 @@ export default function App() {
             onSuccess={() => {
               setIsRespondModalOpen(false);
               setRemixData(null);
+              setRefreshTrigger((prev) => prev + 1);
+            }}
+          />
+        )}
+
+        {/* VOICE IT QUICK VOICE REPLY */}
+        {voiceItParent && (
+          <VoiceItModal
+            key="voice-it-modal"
+            parentClip={voiceItParent}
+            username={username}
+            onClose={() => setVoiceItParent(null)}
+            onSuccess={() => {
+              setVoiceItParent(null);
               setRefreshTrigger((prev) => prev + 1);
             }}
           />

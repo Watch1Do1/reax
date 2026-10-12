@@ -13,6 +13,7 @@ import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import ShareModal from "./ShareModal";
 import MediaLightbox from "./MediaLightbox";
+import { isVoiceItEligible, openVoiceIt } from "../utils/voiceIt";
 import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile } from "../utils/watermarkExporter";
 
 interface ThreadViewProps {
@@ -664,6 +665,19 @@ export default function ThreadView({
                   <Share2 className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Share</span>
                 </button>
+
+                {isVoiceItEligible(ultimateRoot) && (
+                  <button
+                    type="button"
+                    onClick={(e) => openVoiceIt(ultimateRoot, e)}
+                    aria-label="Voice it"
+                    title="Voice it: reply with your voice on this same picture"
+                    className="flex items-center gap-1 px-2.5 py-1 min-h-[32px] rounded-lg text-xs font-mono font-bold border bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800 cursor-pointer"
+                  >
+                    <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Voice it</span>
+                  </button>
+                )}
               </div>
 
               {/* PRIMARY ACTION: "Reax" (Always posts with parentId = root.id) */}
@@ -944,6 +958,19 @@ export default function ThreadView({
                             <Share2 className="w-3 h-3 text-indigo-400" />
                             <span className="hidden sm:inline">Share</span>
                           </button>
+
+                          {isVoiceItEligible(directReax) && (
+                            <button
+                              type="button"
+                              onClick={(e) => openVoiceIt(directReax, e)}
+                              aria-label="Voice it"
+                              title="Voice it: reply with your voice on this same picture"
+                              className="flex items-center gap-1 px-2 py-0.5 min-h-[32px] min-w-[32px] justify-center rounded-lg text-xs font-mono font-bold border bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800 cursor-pointer"
+                            >
+                              <Mic className="w-3 h-3 text-emerald-400" />
+                              <span className="hidden sm:inline">Voice it</span>
+                            </button>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-2">
@@ -1096,6 +1123,19 @@ export default function ThreadView({
                                       <Share2 className="w-3 h-3 text-indigo-400" />
                                     </button>
 
+                                    {isVoiceItEligible(riff) && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => openVoiceIt(riff, e)}
+                                        aria-label="Voice it"
+                                        title="Voice it: reply with your voice on this same picture"
+                                        className="p-1 min-h-[32px] min-w-[32px] flex items-center justify-center rounded border transition-colors bg-slate-900 text-emerald-400 hover:text-white border-slate-800"
+                                      >
+                                        <Mic className="w-3 h-3" />
+                                        <span className="sr-only">Voice it</span>
+                                      </button>
+                                    )}
+
                                     {/* Small Riff Action on this card (posts with parentId = riff.id) */}
                                     <button
                                       type="button"
@@ -1133,6 +1173,10 @@ export default function ThreadView({
         onShare={(c) => {
           setLightboxClip(null);
           setShareClip(c);
+        }}
+        onVoiceIt={(c) => {
+          setLightboxClip(null);
+          openVoiceIt(c);
         }}
       />
       {shareClip && (

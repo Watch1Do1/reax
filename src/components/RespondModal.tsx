@@ -16,6 +16,7 @@ import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { useBackToClose } from "../hooks/useBackToClose";
 import ClipTimelineEditor from "./ClipTimelineEditor";
 import ImageCropper from "./ImageCropper";
+import { isVoiceItEligible } from "../utils/voiceIt";
 
 interface RespondModalProps {
   key?: string;
@@ -1205,9 +1206,15 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       }
 
       // If main visual media is missing but voice audio exists, set mediaUrl to audio url and mediaType to "audio"
+      // Exception: when replying to a picture post, reuse the parent picture (never save a blank audio-only reply)
       if (!finalMediaUrl && uploadedVoiceUrl) {
-        finalMediaUrl = uploadedVoiceUrl;
-        finalMediaType = "audio";
+        if (parentClip && isVoiceItEligible(parentClip)) {
+          finalMediaUrl = parentClip.mediaUrl;
+          finalMediaType = "image";
+        } else {
+          finalMediaUrl = uploadedVoiceUrl;
+          finalMediaType = "audio";
+        }
       }
 
       if (!finalMediaUrl) {
