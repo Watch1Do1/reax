@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
@@ -74,6 +74,32 @@ export default function App() {
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
   const [isPolicyReacceptModalOpen, setIsPolicyReacceptModalOpen] = useState(false);
   const [policyReacceptUser, setPolicyReacceptUser] = useState<{ id?: string; username: string } | null>(null);
+
+  // In-flight reactions guard to ignore duplicate taps while request is in flight
+  const inFlightReactionsRef = useRef<Set<string>>(new Set());
+
+  // Sync user reactions from server (GET /api/me/reactions)
+  const syncUserReactions = async () => {
+    try {
+      let token = "";
+      try { token = await getAuthToken(); } catch {}
+      if (!token) return;
+
+      const res = await fetch("/api/me/reactions", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const likedIds = Array.isArray(data.likedIds) ? data.likedIds : [];
+        const laughedIds = Array.isArray(data.laughedIds) ? data.laughedIds : [];
+        localStorage.setItem("reax_liked_ids", JSON.stringify(likedIds));
+        localStorage.setItem("reax_laughed_ids", JSON.stringify(laughedIds));
+        window.dispatchEvent(new Event("reax_likes_changed"));
+      }
+    } catch (err) {
+      console.warn("Could not sync user reactions:", err);
+    }
+  };
 
   // Policy acceptance verification helper
   const checkPolicyAcceptance = (profile: any) => {
@@ -187,6 +213,9 @@ export default function App() {
 
           // Check if policy versions are current
           checkPolicyAcceptance(profile);
+
+          // Fetch reactions for logged in user
+          syncUserReactions();
         } else if (isMounted) {
           // Anonymous session or unconfirmed email: not logged in
           setIsLoggedIn(false);
@@ -264,6 +293,9 @@ export default function App() {
     } catch (err) {
       console.warn("Could not check policy acceptance after login:", err);
     }
+
+    // Sync user reactions on login
+    syncUserReactions();
   };
 
   const handleLogout = async () => {
@@ -504,10 +536,13 @@ export default function App() {
       return;
     }
 
-    try {
-      // Optimistic update
-      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: (c.likesCount || 0) + 1 } : c));
+    const inFlightKey = `${id}:like`;
+    if (inFlightReactionsRef.current.has(inFlightKey)) return;
+    inFlightReactionsRef.current.add(inFlightKey);
 
+    const prevLikedIds = JSON.parse(localStorage.getItem("reax_liked_ids") || "[]");
+
+    try {
       let token = "";
       try { token = await getAuthToken(); } catch {}
 
@@ -528,8 +563,22 @@ export default function App() {
       
       // Update with authoritative server state
       setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
+
+      // Update stored liked ids based on server liked result
+      let currentLiked = JSON.parse(localStorage.getItem("reax_liked_ids") || "[]");
+      if (updatedClip.liked) {
+        if (!currentLiked.includes(id)) currentLiked.push(id);
+      } else {
+        currentLiked = currentLiked.filter((item: string) => item !== id);
+      }
+      localStorage.setItem("reax_liked_ids", JSON.stringify(currentLiked));
+      window.dispatchEvent(new Event("reax_likes_changed"));
     } catch (err) {
       console.error("Like error:", err);
+      localStorage.setItem("reax_liked_ids", JSON.stringify(prevLikedIds));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } finally {
+      inFlightReactionsRef.current.delete(inFlightKey);
     }
   };
 
@@ -540,10 +589,13 @@ export default function App() {
       return;
     }
 
-    try {
-      // Optimistic update
-      setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: Math.max(0, (c.likesCount || 0) - 1) } : c));
+    const inFlightKey = `${id}:like`;
+    if (inFlightReactionsRef.current.has(inFlightKey)) return;
+    inFlightReactionsRef.current.add(inFlightKey);
 
+    const prevLikedIds = JSON.parse(localStorage.getItem("reax_liked_ids") || "[]");
+
+    try {
       let token = "";
       try { token = await getAuthToken(); } catch {}
 
@@ -564,8 +616,22 @@ export default function App() {
       
       // Update with authoritative server state
       setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
+
+      // Update stored liked ids based on server liked result
+      let currentLiked = JSON.parse(localStorage.getItem("reax_liked_ids") || "[]");
+      if (updatedClip.liked) {
+        if (!currentLiked.includes(id)) currentLiked.push(id);
+      } else {
+        currentLiked = currentLiked.filter((item: string) => item !== id);
+      }
+      localStorage.setItem("reax_liked_ids", JSON.stringify(currentLiked));
+      window.dispatchEvent(new Event("reax_likes_changed"));
     } catch (err) {
       console.error("Unlike error:", err);
+      localStorage.setItem("reax_liked_ids", JSON.stringify(prevLikedIds));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } finally {
+      inFlightReactionsRef.current.delete(inFlightKey);
     }
   };
 
@@ -576,10 +642,13 @@ export default function App() {
       return;
     }
 
-    try {
-      // Optimistic update
-      setClips(prev => prev.map(c => c.id === id ? { ...c, laughsCount: (c.laughsCount || 0) + 1 } : c));
+    const inFlightKey = `${id}:laugh`;
+    if (inFlightReactionsRef.current.has(inFlightKey)) return;
+    inFlightReactionsRef.current.add(inFlightKey);
 
+    const prevLaughedIds = JSON.parse(localStorage.getItem("reax_laughed_ids") || "[]");
+
+    try {
       let token = "";
       try { token = await getAuthToken(); } catch {}
 
@@ -600,8 +669,22 @@ export default function App() {
       
       // Update with authoritative server state
       setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
+
+      // Update stored laughed ids based on server laughed result
+      let currentLaughed = JSON.parse(localStorage.getItem("reax_laughed_ids") || "[]");
+      if (updatedClip.laughed) {
+        if (!currentLaughed.includes(id)) currentLaughed.push(id);
+      } else {
+        currentLaughed = currentLaughed.filter((item: string) => item !== id);
+      }
+      localStorage.setItem("reax_laughed_ids", JSON.stringify(currentLaughed));
+      window.dispatchEvent(new Event("reax_likes_changed"));
     } catch (err) {
       console.error("Laugh error:", err);
+      localStorage.setItem("reax_laughed_ids", JSON.stringify(prevLaughedIds));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } finally {
+      inFlightReactionsRef.current.delete(inFlightKey);
     }
   };
 
@@ -612,10 +695,13 @@ export default function App() {
       return;
     }
 
-    try {
-      // Optimistic update
-      setClips(prev => prev.map(c => c.id === id ? { ...c, laughsCount: Math.max(0, (c.laughsCount || 0) - 1) } : c));
+    const inFlightKey = `${id}:laugh`;
+    if (inFlightReactionsRef.current.has(inFlightKey)) return;
+    inFlightReactionsRef.current.add(inFlightKey);
 
+    const prevLaughedIds = JSON.parse(localStorage.getItem("reax_laughed_ids") || "[]");
+
+    try {
       let token = "";
       try { token = await getAuthToken(); } catch {}
 
@@ -636,8 +722,22 @@ export default function App() {
       
       // Update with authoritative server state
       setClips(prev => prev.map(c => c.id === id ? { ...c, likesCount: updatedClip.likesCount, laughsCount: updatedClip.laughsCount } : c));
+
+      // Update stored laughed ids based on server laughed result
+      let currentLaughed = JSON.parse(localStorage.getItem("reax_laughed_ids") || "[]");
+      if (updatedClip.laughed) {
+        if (!currentLaughed.includes(id)) currentLaughed.push(id);
+      } else {
+        currentLaughed = currentLaughed.filter((item: string) => item !== id);
+      }
+      localStorage.setItem("reax_laughed_ids", JSON.stringify(currentLaughed));
+      window.dispatchEvent(new Event("reax_likes_changed"));
     } catch (err) {
       console.error("Unlaugh error:", err);
+      localStorage.setItem("reax_laughed_ids", JSON.stringify(prevLaughedIds));
+      window.dispatchEvent(new Event("reax_likes_changed"));
+    } finally {
+      inFlightReactionsRef.current.delete(inFlightKey);
     }
   };
 

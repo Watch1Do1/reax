@@ -16,10 +16,10 @@ interface ClipCardProps {
   key?: string | number | null;
   clip: Clip;
   allClips: Clip[];
-  onLaugh: (id: string) => void;
-  onLike: (id: string) => void;
-  onUnlike?: (id: string) => void;
-  onUnlaugh?: (id: string) => void;
+  onLaugh: (id: string) => Promise<void> | void;
+  onLike: (id: string) => Promise<void> | void;
+  onUnlike?: (id: string) => Promise<void> | void;
+  onUnlaugh?: (id: string) => Promise<void> | void;
   onDelete?: (id: string) => void;
   onRespond: (clip: Clip) => void;
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
@@ -264,6 +264,8 @@ export default function ClipCard({
     if (!logged) return false;
     return getStoredIds("reax_laughed_ids").includes(clip.id);
   });
+  const [isLikePending, setIsLikePending] = useState<boolean>(false);
+  const [isLaughPending, setIsLaughPending] = useState<boolean>(false);
 
   useEffect(() => {
     const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
@@ -291,8 +293,9 @@ export default function ClipCard({
     return () => window.removeEventListener("reax_likes_changed", handleLikesSync);
   }, [clip.id]);
 
-  const handleLikeClick = (e: React.MouseEvent) => {
+  const handleLikeClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isLikePending) return;
     const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
     if (!isLogged) {
       // Guests cannot like. Open sign in (same upgrade modal as save)
@@ -300,31 +303,22 @@ export default function ClipCard({
       return;
     }
 
-    const nextLiked = !isLiked;
-    setIsLiked(nextLiked); // Optimistic UI: update icon immediately
-
+    const currentLiked = getStoredIds("reax_liked_ids").includes(clip.id);
+    setIsLikePending(true);
     try {
-      let ids = getStoredIds("reax_liked_ids");
-      if (nextLiked) {
-        if (!ids.includes(clip.id)) ids.push(clip.id);
+      if (!currentLiked) {
+        await onLike(clip.id);
       } else {
-        ids = ids.filter(id => id !== clip.id);
+        await onUnlike?.(clip.id);
       }
-      localStorage.setItem("reax_liked_ids", JSON.stringify(ids));
-      window.dispatchEvent(new Event("reax_likes_changed"));
-    } catch (err) {
-      console.error("Error updating reax_liked_ids:", err);
-    }
-
-    if (nextLiked) {
-      onLike(clip.id);
-    } else {
-      onUnlike?.(clip.id);
+    } finally {
+      setIsLikePending(false);
     }
   };
 
-  const handleLaughClick = (e: React.MouseEvent) => {
+  const handleLaughClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isLaughPending) return;
     const isLogged = localStorage.getItem("reax_is_logged_in") === "true";
     if (!isLogged) {
       // Guests cannot laugh. Open sign in (same upgrade modal as save)
@@ -332,26 +326,16 @@ export default function ClipCard({
       return;
     }
 
-    const nextLaughed = !isLaughed;
-    setIsLaughed(nextLaughed); // Optimistic UI: update icon immediately
-
+    const currentLaughed = getStoredIds("reax_laughed_ids").includes(clip.id);
+    setIsLaughPending(true);
     try {
-      let ids = getStoredIds("reax_laughed_ids");
-      if (nextLaughed) {
-        if (!ids.includes(clip.id)) ids.push(clip.id);
+      if (!currentLaughed) {
+        await onLaugh(clip.id);
       } else {
-        ids = ids.filter(id => id !== clip.id);
+        await onUnlaugh?.(clip.id);
       }
-      localStorage.setItem("reax_laughed_ids", JSON.stringify(ids));
-      window.dispatchEvent(new Event("reax_likes_changed"));
-    } catch (err) {
-      console.error("Error updating reax_laughed_ids:", err);
-    }
-
-    if (nextLaughed) {
-      onLaugh(clip.id);
-    } else {
-      onUnlaugh?.(clip.id);
+    } finally {
+      setIsLaughPending(false);
     }
   };
 
@@ -894,8 +878,11 @@ export default function ClipCard({
         <div className="flex items-center gap-3">
           {/* Primary Humor Metric: 😂 Laughs */}
           <button 
+            disabled={isLaughPending}
             onClick={handleLaughClick}
             className={`flex items-center gap-1 transition-all cursor-pointer ${
+              isLaughPending ? "opacity-50 pointer-events-none" : ""
+            } ${
               !logged 
                 ? "text-slate-500 hover:text-amber-300 opacity-60" 
                 : isLaughed 
@@ -910,8 +897,11 @@ export default function ClipCard({
 
           {/* Secondary Metric: ❤️ Likes */}
           <button 
+            disabled={isLikePending}
             onClick={handleLikeClick}
             className={`flex items-center gap-1 transition-all cursor-pointer ${
+              isLikePending ? "opacity-50 pointer-events-none" : ""
+            } ${
               !logged 
                 ? "text-slate-500 hover:text-rose-400 opacity-60" 
                 : isLiked 

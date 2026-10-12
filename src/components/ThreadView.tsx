@@ -17,10 +17,10 @@ interface ThreadViewProps {
   rootClipId: string;
   clips: Clip[];
   onClose: () => void;
-  onLaugh: (id: string) => void;
-  onLike: (id: string) => void;
-  onUnlike?: (id: string) => void;
-  onUnlaugh?: (id: string) => void;
+  onLaugh: (id: string) => Promise<void> | void;
+  onLike: (id: string) => Promise<void> | void;
+  onUnlike?: (id: string) => Promise<void> | void;
+  onUnlaugh?: (id: string) => Promise<void> | void;
   onDelete?: (id: string) => void;
   onRespond: (clip: Clip) => void;
   onRespondWithTone: (clip: Clip, tone: Clip["tone"]) => void;
@@ -271,42 +271,56 @@ export default function ThreadView({
 
   const logged = typeof window !== "undefined" && localStorage.getItem("reax_is_logged_in") === "true";
 
-  const handleLike = (clipId: string, e: React.MouseEvent) => {
+  const [pendingReactions, setPendingReactions] = useState<Set<string>>(new Set());
+
+  const handleLike = async (clipId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const pendingKey = `${clipId}:like`;
+    if (pendingReactions.has(pendingKey)) return;
     if (!logged) {
       window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
       return;
     }
     const currentLiked = getStoredIds("reax_liked_ids").includes(clipId);
-    let ids = getStoredIds("reax_liked_ids");
-    if (!currentLiked) {
-      ids.push(clipId);
-      onLike(clipId);
-    } else {
-      ids = ids.filter(id => id !== clipId);
-      onUnlike?.(clipId);
+    setPendingReactions(prev => new Set(prev).add(pendingKey));
+    try {
+      if (!currentLiked) {
+        await onLike(clipId);
+      } else {
+        await onUnlike?.(clipId);
+      }
+    } finally {
+      setPendingReactions(prev => {
+        const next = new Set(prev);
+        next.delete(pendingKey);
+        return next;
+      });
     }
-    localStorage.setItem("reax_liked_ids", JSON.stringify(ids));
-    window.dispatchEvent(new Event("reax_likes_changed"));
   };
 
-  const handleLaugh = (clipId: string, e: React.MouseEvent) => {
+  const handleLaugh = async (clipId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const pendingKey = `${clipId}:laugh`;
+    if (pendingReactions.has(pendingKey)) return;
     if (!logged) {
       window.dispatchEvent(new CustomEvent("reax_upgrade_trigger", { detail: { reason: "save_reaction" } }));
       return;
     }
     const currentLaughed = getStoredIds("reax_laughed_ids").includes(clipId);
-    let ids = getStoredIds("reax_laughed_ids");
-    if (!currentLaughed) {
-      ids.push(clipId);
-      onLaugh(clipId);
-    } else {
-      ids = ids.filter(id => id !== clipId);
-      onUnlaugh?.(clipId);
+    setPendingReactions(prev => new Set(prev).add(pendingKey));
+    try {
+      if (!currentLaughed) {
+        await onLaugh(clipId);
+      } else {
+        await onUnlaugh?.(clipId);
+      }
+    } finally {
+      setPendingReactions(prev => {
+        const next = new Set(prev);
+        next.delete(pendingKey);
+        return next;
+      });
     }
-    localStorage.setItem("reax_laughed_ids", JSON.stringify(ids));
-    window.dispatchEvent(new Event("reax_likes_changed"));
   };
 
   // Saved Reactions Tray State
@@ -507,8 +521,11 @@ export default function ThreadView({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  disabled={pendingReactions.has(`${ultimateRoot.id}:laugh`)}
                   onClick={(e) => handleLaugh(ultimateRoot.id, e)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer ${
+                    pendingReactions.has(`${ultimateRoot.id}:laugh`) ? "opacity-50 pointer-events-none" : ""
+                  }`}
                   title="Laugh"
                 >
                   <span>😂</span>
@@ -517,8 +534,11 @@ export default function ThreadView({
 
                 <button
                   type="button"
+                  disabled={pendingReactions.has(`${ultimateRoot.id}:like`)}
                   onClick={(e) => handleLike(ultimateRoot.id, e)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-rose-400 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-rose-400 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer ${
+                    pendingReactions.has(`${ultimateRoot.id}:like`) ? "opacity-50 pointer-events-none" : ""
+                  }`}
                   title="Like"
                 >
                   <Heart className="w-3.5 h-3.5 fill-rose-500/20" />
@@ -764,8 +784,11 @@ export default function ThreadView({
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
+                            disabled={pendingReactions.has(`${directReax.id}:laugh`)}
                             onClick={(e) => handleLaugh(directReax.id, e)}
-                            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/25 text-amber-300 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer ${
+                              pendingReactions.has(`${directReax.id}:laugh`) ? "opacity-50 pointer-events-none" : ""
+                            }`}
                           >
                             <span>😂</span>
                             <span>{directReax.laughsCount ?? 0}</span>
@@ -773,8 +796,11 @@ export default function ThreadView({
 
                           <button
                             type="button"
+                            disabled={pendingReactions.has(`${directReax.id}:like`)}
                             onClick={(e) => handleLike(directReax.id, e)}
-                            className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-rose-400 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer"
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-rose-400 text-xs font-mono font-bold transition-all active:scale-95 cursor-pointer ${
+                              pendingReactions.has(`${directReax.id}:like`) ? "opacity-50 pointer-events-none" : ""
+                            }`}
                           >
                             <Heart className="w-3.5 h-3.5 fill-rose-500/20" />
                             <span>{directReax.likesCount}</span>
@@ -910,8 +936,11 @@ export default function ThreadView({
                                   <div className="flex items-center gap-1.5 flex-shrink-0">
                                     <button
                                       type="button"
+                                      disabled={pendingReactions.has(`${riff.id}:laugh`)}
                                       onClick={(e) => handleLaugh(riff.id, e)}
-                                      className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono text-amber-300"
+                                      className={`flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono text-amber-300 ${
+                                        pendingReactions.has(`${riff.id}:laugh`) ? "opacity-50 pointer-events-none" : ""
+                                      }`}
                                       title="Laugh"
                                     >
                                       <span>😂</span>

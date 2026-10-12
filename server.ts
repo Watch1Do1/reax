@@ -181,10 +181,7 @@ export interface Store {
   insertClip(clip: Clip): Promise<Clip>;
   updateClip(id: string, updates: Partial<Clip>): Promise<Clip | null>;
   purgeClip(id: string): Promise<boolean>;
-  recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }>;
-  recordUnlike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }>;
-  recordLaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }>;
-  recordUnlaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }>;
+  toggleReaction(clipId: string, userId: string, kind: "like" | "laugh"): Promise<{ on: boolean; count: number }>;
   insertReport(report: Report): Promise<Report>;
   getReports(): Promise<Array<Report & { clip?: Partial<Clip> | null }>>;
   dismissReport(reportId: string): Promise<boolean>;
@@ -399,68 +396,41 @@ class MemoryStore implements Store {
     return false;
   }
 
-  async recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
+  async toggleReaction(clipId: string, userId: string, kind: "like" | "laugh"): Promise<{ on: boolean; count: number }> {
     const clip = this.clips.find(c => c.id === clipId);
-    if (!clip) return { liked: false, likesCount: 0 };
+    if (!clip) {
+      throw new Error("Clip not found");
+    }
 
-    let userSet = this.likesMap.get(clipId);
+    const map = kind === "like" ? this.likesMap : this.laughsMap;
+    let userSet = map.get(clipId);
     if (!userSet) {
       userSet = new Set();
-      this.likesMap.set(clipId, userSet);
+      map.set(clipId, userSet);
     }
 
-    if (userSet.has(userId)) {
-      // Already liked - prevent smash click duplicate
-      return { liked: false, likesCount: clip.likesCount };
-    }
-
-    userSet.add(userId);
-    clip.likesCount = (clip.likesCount || 0) + 1;
-    return { liked: true, likesCount: clip.likesCount };
-  }
-
-  async recordUnlike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
-    const clip = this.clips.find(c => c.id === clipId);
-    if (!clip) return { liked: false, likesCount: 0 };
-
-    let userSet = this.likesMap.get(clipId);
-    if (userSet) {
+    const isCurrentlyOn = userSet.has(userId);
+    let on: boolean;
+    if (isCurrentlyOn) {
       userSet.delete(userId);
-    }
-    clip.likesCount = Math.max(0, (clip.likesCount || 0) - 1);
-    return { liked: false, likesCount: clip.likesCount };
-  }
-
-  async recordLaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }> {
-    const clip = this.clips.find(c => c.id === clipId);
-    if (!clip) return { laughed: false, laughsCount: 0 };
-
-    let userSet = this.laughsMap.get(clipId);
-    if (!userSet) {
-      userSet = new Set();
-      this.laughsMap.set(clipId, userSet);
-    }
-
-    if (userSet.has(userId)) {
-      // Already laughed - prevent smash click duplicate
-      return { laughed: false, laughsCount: clip.laughsCount || 0 };
+      on = false;
+      if (kind === "like") {
+        clip.likesCount = Math.max(0, (clip.likesCount || 0) - 1);
+      } else {
+        clip.laughsCount = Math.max(0, (clip.laughsCount || 0) - 1);
+      }
+    } else {
+      userSet.add(userId);
+      on = true;
+      if (kind === "like") {
+        clip.likesCount = (clip.likesCount || 0) + 1;
+      } else {
+        clip.laughsCount = (clip.laughsCount || 0) + 1;
+      }
     }
 
-    userSet.add(userId);
-    clip.laughsCount = (clip.laughsCount || 0) + 1;
-    return { laughed: true, laughsCount: clip.laughsCount };
-  }
-
-  async recordUnlaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }> {
-    const clip = this.clips.find(c => c.id === clipId);
-    if (!clip) return { laughed: false, laughsCount: 0 };
-
-    let userSet = this.laughsMap.get(clipId);
-    if (userSet) {
-      userSet.delete(userId);
-    }
-    clip.laughsCount = Math.max(0, (clip.laughsCount || 0) - 1);
-    return { laughed: false, laughsCount: clip.laughsCount };
+    const count = kind === "like" ? (clip.likesCount || 0) : (clip.laughsCount || 0);
+    return { on, count };
   }
 
   async insertReport(report: Report): Promise<Report> {
@@ -1000,8 +970,8 @@ class SupabaseStore implements Store {
         this.client.from("clips").update({ parent_id: null }).eq("parent_id", id),
         this.client.from("clips").update({ remixed_from: null }).eq("remixed_from", id),
         this.client.from("reports").delete().eq("clip_id", id),
-        this.client.from("likes").delete().eq("clip_id", id),
-        this.client.from("laughs").delete().eq("clip_id", id)
+        this.client.from("clip_likes").delete().eq("clip_id", id),
+        this.client.from("clip_laughs").delete().eq("clip_id", id)
       ]);
 
       // 2. Attempt hard delete of the clips row
@@ -1021,7 +991,9 @@ class SupabaseStore implements Store {
       await Promise.allSettled([
         this.client.from("clips").update({ parent_id: null }).eq("parent_id", id),
         this.client.from("clips").update({ remixed_from: null }).eq("remixed_from", id),
-        this.client.from("reports").delete().eq("clip_id", id)
+        this.client.from("reports").delete().eq("clip_id", id),
+        this.client.from("clip_likes").delete().eq("clip_id", id),
+        this.client.from("clip_laughs").delete().eq("clip_id", id)
       ]);
 
       const retry = await this.client
@@ -1042,100 +1014,22 @@ class SupabaseStore implements Store {
     }
   }
 
-  async recordLike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
-    const currentClip = await this.getClip(clipId);
-    if (!currentClip) return { liked: false, likesCount: 0 };
+  async toggleReaction(clipId: string, userId: string, kind: "like" | "laugh"): Promise<{ on: boolean; count: number }> {
+    const { data, error } = await this.client.rpc("reax_toggle_reaction", {
+      p_clip_id: clipId,
+      p_user_id: userId,
+      p_kind: kind
+    });
 
-    if (isValidUuid(userId) && isValidUuid(clipId)) {
-      try {
-        const { error: likeInsertErr } = await this.client
-          .from("likes")
-          .insert([{ clip_id: clipId, user_id: userId }]);
-
-        if (likeInsertErr) {
-          // Check for unique key violation (user already liked)
-          const isUniqueViolation = likeInsertErr.code === "23505" || 
-            (likeInsertErr.message && likeInsertErr.message.toLowerCase().includes("unique"));
-          if (isUniqueViolation) {
-            return { liked: false, likesCount: currentClip.likesCount };
-          }
-        }
-      } catch (tableErr) {
-        // If likes table is missing, proceed gracefully with direct clip update
-      }
+    if (error) {
+      console.error(`[SupabaseStore] reax_toggle_reaction error:`, error);
+      throw new Error(error.message || `Failed to toggle ${kind}`);
     }
 
-    const nextLikes = (currentClip.likesCount || 0) + 1;
-    await this.updateClip(clipId, { likesCount: nextLikes });
-    return { liked: true, likesCount: nextLikes };
-  }
-
-  async recordUnlike(clipId: string, userId: string): Promise<{ liked: boolean; likesCount: number }> {
-    const currentClip = await this.getClip(clipId);
-    if (!currentClip) return { liked: false, likesCount: 0 };
-
-    if (isValidUuid(userId) && isValidUuid(clipId)) {
-      try {
-        await this.client
-          .from("likes")
-          .delete()
-          .match({ clip_id: clipId, user_id: userId });
-      } catch (tableErr) {
-        // If likes table is missing, proceed gracefully with direct clip update
-      }
-    }
-
-    const nextLikes = Math.max(0, (currentClip.likesCount || 0) - 1);
-    await this.updateClip(clipId, { likesCount: nextLikes });
-    return { liked: false, likesCount: nextLikes };
-  }
-
-  async recordLaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }> {
-    const currentClip = await this.getClip(clipId);
-    if (!currentClip) return { laughed: false, laughsCount: 0 };
-
-    if (isValidUuid(userId) && isValidUuid(clipId)) {
-      try {
-        const { error: laughInsertErr } = await this.client
-          .from("laughs")
-          .insert([{ clip_id: clipId, user_id: userId }]);
-
-        if (laughInsertErr) {
-          // Check for unique key violation (user already laughed)
-          const isUniqueViolation = laughInsertErr.code === "23505" || 
-            (laughInsertErr.message && laughInsertErr.message.toLowerCase().includes("unique"));
-          if (isUniqueViolation) {
-            return { laughed: false, laughsCount: currentClip.laughsCount };
-          }
-        }
-      } catch (tableErr) {
-        // If laughs table is missing, proceed gracefully with direct clip update
-      }
-    }
-
-    const nextLaughs = (currentClip.laughsCount || 0) + 1;
-    await this.updateClip(clipId, { laughsCount: nextLaughs });
-    return { laughed: true, laughsCount: nextLaughs };
-  }
-
-  async recordUnlaugh(clipId: string, userId: string): Promise<{ laughed: boolean; laughsCount: number }> {
-    const currentClip = await this.getClip(clipId);
-    if (!currentClip) return { laughed: false, laughsCount: 0 };
-
-    if (isValidUuid(userId) && isValidUuid(clipId)) {
-      try {
-        await this.client
-          .from("laughs")
-          .delete()
-          .match({ clip_id: clipId, user_id: userId });
-      } catch (tableErr) {
-        // If laughs table is missing, proceed gracefully with direct clip update
-      }
-    }
-
-    const nextLaughs = Math.max(0, (currentClip.laughsCount || 0) - 1);
-    await this.updateClip(clipId, { laughsCount: nextLaughs });
-    return { laughed: false, laughsCount: nextLaughs };
+    const res = typeof data === "string" ? JSON.parse(data) : data;
+    const on = Boolean(res?.liked);
+    const count = typeof res?.count === "number" ? res.count : 0;
+    return { on, count };
   }
 
   async insertReport(report: Report): Promise<Report> {
@@ -2332,6 +2226,35 @@ app.get("/api/me", async (req, res) => {
     termsVersion: TERMS_VERSION,
     privacyVersion: PRIVACY_VERSION 
   });
+});
+
+// API: Get Current Authenticated User's Reactions (Liked & Laughed Clip IDs)
+app.get("/api/me/reactions", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.json({ likedIds: [], laughedIds: [] });
+  }
+
+  const { user } = authRes.auth;
+  try {
+    const dbClient = supabaseAdmin || supabase;
+    if (dbClient) {
+      const [likesRes, laughsRes] = await Promise.all([
+        dbClient.from("clip_likes").select("clip_id").eq("user_id", user.id),
+        dbClient.from("clip_laughs").select("clip_id").eq("user_id", user.id)
+      ]);
+
+      const likedIds = (likesRes.data || []).map((r: any) => String(r.clip_id));
+      const laughedIds = (laughsRes.data || []).map((r: any) => String(r.clip_id));
+      return res.json({ likedIds, laughedIds });
+    }
+
+    // In-memory fallback
+    return res.json({ likedIds: [], laughedIds: [] });
+  } catch (err: any) {
+    console.error("Error fetching user reactions:", err);
+    return res.json({ likedIds: [], laughedIds: [] });
+  }
 });
 
 // API: Upsert / Update Current Authenticated User Profile (Username & Policy Acceptance)
@@ -3647,22 +3570,44 @@ app.post("/api/clips/:id/laugh", async (req, res) => {
   }
   const { user } = authRes.auth;
 
-  // Do not allow increment if client says it was already laughed
-  if (req.body?.alreadyLaughed) {
-    const clip = await store!.getClip(clipId);
-    if (!clip) {
-      return res.status(404).json({ error: "Clip not found" });
-    }
-    return res.json({ ...clip, laughsCount: clip.laughsCount, laughed: true });
-  }
-
   try {
-    const result = await store!.recordLaugh(clipId, user.id);
+    const dbClient = supabaseAdmin || supabase;
+    let isAlreadyLaughed = false;
+    if (dbClient) {
+      const { data: existing } = await dbClient
+        .from("clip_laughs")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isAlreadyLaughed = Boolean(existing);
+    }
+
+    if (!isAlreadyLaughed) {
+      await store!.toggleReaction(clipId, user.id, "laugh");
+    }
+
     const clip = await store!.getClip(clipId);
     if (!clip) {
       return res.status(404).json({ error: "Clip not found" });
     }
-    res.json({ ...clip, laughsCount: result.laughsCount, laughed: result.laughed });
+
+    let isLiked = false;
+    if (dbClient) {
+      const { data: likeRecord } = await dbClient
+        .from("clip_likes")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isLiked = Boolean(likeRecord);
+    }
+
+    res.json({
+      ...clip,
+      likesCount: clip.likesCount ?? 0,
+      laughsCount: clip.laughsCount ?? 0,
+      liked: isLiked,
+      laughed: true
+    });
   } catch (err: any) {
     console.error("Error registering laugh:", err);
     res.status(500).json({ error: "Failed to register laugh" });
@@ -3685,12 +3630,43 @@ app.post("/api/clips/:id/unlaugh", async (req, res) => {
   const { user } = authRes.auth;
 
   try {
-    const result = await store!.recordUnlaugh(clipId, user.id);
+    const dbClient = supabaseAdmin || supabase;
+    let isCurrentlyLaughed = true;
+    if (dbClient) {
+      const { data: existing } = await dbClient
+        .from("clip_laughs")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isCurrentlyLaughed = Boolean(existing);
+    }
+
+    if (isCurrentlyLaughed) {
+      await store!.toggleReaction(clipId, user.id, "laugh");
+    }
+
     const clip = await store!.getClip(clipId);
     if (!clip) {
       return res.status(404).json({ error: "Clip not found" });
     }
-    res.json({ ...clip, laughsCount: result.laughsCount, laughed: false });
+
+    let isLiked = false;
+    if (dbClient) {
+      const { data: likeRecord } = await dbClient
+        .from("clip_likes")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isLiked = Boolean(likeRecord);
+    }
+
+    res.json({
+      ...clip,
+      likesCount: clip.likesCount ?? 0,
+      laughsCount: clip.laughsCount ?? 0,
+      liked: isLiked,
+      laughed: false
+    });
   } catch (err: any) {
     console.error("Error unregistering laugh:", err);
     res.status(500).json({ error: "Failed to remove laugh" });
@@ -3712,22 +3688,44 @@ app.post("/api/clips/:id/like", async (req, res) => {
   }
   const { user } = authRes.auth;
 
-  // Do not allow increment if client says it was already liked
-  if (req.body?.alreadyLiked) {
-    const clip = await store!.getClip(clipId);
-    if (!clip) {
-      return res.status(404).json({ error: "Clip not found" });
-    }
-    return res.json({ ...clip, likesCount: clip.likesCount, liked: true });
-  }
-
   try {
-    const result = await store!.recordLike(clipId, user.id);
+    const dbClient = supabaseAdmin || supabase;
+    let isAlreadyLiked = false;
+    if (dbClient) {
+      const { data: existing } = await dbClient
+        .from("clip_likes")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isAlreadyLiked = Boolean(existing);
+    }
+
+    if (!isAlreadyLiked) {
+      await store!.toggleReaction(clipId, user.id, "like");
+    }
+
     const clip = await store!.getClip(clipId);
     if (!clip) {
       return res.status(404).json({ error: "Clip not found" });
     }
-    res.json({ ...clip, likesCount: result.likesCount, liked: result.liked });
+
+    let isLaughed = false;
+    if (dbClient) {
+      const { data: laughRecord } = await dbClient
+        .from("clip_laughs")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isLaughed = Boolean(laughRecord);
+    }
+
+    res.json({
+      ...clip,
+      likesCount: clip.likesCount ?? 0,
+      laughsCount: clip.laughsCount ?? 0,
+      liked: true,
+      laughed: isLaughed
+    });
   } catch (err: any) {
     console.error("Error registering like:", err);
     res.status(500).json({ error: "Failed to register like" });
@@ -3750,12 +3748,43 @@ app.post("/api/clips/:id/unlike", async (req, res) => {
   const { user } = authRes.auth;
 
   try {
-    const result = await store!.recordUnlike(clipId, user.id);
+    const dbClient = supabaseAdmin || supabase;
+    let isCurrentlyLiked = true;
+    if (dbClient) {
+      const { data: existing } = await dbClient
+        .from("clip_likes")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isCurrentlyLiked = Boolean(existing);
+    }
+
+    if (isCurrentlyLiked) {
+      await store!.toggleReaction(clipId, user.id, "like");
+    }
+
     const clip = await store!.getClip(clipId);
     if (!clip) {
       return res.status(404).json({ error: "Clip not found" });
     }
-    res.json({ ...clip, likesCount: result.likesCount, liked: false });
+
+    let isLaughed = false;
+    if (dbClient) {
+      const { data: laughRecord } = await dbClient
+        .from("clip_laughs")
+        .select("clip_id")
+        .match({ clip_id: clipId, user_id: user.id })
+        .maybeSingle();
+      isLaughed = Boolean(laughRecord);
+    }
+
+    res.json({
+      ...clip,
+      likesCount: clip.likesCount ?? 0,
+      laughsCount: clip.laughsCount ?? 0,
+      liked: false,
+      laughed: isLaughed
+    });
   } catch (err: any) {
     console.error("Error unregistering like:", err);
     res.status(500).json({ error: "Failed to remove like" });
