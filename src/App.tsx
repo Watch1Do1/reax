@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
   ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User,
-  MoreVertical, Mail, FileText, Clock, Mic
+  MoreVertical, Mail, FileText, Clock, Mic, Loader2
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -459,11 +459,53 @@ export default function App() {
     loadAndSanitizeReactions();
   }, []);
 
+  // Server paging state. Refreshes re-fetch as many top-level posts as are already
+  // loaded, so a refresh never drops pages the user has scrolled through.
+  const FEED_SERVER_PAGE = 20;
+  const [feedCursor, setFeedCursor] = useState<string | null>(null);
+  const [feedHasMore, setFeedHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadedRootCountRef = useRef(0);
+  const loadingMoreRef = useRef(false);
+
+  useEffect(() => {
+    loadedRootCountRef.current = clips.filter(c => !c.parentId).length;
+  }, [clips]);
+
+  const loadMoreFromServer = useCallback(async (limit: number = FEED_SERVER_PAGE) => {
+    if (loadingMoreRef.current || !feedHasMore || !feedCursor) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(`/api/clips?limit=${limit}&cursor=${encodeURIComponent(feedCursor)}&_t=${Date.now()}`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache" }
+      });
+      if (!res.ok) throw new Error("Could not load more clips");
+      const page = await res.json();
+      const incoming: Clip[] = Array.isArray(page?.clips) ? page.clips : [];
+      setClips(prev => {
+        const seen = new Set(prev.map(c => c.id));
+        const add = incoming.filter(c => c && c.id && !seen.has(c.id) && (seen.add(c.id), true));
+        return add.length ? [...prev, ...add] : prev;
+      });
+      setFeedCursor(page?.nextCursor || null);
+      setFeedHasMore(Boolean(page?.hasMore && page?.nextCursor));
+    } catch (err) {
+      console.error(err);
+      window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Couldn't load more posts. Try again." } }));
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [feedCursor, feedHasMore]);
+
   useEffect(() => {
     let active = true;
     setLoading(true);
+    const initialLimit = Math.min(500, Math.max(FEED_SERVER_PAGE, loadedRootCountRef.current));
 
-    fetch(`/api/clips?_t=${Date.now()}`, {
+    fetch(`/api/clips?limit=${initialLimit}&_t=${Date.now()}`, {
       cache: "no-store",
       headers: {
         "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -480,8 +522,11 @@ export default function App() {
         if (!res.ok) throw new Error("Could not fetch reaction clips");
         return res.json();
       })
-      .then((data) => {
+      .then((page) => {
         if (active) {
+          const data = Array.isArray(page) ? page : page?.clips;
+          setFeedCursor(Array.isArray(page) ? null : (page?.nextCursor || null));
+          setFeedHasMore(Array.isArray(page) ? false : Boolean(page?.hasMore && page?.nextCursor));
           // Deduplicate clips by id to prevent duplicate keys in lists
           const uniqueClips: Clip[] = [];
           const seenIds = new Set<string>();
@@ -1026,7 +1071,34 @@ export default function App() {
           return scoreB - scoreA;
         });
     }
-  }, [clips, feedType]);
+  }, [clips, feedType, searchQuery, activeUserFilter]);
+
+  const FEED_PAGE_SIZE = 20;
+  const [visibleCount, setVisibleCount] = useState(FEED_PAGE_SIZE);
+  useEffect(() => {
+    setVisibleCount(FEED_PAGE_SIZE);
+  }, [feedType, searchQuery, activeUserFilter]);
+  const visibleRootClips = rootClips.slice(0, visibleCount);
+  const hasMoreClips = rootClips.length > visibleCount || feedHasMore;
+
+  // Hot / Most Reacted / Voice rank by reply counts and recent activity, which are not
+  // database columns, so for those tabs we widen the loaded window once (up to ~220 newest posts)
+  // and rank client-side.
+  const widenedForRankingRef = useRef(false);
+  useEffect(() => {
+    if (feedType !== "latest" && feedHasMore && !widenedForRankingRef.current && !loading) {
+      widenedForRankingRef.current = true;
+      loadMoreFromServer(200);
+    }
+  }, [feedType, feedHasMore, loading, loadMoreFromServer]);
+
+  const handleLoadMore = async () => {
+    if (loadingMore) return;
+    if (rootClips.length < visibleCount + FEED_PAGE_SIZE && feedHasMore) {
+      await loadMoreFromServer(FEED_SERVER_PAGE);
+    }
+    setVisibleCount((n) => n + FEED_PAGE_SIZE);
+  };
 
   const totalCommentsCount = clips.filter(c => c.parentId !== null).length;
 
@@ -1303,7 +1375,7 @@ export default function App() {
             </div>
 
             <div className="space-y-6">
-              {rootClips.map((clip, index) => (
+              {visibleRootClips.map((clip, index) => (
                 <ClipCard
                   key={`clip-${clip.id}`}
                   clip={clip}
@@ -1322,6 +1394,29 @@ export default function App() {
                 />
               ))}
             </div>
+
+            {hasMoreClips ? (
+              <div className="flex justify-center pt-2">
+                <button
+                  type="button"
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  aria-busy={loadingMore}
+                  className="w-full sm:w-auto sm:min-w-[220px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full border border-slate-700 bg-slate-900 hover:bg-slate-800 hover:border-indigo-500/60 text-slate-200 text-sm font-semibold shadow-md transition-all cursor-pointer disabled:cursor-wait disabled:opacity-70"
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                      <span>Loading…</span>
+                    </>
+                  ) : (
+                    <span>Load more</span>
+                  )}
+                </button>
+              </div>
+            ) : rootClips.length > FEED_PAGE_SIZE ? (
+              <p className="text-center text-xs text-slate-500 pt-2 pb-4">You're all caught up ✨</p>
+            ) : null}
           </div>
         )}
 

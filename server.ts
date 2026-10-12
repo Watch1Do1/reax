@@ -172,9 +172,37 @@ export interface ContactMessage {
   status: "unread" | "read" | "resolved";
 }
 
+export interface ClipsPageOptions {
+  limit: number;
+  cursor?: string | null;
+}
+export interface ClipsPage {
+  clips: Clip[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+// Feed paging cursor = ISO created_at of the last top-level post on the previous page.
+const CLIPS_PAGE_MAX = 500;
+function encodeClipsCursor(createdAt: string | null | undefined): string | null {
+  if (!createdAt) return null;
+  return Buffer.from(String(createdAt), "utf8").toString("base64url");
+}
+function decodeClipsCursor(cursor: string | null | undefined): string | null {
+  if (!cursor || typeof cursor !== "string" || cursor.length > 200) return null;
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    return isNaN(new Date(raw).getTime()) ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
 // Store Interface
 export interface Store {
   getClips(includeDeleted?: boolean): Promise<Clip[]>;
+  /** Paged feed: top-level posts newest-first plus ALL their (non-deleted) descendants. */
+  getClipsPage(opts: ClipsPageOptions): Promise<ClipsPage>;
   getClip(id: string): Promise<Clip | null>;
   countClipsByAuthor(authorId: string): Promise<number>;
   updateClipsAuthorName(authorId: string, newAuthorName: string): Promise<number>;
@@ -334,6 +362,26 @@ class MemoryStore implements Store {
       };
     });
     return [...resolved].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async getClipsPage(opts: ClipsPageOptions): Promise<ClipsPage> {
+    const limit = Math.max(1, Math.min(CLIPS_PAGE_MAX, Math.floor(opts.limit) || 20));
+    const all = await this.getClips(false);
+    const after = decodeClipsCursor(opts.cursor);
+    const afterMs = after ? new Date(after).getTime() : Infinity;
+    const roots = all
+      .filter(c => !c.parentId && new Date(c.createdAt).getTime() < afterMs);
+    const page = roots.slice(0, limit);
+    const hasMore = roots.length > limit;
+    const out: Clip[] = [...page];
+    let frontier = new Set(page.map(c => c.id));
+    for (let depth = 0; frontier.size > 0 && depth < 25; depth++) {
+      const kids = all.filter(c => c.parentId && frontier.has(c.parentId));
+      out.push(...kids);
+      frontier = new Set(kids.map(c => c.id));
+    }
+    const last = page[page.length - 1];
+    return { clips: out, hasMore, nextCursor: hasMore && last ? encodeClipsCursor(last.createdAt) : null };
   }
 
   async getClip(id: string): Promise<Clip | null> {
@@ -752,6 +800,92 @@ class SupabaseStore implements Store {
       const clips = (data || []).map(mapDbToClip);
       const filtered = includeDeleted ? clips : clips.filter((c: Clip) => !c.deleted);
 
+      await this.enrichClipAuthors(filtered);
+
+      return filtered;
+    } catch (err: any) {
+      console.error("SupabaseStore.getClips error:", err?.message || err);
+      return [];
+    }
+  }
+
+  private static readonly CLIP_BASE_COLUMNS =
+    "id, parent_id, media_url, media_type, voice_text, voice_audio_url, voice_style, overlay_text, tone, effect, user_id, author_id, author_name, likes_count, laughs_count, created_at, original_author, remixed_from, deleted, report_count";
+
+  // Runs a clips query with select("*"), falling back to base columns if that fails.
+  private async selectClips(build: (q: any) => any, label: string): Promise<{ data: any[] | null; error: any }> {
+    let res: any = await withTimeout(
+      build(this.client.from("clips").select("*")),
+      6000,
+      { data: null, error: { message: `Supabase ${label} timed out` } }
+    );
+    if (res.error) {
+      console.warn(`Supabase ${label} select(*) failed, falling back to base columns:`, res.error.message || res.error);
+      res = await withTimeout(
+        build(this.client.from("clips").select(SupabaseStore.CLIP_BASE_COLUMNS)),
+        6000,
+        { data: null, error: { message: `Supabase ${label} fallback timed out` } }
+      );
+    }
+    return { data: res.data, error: res.error };
+  }
+
+  async getClipsPage(opts: ClipsPageOptions): Promise<ClipsPage> {
+    const limit = Math.max(1, Math.min(CLIPS_PAGE_MAX, Math.floor(opts.limit) || 20));
+    const after = decodeClipsCursor(opts.cursor);
+
+    // 1. One page of top-level posts (replies never count toward the page size).
+    const { data: rootRows, error } = await this.selectClips((q) => {
+      let query = q
+        .is("parent_id", null)
+        .not("deleted", "is", true)
+        .order("created_at", { ascending: false })
+        .limit(limit + 1);
+      if (after) query = query.lt("created_at", after);
+      return query;
+    }, "clips page");
+    if (error) {
+      console.error("SupabaseStore.getClipsPage query error:", error.message || error);
+      throw new Error("clips_page_failed");
+    }
+    const rows = rootRows || [];
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+    const lastCreatedAt = pageRows.length ? pageRows[pageRows.length - 1].created_at : null;
+
+    // 2. Every descendant of those posts, level by level, so threads and counts are complete.
+    const allRows: any[] = [...pageRows];
+    const seen = new Set<string>(pageRows.map((r: any) => r.id));
+    let frontier: string[] = pageRows.map((r: any) => r.id).filter((id: string) => isValidUuid(id));
+    for (let depth = 0; frontier.length > 0 && depth < 25; depth++) {
+      const next: string[] = [];
+      for (let i = 0; i < frontier.length; i += 100) {
+        const chunk = frontier.slice(i, i + 100);
+        const { data: kids, error: kidErr } = await this.selectClips(
+          (q) => q.in("parent_id", chunk).not("deleted", "is", true).order("created_at", { ascending: false }).limit(5000),
+          "clip replies"
+        );
+        if (kidErr) {
+          console.error("SupabaseStore.getClipsPage replies error:", kidErr.message || kidErr);
+          throw new Error("clips_page_failed");
+        }
+        for (const k of kids || []) {
+          if (k?.id && !seen.has(k.id)) {
+            seen.add(k.id);
+            allRows.push(k);
+            next.push(k.id);
+          }
+        }
+      }
+      frontier = next;
+    }
+
+    const clips = allRows.map(mapDbToClip).filter((c: Clip) => !c.deleted);
+    await this.enrichClipAuthors(clips);
+    return { clips, hasMore, nextCursor: hasMore ? encodeClipsCursor(lastCreatedAt) : null };
+  }
+
+  private async enrichClipAuthors(filtered: Clip[]): Promise<void> {
       // Always look up current username from user_profiles table for each clip
       const authorIds = Array.from(
         new Set(
@@ -800,11 +934,6 @@ class SupabaseStore implements Store {
         }
       }
 
-      return filtered;
-    } catch (err: any) {
-      console.error("SupabaseStore.getClips error:", err?.message || err);
-      return [];
-    }
   }
 
   async getClip(id: string): Promise<Clip | null> {
@@ -2619,6 +2748,20 @@ app.get("/api/users/badge", async (req, res) => {
 
 // API: Get all active, non-deleted clips
 app.get("/api/clips", async (req, res) => {
+  // Paged mode: /api/clips?limit=20&cursor=... -> { clips, nextCursor, hasMore }
+  if (req.query.limit !== undefined) {
+    res.setHeader("Cache-Control", "no-store");
+    try {
+      const limit = parseInt(String(req.query.limit), 10) || 20;
+      const cursor = typeof req.query.cursor === "string" ? req.query.cursor : null;
+      const page = await store!.getClipsPage({ limit, cursor });
+      return res.json(page);
+    } catch (err: any) {
+      console.error("GET /api/clips (paged)", err?.message || err);
+      return res.status(500).json({ error: "Could not load clips" });
+    }
+  }
+  // Legacy mode (no limit param): flat array, newest 100 rows.
   try {
     const clips = await store!.getClips(false);
     return res.json(Array.isArray(clips) ? clips : []);
