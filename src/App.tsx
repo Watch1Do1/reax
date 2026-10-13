@@ -4,7 +4,7 @@ import {
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
   ShieldCheck, ArrowUpCircle, UserCheck, Trash2, ShieldAlert, LogIn, LogOut, User,
-  MoreVertical, Mail, FileText, Clock, Mic, Loader2, X
+  MoreVertical, Mail, FileText, Clock, Mic, Loader2, X, Palette
 } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import ClipCard from "./components/ClipCard";
@@ -18,6 +18,8 @@ import OnboardingModal from "./components/OnboardingModal";
 import ResetPasswordModal from "./components/ResetPasswordModal";
 import ContactModal from "./components/ContactModal";
 import ProfilePanel from "./components/ProfilePanel";
+import PacksPage from "./components/PacksPage";
+import { OPEN_PACKS_EVENT } from "./packs/render";
 import UserProfileModal from "./components/UserProfileModal";
 import UserSearchBar from "./components/UserSearchBar";
 import AdminPanel from "./components/AdminPanel";
@@ -405,6 +407,18 @@ export default function App() {
     };
     window.addEventListener("reax_toast", handleToast);
     return () => window.removeEventListener("reax_toast", handleToast);
+  }, []);
+
+  // Reaction Packs page: opened from the menu, the editor's "Get more styles"
+  // link, or a "made with the ___ Pack" tag (which can focus one pack).
+  const [packsPage, setPacksPage] = useState<{ packId: string | null } | null>(null);
+  useEffect(() => {
+    const handleOpenPacks = (e: Event) => {
+      const packId = (e as CustomEvent).detail?.packId;
+      setPacksPage({ packId: typeof packId === "string" ? packId : null });
+    };
+    window.addEventListener(OPEN_PACKS_EVENT, handleOpenPacks);
+    return () => window.removeEventListener(OPEN_PACKS_EVENT, handleOpenPacks);
   }, []);
 
   // Global Upgrade Event handler
@@ -1387,6 +1401,13 @@ export default function App() {
                     <span>My Templates</span>
                   </button>
                   <button
+                    onClick={() => setPacksPage({ packId: null })}
+                    className="w-full px-3 py-2 text-left text-slate-200 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer font-medium border-t border-slate-800/50"
+                  >
+                    <Palette className="w-3.5 h-3.5 text-pink-400" />
+                    <span>Reaction Packs</span>
+                  </button>
+                  <button
                     onClick={() => setIsContactModalOpen(true)}
                     className="w-full px-3 py-2 text-left text-indigo-300 hover:bg-slate-800/80 flex items-center gap-2 cursor-pointer font-medium border-t border-slate-800/50"
                   >
@@ -1978,6 +1999,14 @@ export default function App() {
       />
 
       {/* CONTACT US MODAL */}
+      {packsPage && (
+        <PacksPage
+          focusPackId={packsPage.packId}
+          username={isLoggedIn ? username : null}
+          onClose={() => setPacksPage(null)}
+        />
+      )}
+
       <ContactModal
         isOpen={isContactModalOpen}
         onClose={() => setIsContactModalOpen(false)}

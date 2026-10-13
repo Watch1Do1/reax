@@ -1,3 +1,5 @@
+import type { ClipStyle } from "./packs/style";
+
 export type BadgeType = "official" | "verified_business" | null;
 
 export type Clip = {
@@ -25,6 +27,7 @@ export type Clip = {
   authorIsOfficial?: boolean;
   authorBadgeType?: BadgeType;
   authorAvatarUrl?: string | null;
+  style?: ClipStyle | null; // Reaction Pack styling (null/absent = none)
 };
 
 export type Report = {

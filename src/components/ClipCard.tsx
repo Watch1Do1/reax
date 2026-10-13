@@ -12,6 +12,7 @@ import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
 import FitMedia from "./FitMedia";
+import { PackStyleLayer, PackTag, packCaptionPresentation, packMediaEffectClass } from "../packs/render";
 import { isVoiceItEligible, openVoiceIt } from "../utils/voiceIt";
 
 interface ClipCardProps {
@@ -681,7 +682,10 @@ export default function ClipCard({
           "none": "hidden",
         };
 
+        const packMediaFx = packMediaEffectClass(clip.style);
+        const packCaption = packCaptionPresentation(clip.style);
         const animClass =
+          packMediaFx ? packMediaFx :
           kineticEffectName === "zoom" ? "animate-zoom" :
           kineticEffectName === "pan" ? "animate-pan" :
           kineticEffectName === "bounce" ? "animate-bounce-subtle" :
@@ -839,15 +843,23 @@ export default function ClipCard({
               <div className={positionClasses[textStylePosition] || positionClasses.bottom}>
                 <h2 className={`${stylePresetClasses[textStylePreset] || stylePresetClasses.classic} ${textColorClasses[textStyleColor] || textColorClasses.white} ${
                   textStylePosition.includes("left") ? "text-left" : textStylePosition.includes("right") ? "text-right" : "text-center"
-                } break-words leading-tight max-w-full`}>
+                } break-words leading-tight max-w-full ${packCaption?.className || ""}`} style={packCaption?.style}>
                   {renderWithHashtags(clip.overlayText)}
                 </h2>
               </div>
             )}
 
+            {/* Reaction Pack frame / stickers / overlay effect */}
+            <PackStyleLayer style={clip.style} />
           </FitMedia>
         );
       })()}
+
+      {clip.style && (
+        <div className="mt-1 flex justify-end">
+          <PackTag style={clip.style} />
+        </div>
+      )}
 
       {/* Under the media: one compact row — 1-tap tones + React */}
       <div className="flex items-center gap-1.5 mt-2">

@@ -14,6 +14,7 @@ import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import ShareModal from "./ShareModal";
 import MediaLightbox from "./MediaLightbox";
+import { PackStyleLayer, PackTag, packCaptionPresentation, packMediaEffectClass } from "../packs/render";
 import { isVoiceItEligible, openVoiceIt } from "../utils/voiceIt";
 import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo } from "../utils/watermarkExporter";
 
@@ -574,7 +575,7 @@ export default function ThreadView({
                   controlsList="nodownload noremoteplayback"
                   disablePictureInPicture
                   src={ultimateRoot.mediaUrl} 
-                  className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
+                  className={`w-full h-full object-cover pointer-events-none reax-protected-media select-none ${packMediaEffectClass(ultimateRoot.style) || ""}`} 
                   loop 
                   muted={true} 
                   playsInline 
@@ -584,7 +585,7 @@ export default function ThreadView({
                 <img 
                   {...protectedMediaProps}
                   src={ultimateRoot.mediaUrl} 
-                  className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
+                  className={`w-full h-full object-cover pointer-events-none reax-protected-media select-none ${packMediaEffectClass(ultimateRoot.style) || ""}`} 
                   alt="" 
                   referrerPolicy="no-referrer" 
                 />
@@ -602,11 +603,12 @@ export default function ThreadView({
               {/* Overlay Text */}
               {ultimateRoot.overlayText && (
                 <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none">
-                  <h2 className="font-sans font-black text-base sm:text-lg text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight">
+                  <h2 className={`font-sans font-black text-base sm:text-lg text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight ${packCaptionPresentation(ultimateRoot.style)?.className || ""}`} style={packCaptionPresentation(ultimateRoot.style)?.style}>
                     {renderWithHashtags(ultimateRoot.overlayText)}
                   </h2>
                 </div>
               )}
+              <PackStyleLayer style={ultimateRoot.style} fit="cover" />
 
               {/* Audio playing visual indicator */}
               {activePlayingAudioUrl === ultimateRoot.id && (
@@ -616,6 +618,11 @@ export default function ThreadView({
                 </div>
               )}
             </div>
+            {ultimateRoot.style && (
+              <div className="mt-1 flex justify-end">
+                <PackTag style={ultimateRoot.style} />
+              </div>
+            )}
 
             {/* Root Engagement & Primary REAX Action */}
             <div className="flex flex-wrap items-center justify-between gap-3 mt-3.5 pt-3 border-t border-slate-800/60">
@@ -873,7 +880,7 @@ export default function ThreadView({
                             controlsList="nodownload noremoteplayback"
                             disablePictureInPicture
                             src={directReax.mediaUrl} 
-                            className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
+                            className={`w-full h-full object-cover pointer-events-none reax-protected-media select-none ${packMediaEffectClass(directReax.style) || ""}`} 
                             loop 
                             muted={true} 
                             playsInline 
@@ -883,7 +890,7 @@ export default function ThreadView({
                           <img 
                             {...protectedMediaProps}
                             src={directReax.mediaUrl} 
-                            className="w-full h-full object-cover pointer-events-none reax-protected-media select-none" 
+                            className={`w-full h-full object-cover pointer-events-none reax-protected-media select-none ${packMediaEffectClass(directReax.style) || ""}`} 
                             alt="" 
                             referrerPolicy="no-referrer" 
                           />
@@ -900,11 +907,12 @@ export default function ThreadView({
               </button>
               {directReax.overlayText && (
                           <div className="absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-3 z-10 pointer-events-none">
-                            <h2 className="font-sans font-black text-sm sm:text-base text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight">
+                            <h2 className={`font-sans font-black text-sm sm:text-base text-white uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] max-w-full leading-tight ${packCaptionPresentation(directReax.style)?.className || ""}`} style={packCaptionPresentation(directReax.style)?.style}>
                               {renderWithHashtags(directReax.overlayText)}
                             </h2>
                           </div>
                         )}
+                        <PackStyleLayer style={directReax.style} fit="cover" />
 
                         {activePlayingAudioUrl === directReax.id && (
                           <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-600 text-white text-[8px] font-mono font-bold animate-pulse">
@@ -912,6 +920,11 @@ export default function ThreadView({
                           </div>
                         )}
                       </div>
+                      {directReax.style && (
+                        <div className="mt-1 flex justify-end">
+                          <PackTag style={directReax.style} />
+                        </div>
+                      )}
 
                       {/* Card Action Row: Like, Laugh, "Play this branch", and "Riff" */}
                       <div className="flex flex-wrap items-center justify-between gap-2.5 mt-3 pt-3 border-t border-slate-800/60">
@@ -1063,6 +1076,7 @@ export default function ThreadView({
                                       ) : (
                                         <img {...protectedMediaProps} src={riff.mediaUrl} className="w-full h-full object-cover reax-protected-media select-none" alt="" referrerPolicy="no-referrer" />
                                       )}
+                                      <PackStyleLayer style={riff.style} fit="cover" />
                                       {isDeeper && (
                                         <div className="absolute top-0.5 left-0.5 px-1 bg-purple-500/80 text-[6px] font-mono text-white rounded font-bold">
                                           +1
@@ -1087,6 +1101,7 @@ export default function ThreadView({
                                       <p className="text-[10px] text-slate-400 truncate italic mt-0.5">
                                         "{renderWithHashtags(riff.overlayText || riff.voiceText || "Riff response")}"
                                       </p>
+                                      {riff.style && <PackTag style={riff.style} />}
                                     </div>
                                   </div>
 

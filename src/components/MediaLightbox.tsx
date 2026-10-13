@@ -4,6 +4,7 @@ import { X, Share2, Mic } from "lucide-react";
 import { isVoiceItEligible } from "../utils/voiceIt";
 import { Clip } from "../types";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import { PackStyleLayer, PackTag, packMediaEffectClass } from "../packs/render";
 import { useBackToClose } from "../hooks/useBackToClose";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 
@@ -84,7 +85,7 @@ export default function MediaLightbox({ clip, onClose, onShare, onVoiceIt }: Med
       </div>
 
       <div
-        className="max-w-full max-h-[78vh] flex items-center justify-center reax-protected-media"
+        className="relative max-w-full max-h-[78vh] flex items-center justify-center overflow-hidden rounded-lg reax-protected-media"
         onClick={(e) => e.stopPropagation()}
         onContextMenu={blockMediaEvent}
       >
@@ -99,7 +100,7 @@ export default function MediaLightbox({ clip, onClose, onShare, onVoiceIt }: Med
             playsInline
             autoPlay
             loop
-            className="max-w-full max-h-[78vh] object-contain rounded-lg reax-protected-media select-none"
+            className={`max-w-full max-h-[78vh] object-contain rounded-lg reax-protected-media select-none ${packMediaEffectClass(clip.style) || ""}`}
           />
         ) : (
           <img
@@ -108,14 +109,16 @@ export default function MediaLightbox({ clip, onClose, onShare, onVoiceIt }: Med
             src={clip.mediaUrl}
             alt={caption || "reaction"}
             referrerPolicy="no-referrer"
-            className="max-w-full max-h-[78vh] object-contain rounded-lg reax-protected-media select-none"
+            className={`max-w-full max-h-[78vh] object-contain rounded-lg reax-protected-media select-none ${packMediaEffectClass(clip.style) || ""}`}
           />
         )}
+        <PackStyleLayer style={clip.style} />
       </div>
 
       <div className="mt-3 max-w-xl text-center" onClick={(e) => e.stopPropagation()}>
         <p className="text-sm font-bold text-slate-200">@{clip.authorName}</p>
         {caption && <p className="text-xs text-slate-400 italic mt-1 break-words">"{caption}"</p>}
+        {clip.style && <PackTag style={clip.style} className="mt-1" />}
       </div>
     </div>,
     document.body

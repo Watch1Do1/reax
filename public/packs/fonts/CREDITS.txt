@@ -1,0 +1,14 @@
+Reax Reaction Packs: font credits
+All fonts below are licensed under the SIL Open Font License 1.1 (see OFL.txt).
+Converted from TTF to WOFF2 unmodified (format change only).
+
+Rubik Glitch       Copyright 2020 The Rubik Filtered Project Authors (https://github.com/NaN-xyz/Rubik-Filtered)
+Bungee             Copyright 2023 The Bungee Project Authors (https://github.com/djrrb/Bungee)
+Bangers            Copyright 2010 The Bangers Project Authors (https://github.com/googlefonts/bangers)
+Lilita One         Copyright (c) 2011 Juan Montoreano (juan@remolacha.biz), with Reserved Font Names "Lilita" and "Lilita One"
+Playfair Display   Copyright 2017 The Playfair Display Project Authors (https://github.com/clauseggers/Playfair-Display)
+Cinzel             Copyright 2020 The Cinzel Project Authors (https://github.com/NDISCOVER/Cinzel)
+IBM Plex Mono      Copyright 2017 IBM Corp. All rights reserved.
+Courier Prime      Copyright 2015 The Courier Prime Project Authors (https://github.com/quoteunquoteapps/CourierPrime)
+Quicksand          Copyright 2019 The Quicksand Project Authors (https://github.com/andrew-paglinawan/QuicksandFamily)
+Pacifico           Copyright 2018 The Pacifico Project Authors (https://github.com/googlefonts/Pacifico)

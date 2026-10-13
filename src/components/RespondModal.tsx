@@ -18,6 +18,11 @@ import ClipTimelineEditor from "./ClipTimelineEditor";
 import ImageCropper from "./ImageCropper";
 import { isVoiceItEligible } from "../utils/voiceIt";
 import { dragHasFiles, readDroppedFile, UNREADABLE_DROP_MESSAGE } from "../utils/fileDrop";
+import PackStylePicker, { PackStyleDraft, EMPTY_PACK_DRAFT } from "./PackStylePicker";
+import { PACK_IDS } from "../packs/manifest";
+import { sanitizeClipStyle } from "../packs/style";
+import { PackStyleLayer, packCaptionPresentation, packMediaEffectClass } from "../packs/render";
+import { usePackOwnership } from "../packs/usePackOwnership";
 
 interface RespondModalProps {
   key?: string;
@@ -250,6 +255,16 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
   const [textColor, setTextColor] = useState("white");
   const [textPosition, setTextPosition] = useState("bottom");
   const [previewMuted, setPreviewMuted] = useState(true);
+
+  // Reaction Pack styling (step 1: free samples for everyone, all packs for the official account)
+  const packOwnership = usePackOwnership(username);
+  const ownedPackIds = packOwnership.isOfficial ? PACK_IDS : packOwnership.ownedPackIds;
+  const [packDraft, setPackDraft] = useState<PackStyleDraft>(EMPTY_PACK_DRAFT);
+  const [selectedPackSticker, setSelectedPackSticker] = useState<number | null>(null);
+  const packStyleResult = sanitizeClipStyle(packDraft, ownedPackIds);
+  const packStyle = packStyleResult.ok ? packStyleResult.style : null;
+  const packCaption = packCaptionPresentation(packStyle);
+  const packMediaFx = packMediaEffectClass(packStyle);
   
   // Camera & Video Capture
   const [cameraActive, setCameraActive] = useState(false);
@@ -1168,7 +1183,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
             parentId: parentId || null,
             voiceAudioUrl: uploadedVoiceUrl || null,
             voiceStyle: voiceStyle,
-            effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`
+            effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`,
+            style: packStyle || undefined
           })
         });
 
@@ -1304,7 +1320,8 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
         effect: `${visualEffect}|${textStyle}|${textColor}|${textPosition}`,
         overlayText,
         originalAuthor: originalAuthorVal,
-        remixedFrom: remixedFromVal
+        remixedFrom: remixedFromVal,
+        style: packStyle || undefined
       };
 
       console.log("Posting clip JSON payload:", clipPayload);
@@ -1854,6 +1871,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 {/* Visual loop display */}
                 <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800/80 flex items-center justify-center shadow-inner reax-protected-media" onContextMenu={blockMediaEvent}>
                   <div className={`w-full h-full overflow-hidden flex items-center justify-center ${
+                    packMediaFx ? packMediaFx :
                     visualEffect === "zoom" ? "animate-zoom" :
                     visualEffect === "pan" ? "animate-pan" :
                     visualEffect === "bounce" ? "animate-bounce-subtle" :
@@ -1956,6 +1974,18 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     )}
                   </div>
 
+                  {/* Reaction Pack frame, stickers (draggable) and overlay effects */}
+                  <PackStyleLayer
+                    style={packStyle}
+                    fit="cover"
+                    editable
+                    selectedSticker={selectedPackSticker}
+                    onSelectSticker={setSelectedPackSticker}
+                    onMoveSticker={(index, x, y) =>
+                      setPackDraft((d) => ({ ...d, stickers: (d.stickers || []).map((st, i) => (i === index ? { ...st, x, y } : st)) }))
+                    }
+                  />
+
                   {/* Cinema Wide Screen black bars overlay */}
                   {textStyle === "cinema" && textPosition !== "none" && (
                     <>
@@ -2000,7 +2030,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       <div className={positionClasses[textPosition] || positionClasses.bottom}>
                         <h2 className={`${stylePresetClasses[textStyle] || stylePresetClasses.classic} ${textColorClasses[textColor] || textColorClasses.white} ${
                           textPosition.includes("left") ? "text-left" : textPosition.includes("right") ? "text-right" : "text-center"
-                        } line-clamp-2 break-words leading-tight max-w-full`}>
+                        } line-clamp-2 break-words leading-tight max-w-full ${packCaption?.className || ""}`} style={packCaption?.style}>
                           {overlayText}
                         </h2>
                       </div>
@@ -2482,6 +2512,17 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                       ))}
                     </div>
                   </div>
+
+                  {/* Reaction Pack styles (after the built-in style options) */}
+                  <PackStylePicker
+                    tone={tone}
+                    ownedPackIds={ownedPackIds}
+                    draft={packDraft}
+                    onChange={setPackDraft}
+                    selectedSticker={selectedPackSticker}
+                    onSelectSticker={setSelectedPackSticker}
+                    hasCaption={Boolean(overlayText) && textPosition !== "none"}
+                  />
                 </div>
 
 

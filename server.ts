@@ -17,6 +17,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "./src/utils/reservedUsernames";
+import { PACK_IDS, isPackId } from "./src/packs/manifest";
+import { ClipStyle, readClipStyle, sanitizeClipStyle } from "./src/packs/style";
 
 dotenv.config();
 
@@ -118,6 +120,7 @@ export type Clip = {
   authorIsOfficial?: boolean;
   authorBadgeType?: BadgeType;
   authorAvatarUrl?: string | null;
+  style?: ClipStyle | null;
 };
 
 export type Report = {
@@ -716,6 +719,7 @@ function mapDbToClip(dbRow: any): Clip {
     remixedFrom: safeRow.remixed_from || undefined,
     deleted: safeRow.deleted || false,
     reportCount: safeRow.report_count ?? 0,
+    style: readClipStyle(safeRow.style),
   };
 }
 
@@ -753,6 +757,8 @@ function mapClipToDb(clip: Clip) {
     remixed_from: isValidUuid(clip.remixedFrom) ? clip.remixedFrom : null,
     deleted: clip.deleted || false,
     report_count: clip.reportCount ?? 0,
+    // Only sent when set, so posts without pack styling don't depend on the column.
+    style: clip.style || undefined,
   };
 
   const cleanPayload: Record<string, any> = {};
@@ -2404,6 +2410,85 @@ app.get("/api/me/reactions", async (req, res) => {
   }
 });
 
+// ----------------------------------------------------
+// Reaction Packs (step 1): ownership + "Notify me" interest
+// ----------------------------------------------------
+
+// Pack ids the user owns. The official account owns every pack; everyone else
+// owns what's granted in user_packs (step 2 grants founder/contest packs).
+// Free sample items are usable without owning the pack (see manifest).
+async function getOwnedPackIds(userId: string, profile: UserProfile | null | undefined): Promise<string[]> {
+  if (profile?.isOfficial) return [...PACK_IDS];
+  if (!supabaseAdmin) return [];
+  const { data, error } = await supabaseAdmin.from("user_packs").select("pack_id").eq("user_id", userId);
+  if (error) {
+    console.error("[packs] user_packs lookup failed:", error.message || error);
+    return [];
+  }
+  return Array.from(new Set((data || []).map((r: any) => String(r.pack_id)).filter(isPackId)));
+}
+
+// Validates a client-supplied clip style against what the user owns.
+async function resolveClipStyleForUser(raw: unknown, userId: string, profile: UserProfile) {
+  if (raw === undefined || raw === null) return { ok: true as const, style: null };
+  const owned = await getOwnedPackIds(userId, profile);
+  return sanitizeClipStyle(raw, owned);
+}
+
+app.get("/api/me/packs", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.json({ ownedPackIds: [], isOfficial: false, signedIn: false });
+  }
+  const { user, profile } = authRes.auth;
+  const signedIn = !(user.is_anonymous || !user.email);
+  const ownedPackIds = await getOwnedPackIds(user.id, profile);
+  return res.json({ ownedPackIds, isOfficial: Boolean(profile?.isOfficial), signedIn });
+});
+
+app.get("/api/me/pack-interest", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.json({ packIds: [] });
+  }
+  const { user } = authRes.auth;
+  if (user.is_anonymous || !user.email || !supabaseAdmin) {
+    return res.json({ packIds: [] });
+  }
+  const { data, error } = await supabaseAdmin.from("pack_interest").select("pack_id").eq("user_id", user.id);
+  if (error) {
+    console.error("[packs] pack_interest lookup failed:", error.message || error);
+    return res.status(500).json({ error: "Could not load your pack notifications." });
+  }
+  return res.json({ packIds: (data || []).map((r: any) => String(r.pack_id)).filter(isPackId) });
+});
+
+app.post("/api/me/pack-interest", async (req, res) => {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    return res.status(authRes.status).json({ error: authRes.error });
+  }
+  const { user } = authRes.auth;
+  if (user.is_anonymous || !user.email) {
+    return res.status(403).json({ error: "Sign in to get notified when packs arrive." });
+  }
+  const packId = req.body?.packId;
+  if (!isPackId(packId)) {
+    return res.status(400).json({ error: "Unknown pack." });
+  }
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: "Notifications aren't available right now." });
+  }
+  const { error } = await supabaseAdmin
+    .from("pack_interest")
+    .upsert({ user_id: user.id, pack_id: packId }, { onConflict: "user_id,pack_id", ignoreDuplicates: true });
+  if (error) {
+    console.error("[packs] pack_interest insert failed:", error.message || error);
+    return res.status(500).json({ error: "Could not save that. Try again." });
+  }
+  return res.json({ ok: true, packId });
+});
+
 // API: Current user's liked posts, newest like first. Likes are private, so this
 // only ever returns the signed-in user's own likes.
 // GET /api/me/liked?limit=20&cursor=<like created_at ISO> -> { clips, nextCursor, hasMore }
@@ -2868,6 +2953,11 @@ app.post("/api/clips", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields: mediaUrl and tone are required." });
   }
 
+  const styleRes = await resolveClipStyleForUser(req.body.style, user.id, profile);
+  if (styleRes.ok === false) {
+    return res.status(styleRes.status).json({ error: styleRes.error });
+  }
+
   // Validate voiceAudioUrl if provided
   if (voiceAudioUrl !== undefined && voiceAudioUrl !== null) {
     if (typeof voiceAudioUrl !== "string" || voiceAudioUrl.startsWith("data:") || voiceAudioUrl.startsWith("blob:") || voiceAudioUrl.length > 2048) {
@@ -2974,7 +3064,8 @@ app.post("/api/clips", async (req, res) => {
       originalAuthor,
       remixedFrom,
       deleted: false,
-      reportCount: 0
+      reportCount: 0,
+      style: styleRes.style
     };
 
     const inserted = await store!.insertClip(newClip);
@@ -3380,6 +3471,12 @@ app.post("/api/clips/queue-trim", async (req, res) => {
     effect = "zoom|classic|white|bottom"
   } = req.body;
 
+  // Check pack styling before doing any trim work.
+  const styleRes = await resolveClipStyleForUser(req.body.style, user.id, profile);
+  if (styleRes.ok === false) {
+    return res.status(styleRes.status).json({ error: styleRes.error });
+  }
+
   // Security: never fetch client-supplied URLs; only trim the caller's own raw upload.
   if (rawUrl) {
     return res.status(400).json({ error: "rawUrl is not accepted. Upload the file and send rawPath." });
@@ -3474,7 +3571,8 @@ app.post("/api/clips/queue-trim", async (req, res) => {
       likesCount: 0,
       laughsCount: 0,
       deleted: false,
-      reportCount: 0
+      reportCount: 0,
+      style: styleRes.style
     };
 
     const inserted = await store!.insertClip(newClip);
@@ -3521,6 +3619,23 @@ app.post("/api/clips/trim-upload", handleTrimUploadMiddleware, async (req, res) 
 
   if (!req.file) {
     return res.status(400).json({ error: "No video file provided." });
+  }
+
+  // Pack styling arrives as a JSON string in this multipart form.
+  let rawTrimStyle: unknown = req.body?.style;
+  if (typeof rawTrimStyle === "string") {
+    try {
+      rawTrimStyle = rawTrimStyle ? JSON.parse(rawTrimStyle) : null;
+    } catch {
+      rawTrimStyle = "invalid";
+    }
+  }
+  const trimStyleRes = await resolveClipStyleForUser(rawTrimStyle, user.id, profile);
+  if (trimStyleRes.ok === false) {
+    if (fs.existsSync(req.file.path)) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+    }
+    return res.status(trimStyleRes.status).json({ error: trimStyleRes.error });
   }
 
   // Ensure ffmpeg-static and ffprobe-static binaries are present
@@ -3699,7 +3814,8 @@ app.post("/api/clips/trim-upload", handleTrimUploadMiddleware, async (req, res) 
       originalAuthor: originalAuthor || undefined,
       remixedFrom: remixedFrom || undefined,
       deleted: false,
-      reportCount: 0
+      reportCount: 0,
+      style: trimStyleRes.style
     };
 
     const inserted = await store!.insertClip(newClip);
