@@ -18,7 +18,7 @@ import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
 import { uploadAvatar } from "../utils/avatarUpload";
-import { dragHasFiles, isSupportedAvatarFile } from "../utils/fileDrop";
+import { dragHasFiles, isSupportedAvatarFile, readDroppedFile, UNREADABLE_DROP_MESSAGE } from "../utils/fileDrop";
 import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "../utils/reservedUsernames";
 
 export interface ProfilePanelProps {
@@ -166,14 +166,18 @@ export default function ProfilePanel({
       avatarDragDepthRef.current = Math.max(0, avatarDragDepthRef.current - 1);
       if (avatarDragDepthRef.current === 0) setIsAvatarDragOver(false);
     },
-    onDrop: (e: React.DragEvent) => {
+    onDrop: async (e: React.DragEvent) => {
       if (!dragHasFiles(e)) return;
       e.preventDefault();
       e.stopPropagation();
       avatarDragDepthRef.current = 0;
       setIsAvatarDragOver(false);
-      const file = e.dataTransfer.files?.[0];
-      if (!file || isUploadingAvatar) return;
+      if (isUploadingAvatar) return;
+      const file = await readDroppedFile(e.dataTransfer);
+      if (!file) {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: UNREADABLE_DROP_MESSAGE } }));
+        return;
+      }
       if (!isSupportedAvatarFile(file)) {
         window.dispatchEvent(
           new CustomEvent("reax_toast", { detail: { message: "Please drop a JPG, PNG, WebP, or HEIC image." } })

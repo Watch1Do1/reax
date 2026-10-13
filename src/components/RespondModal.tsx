@@ -17,7 +17,7 @@ import { useBackToClose } from "../hooks/useBackToClose";
 import ClipTimelineEditor from "./ClipTimelineEditor";
 import ImageCropper from "./ImageCropper";
 import { isVoiceItEligible } from "../utils/voiceIt";
-import { dragHasFiles } from "../utils/fileDrop";
+import { dragHasFiles, readDroppedFile, UNREADABLE_DROP_MESSAGE } from "../utils/fileDrop";
 
 interface RespondModalProps {
   key?: string;
@@ -850,8 +850,10 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     dragDepthRef.current = 0;
     setIsDragOver(false);
     if (step !== "upload_capture") return;
-    const file = e.dataTransfer.files?.[0];
-    if (file) processUploadFile(file);
+    readDroppedFile(e.dataTransfer).then((file) => {
+      if (file) processUploadFile(file);
+      else setError(UNREADABLE_DROP_MESSAGE);
+    });
   };
 
   // File handed in from a page-level drop: load it once on open

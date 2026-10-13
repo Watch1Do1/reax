@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { dragHasFiles, isSupportedPostFile } from "./utils/fileDrop";
+import { dragHasFiles, isSupportedPostFile, readDroppedFile, UNREADABLE_DROP_MESSAGE } from "./utils/fileDrop";
 import { 
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
@@ -1050,8 +1050,11 @@ export default function App() {
       pageDragDepthRef.current = 0;
       setIsPageDragOver(false);
       if (anyModalOpen()) return;
-      const file = e.dataTransfer?.files?.[0];
-      if (!file) return;
+      const file = await readDroppedFile(e.dataTransfer);
+      if (!file) {
+        window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: UNREADABLE_DROP_MESSAGE } }));
+        return;
+      }
       if (!isSupportedPostFile(file)) {
         window.dispatchEvent(
           new CustomEvent("reax_toast", { detail: { message: "Please drop an image, GIF, or video file." } })
