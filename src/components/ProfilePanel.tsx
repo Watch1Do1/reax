@@ -71,6 +71,9 @@ export default function ProfilePanel({
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Avatar drag-and-drop state (must stay above the early return: hooks order)
+  const [isAvatarDragOver, setIsAvatarDragOver] = useState(false);
+  const avatarDragDepthRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen) {
@@ -147,8 +150,6 @@ export default function ProfilePanel({
   };
 
   // Desktop drag-and-drop onto the avatar
-  const [isAvatarDragOver, setIsAvatarDragOver] = useState(false);
-  const avatarDragDepthRef = useRef(0);
   const avatarDropHandlers = {
     onDragEnter: (e: React.DragEvent) => {
       if (!dragHasFiles(e)) return;
