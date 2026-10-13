@@ -16,6 +16,7 @@ import { execFile } from "child_process";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+import nodemailer from "nodemailer";
 import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "./src/utils/reservedUsernames";
 import { PACK_IDS, isPackId } from "./src/packs/manifest";
 import { ClipStyle, readClipStyle, sanitizeClipStyle } from "./src/packs/style";
@@ -2370,6 +2371,8 @@ app.get("/api/me", async (req, res) => {
   const isAdmin = ADMIN_USER_IDS.includes(user.id.toLowerCase());
   const isAnonymous = Boolean(user.is_anonymous || !user.email);
   const emailConfirmed = Boolean(user.email_confirmed_at);
+  // Founding 100: first confirmed visit assigns the next number and emails a code.
+  await ensureFounderForUser(user, profile);
   return res.json({ 
     profile, 
     isAdmin, 
@@ -2487,6 +2490,309 @@ app.post("/api/me/pack-interest", async (req, res) => {
     return res.status(500).json({ error: "Could not save that. Try again." });
   }
   return res.json({ ok: true, packId });
+});
+
+// ----------------------------------------------------
+// Reaction Packs (step 2): Founding 100 + redeem codes
+// ----------------------------------------------------
+// Codes look like FOUNDER-7KQ2-M9TD. Only sha256(code) is stored (codes carry
+// ~40 bits of crypto randomness, are bound to an account, and redeem attempts
+// are rate limited, so a pepper isn't needed). The plain code exists only in
+// the email or the admin's one-time contest list.
+const FOUNDER_LIMIT = 100;
+const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"; // no 0/O, 1/I/L
+const SITE_URL = "https://www.getreax.com";
+const PACKS_URL = `${SITE_URL}/?packs=1`;
+
+function randomCodeGroup(len: number): string {
+  let out = "";
+  for (let i = 0; i < len; i++) out += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
+  return out;
+}
+function generateRedeemCode(prefix: "FOUNDER" | "REAX"): string {
+  return `${prefix}-${randomCodeGroup(4)}-${randomCodeGroup(4)}`;
+}
+// Uppercase, drop spaces, restore dashes so "founder 7kq2m9td" still matches.
+function normalizeRedeemCode(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const compact = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const m = compact.match(/^(FOUNDER|REAX)([A-Z0-9]{4})([A-Z0-9]{4})$/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+function hashRedeemCode(code: string): string {
+  return crypto.createHash("sha256").update(code, "utf8").digest("hex");
+}
+
+type IssuedCode = { id: string; code: string };
+
+// Issues a new founder code for a user. Any live, unredeemed founder code is
+// revoked first (the plain text of an old code can't be recovered to re-send).
+async function issueFounderCode(userId: string): Promise<IssuedCode> {
+  const { error: revokeErr } = await supabaseAdmin
+    .from("redeem_codes")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("batch", "founder")
+    .is("revoked_at", null)
+    .is("redeemed_at", null);
+  if (revokeErr) throw new Error(`revoke old founder code: ${revokeErr.message}`);
+  const code = generateRedeemCode("FOUNDER");
+  const { data, error } = await supabaseAdmin
+    .from("redeem_codes")
+    .insert({ code_hash: hashRedeemCode(code), code_last4: code.slice(-4), user_id: userId, batch: "founder" })
+    .select("id")
+    .single();
+  if (error) throw Object.assign(new Error(`insert founder code: ${error.message}`), { pgCode: error.code });
+  return { id: String(data.id), code };
+}
+
+function founderEmailContent(foundingNumber: number, code: string, spotsLeft: number) {
+  const num = String(foundingNumber).padStart(3, "0");
+  const subject = "A little thank-you for being one of the first on Reax";
+  const spotsLine = spotsLeft > 0
+    ? `And if you have a friend who'd get a kick out of it, send them to getREAX.com. There are only ${spotsLeft} founding spot${spotsLeft === 1 ? "" : "s"} left.`
+    : "And if you have a friend who'd get a kick out of it, send them to getREAX.com.";
+  const text = `Hey,
+
+Thanks for being one of the first people on Reax. Seriously, it means a lot. Right now there are only a handful of us, and you're one of them. You're Founding #${num}.
+
+I've been working on something called Reaction Packs: style kits with fonts, colors, little stickers, and screen effects (glitch, slow zoom, that kind of thing) so your reactions look like you. There's one for each mood: Chaos, Funny, Drama, Sarcasm, and Chill.
+
+As one of the first 100 people on Reax, you get to pick one pack free, forever. Your code is:
+
+${code}
+
+To use it, sign in on getREAX.com, open the menu, tap Reaction Packs, and enter your code (or just tap "Claim your founder pack"). The code only works on your account:
+${PACKS_URL}
+
+${spotsLine}
+
+Thanks again,
+Joseph`;
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const html = `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111;max-width:560px">
+<p>Hey,</p>
+<p>Thanks for being one of the first people on Reax. Seriously, it means a lot. Right now there are only a handful of us, and you're one of them. You're <b>Founding #${num}</b>.</p>
+<p>I've been working on something called Reaction Packs: style kits with fonts, colors, little stickers, and screen effects (glitch, slow zoom, that kind of thing) so your reactions look like <i>you</i>. There's one for each mood: Chaos, Funny, Drama, Sarcasm, and Chill.</p>
+<p>As one of the first 100 people on Reax, you get to pick one pack free, forever. Your code is:</p>
+<p style="font-family:Menlo,Consolas,monospace;font-size:20px;font-weight:bold;letter-spacing:1px;background:#f3f4f6;padding:10px 14px;border-radius:8px;display:inline-block">${esc(code)}</p>
+<p>To use it, sign in on getREAX.com, open the menu, tap <b>Reaction Packs</b>, and enter your code (or just tap "Claim your founder pack"). The code only works on your account.</p>
+<p><a href="${PACKS_URL}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:bold">Pick your pack</a></p>
+<p>${esc(spotsLine)}</p>
+<p>Thanks again,<br>Joseph</p>
+</div>`;
+  return { subject, text, html };
+}
+
+async function countFounders(): Promise<number> {
+  const { count, error } = await supabaseAdmin.from("founders").select("user_id", { count: "exact", head: true });
+  if (error) throw new Error(`count founders: ${error.message}`);
+  return count || 0;
+}
+
+// Creates a fresh founder code and emails it. Marks emailed_at only on a real send.
+async function issueAndEmailFounderCode(userId: string, email: string, foundingNumber: number) {
+  const issued = await issueFounderCode(userId);
+  const spotsLeft = Math.max(0, FOUNDER_LIMIT - (await countFounders()));
+  const { subject, text, html } = founderEmailContent(foundingNumber, issued.code, spotsLeft);
+  const result = await sendOutboundEmail({ to: email, subject, text, html });
+  if (result.sent) {
+    const { error } = await supabaseAdmin.from("redeem_codes").update({ emailed_at: new Date().toISOString() }).eq("id", issued.id);
+    if (error) console.error(`[founders] code emailed to user ${userId} but emailed_at update failed:`, error.message);
+  } else {
+    console.error(`[founders] founder code for #${foundingNumber} (user ${userId}) NOT emailed: ${result.error}. It is claimable in-app; resend from Admin > Packs.`);
+  }
+  return { sent: result.sent, error: result.error || null, codeId: issued.id };
+}
+
+// Users already fully handled on this instance (number + code issued).
+const founderSettled = new Set<string>();
+
+// Automatic Founding 100: called from GET /api/me and GET /api/me/founder.
+// Idempotent: the SQL function never assigns twice, and the partial unique index
+// allows one live founder code per account, so concurrent calls can't double-issue.
+// Backfilled founders (#1-#8) are skipped here; Joseph sends theirs from Admin.
+async function ensureFounderForUser(user: AuthResult["user"], profile: UserProfile | null | undefined) {
+  if (!supabaseAdmin || founderSettled.has(user.id)) return;
+  if (user.is_anonymous || !user.email || !user.email_confirmed_at) return;
+  if (profile?.isOfficial || profile?.badgeType === "official") return;
+  try {
+    const { data, error } = await supabaseAdmin.rpc("reax_assign_founder", { p_user_id: user.id, p_source: "auto" });
+    if (error) {
+      console.error("[founders] reax_assign_founder failed:", error.message);
+      return;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row?.founding_number) {
+      founderSettled.add(user.id); // not eligible / program full
+      return;
+    }
+    const { data: f } = await supabaseAdmin.from("founders").select("source").eq("user_id", user.id).maybeSingle();
+    if (f?.source !== "auto") {
+      founderSettled.add(user.id);
+      return;
+    }
+    const { data: existing, error: exErr } = await supabaseAdmin
+      .from("redeem_codes").select("id").eq("user_id", user.id).eq("batch", "founder").limit(1);
+    if (exErr) {
+      console.error("[founders] founder code lookup failed:", exErr.message);
+      return;
+    }
+    if (!existing || existing.length === 0) {
+      try {
+        const r = await issueAndEmailFounderCode(user.id, user.email, Number(row.founding_number));
+        console.log(`[founders] Founding #${row.founding_number} assigned to ${user.id}; emailed=${r.sent}`);
+      } catch (err: any) {
+        if (err?.pgCode === "23505") return; // another request issued it at the same moment
+        console.error("[founders] could not issue founder code:", err?.message || err);
+        return;
+      }
+    }
+    founderSettled.add(user.id);
+  } catch (err: any) {
+    console.error("[founders] ensureFounderForUser failed:", err?.message || err);
+  }
+}
+
+async function getFounderStatus(userId: string) {
+  const [{ data: f, error: fErr }, { data: codes, error: cErr }] = await Promise.all([
+    supabaseAdmin.from("founders").select("founding_number").eq("user_id", userId).maybeSingle(),
+    supabaseAdmin.from("redeem_codes").select("id, redeemed_at, redeemed_pack_id, revoked_at")
+      .eq("user_id", userId).eq("batch", "founder").order("issued_at", { ascending: false }),
+  ]);
+  if (fErr) throw new Error(fErr.message);
+  if (cErr) throw new Error(cErr.message);
+  const redeemed = (codes || []).find((c: any) => c.redeemed_at);
+  const live = (codes || []).find((c: any) => !c.revoked_at && !c.redeemed_at);
+  return {
+    foundingNumber: f?.founding_number ?? null,
+    hasCode: Boolean(live),
+    redeemedPackId: redeemed?.redeemed_pack_id ?? null,
+  };
+}
+
+// Simple per-user redeem rate limit (per server instance): 10 tries / 15 min.
+const redeemAttempts = new Map<string, number[]>();
+function redeemRateLimited(userId: string): boolean {
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const recent = (redeemAttempts.get(userId) || []).filter(t => now - t < windowMs);
+  recent.push(now);
+  redeemAttempts.set(userId, recent);
+  return recent.length > 10;
+}
+
+const REDEEM_ERRORS: Record<string, string> = {
+  invalid: "That code doesn't match any Reax code. Check it and try again.",
+  revoked: "That code is no longer active. If you were sent a newer one, use that instead.",
+  used: "That code has already been used.",
+  wrong_account: "That code belongs to a different account. Sign in with the account it was emailed to.",
+  pack_required: "Pick a pack to unlock.",
+  already_founder: "You've already claimed your founder pack. It's yours forever.",
+  already_owned: "You already own that pack. Pick a different one.",
+  already_redeemed_batch: "You've already redeemed a code from this giveaway.",
+};
+
+async function requireConfirmedUser(req: any, res: any) {
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false) {
+    res.status(authRes.status).json({ error: "Sign in to redeem a code." });
+    return null;
+  }
+  const { user, profile } = authRes.auth;
+  if (user.is_anonymous || !user.email) {
+    res.status(403).json({ error: "Sign in to redeem a code." });
+    return null;
+  }
+  if (!user.email_confirmed_at) {
+    res.status(403).json({ error: "Confirm your email first, then redeem your code." });
+    return null;
+  }
+  if (!supabaseAdmin) {
+    res.status(503).json({ error: "Codes aren't available right now. Try again later." });
+    return null;
+  }
+  return { user, profile };
+}
+
+async function runRedeem(res: any, userId: string, codeHash: string, packId: string | null) {
+  const { data, error } = await supabaseAdmin.rpc("reax_redeem_code", { p_user_id: userId, p_code_hash: codeHash, p_pack_id: packId });
+  if (error) {
+    console.error("[redeem] reax_redeem_code failed:", error.message);
+    return res.status(500).json({ error: "Could not redeem right now. Try again in a minute." });
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  if (row?.status === "ok") {
+    founderSettled.delete(userId);
+    return res.json({ ok: true, packId: row.pack_id, batch: row.batch });
+  }
+  const status = String(row?.status || "invalid");
+  return res.status(status === "invalid" ? 404 : 409).json({ error: REDEEM_ERRORS[status] || REDEEM_ERRORS.invalid, reason: status });
+}
+
+// GET /api/me/founder -> { foundingNumber, hasCode, redeemedPackId, spotsLeft }
+app.get("/api/me/founder", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const authRes = await authenticateUser(req);
+  if (authRes.ok === false || !supabaseAdmin) {
+    return res.json({ foundingNumber: null, hasCode: false, redeemedPackId: null, spotsLeft: null });
+  }
+  const { user, profile } = authRes.auth;
+  if (user.is_anonymous || !user.email) {
+    return res.json({ foundingNumber: null, hasCode: false, redeemedPackId: null, spotsLeft: null });
+  }
+  await ensureFounderForUser(user, profile);
+  try {
+    const status = await getFounderStatus(user.id);
+    const spotsLeft = Math.max(0, FOUNDER_LIMIT - (await countFounders()));
+    return res.json({ ...status, spotsLeft });
+  } catch (err: any) {
+    console.error("[founders] status lookup failed:", err?.message || err);
+    return res.status(500).json({ error: "Could not load your founder status." });
+  }
+});
+
+// POST /api/me/redeem { code, packId } -> { ok, packId }
+app.post("/api/me/redeem", async (req, res) => {
+  const ctx = await requireConfirmedUser(req, res);
+  if (!ctx) return;
+  if (redeemRateLimited(ctx.user.id)) {
+    return res.status(429).json({ error: "Too many tries. Wait 15 minutes and try again." });
+  }
+  const code = normalizeRedeemCode(req.body?.code);
+  if (!code) {
+    return res.status(400).json({ error: "Codes look like FOUNDER-XXXX-XXXX. Check it and try again." });
+  }
+  const packId = req.body?.packId ?? null;
+  if (packId !== null && !isPackId(packId)) {
+    return res.status(400).json({ error: "Unknown pack." });
+  }
+  return runRedeem(res, ctx.user.id, hashRedeemCode(code), packId);
+});
+
+// POST /api/me/founder/claim { packId }: one tap, uses the user's own live
+// founder code server-side, so a code lost to spam doesn't matter.
+app.post("/api/me/founder/claim", async (req, res) => {
+  const ctx = await requireConfirmedUser(req, res);
+  if (!ctx) return;
+  const packId = req.body?.packId;
+  if (!isPackId(packId)) {
+    return res.status(400).json({ error: "Pick a pack to unlock." });
+  }
+  const { data, error } = await supabaseAdmin
+    .from("redeem_codes").select("code_hash")
+    .eq("user_id", ctx.user.id).eq("batch", "founder").is("revoked_at", null).is("redeemed_at", null)
+    .maybeSingle();
+  if (error) {
+    console.error("[redeem] founder code lookup failed:", error.message);
+    return res.status(500).json({ error: "Could not claim right now. Try again in a minute." });
+  }
+  if (!data) {
+    const status = await getFounderStatus(ctx.user.id).catch(() => null);
+    if (status?.redeemedPackId) return res.status(409).json({ error: REDEEM_ERRORS.already_founder, reason: "already_founder" });
+    return res.status(404).json({ error: "Your founder code isn't ready yet. It's on its way by email." });
+  }
+  return runRedeem(res, ctx.user.id, String(data.code_hash), packId);
 });
 
 // API: Current user's liked posts, newest like first. Likes are private, so this
@@ -5105,6 +5411,198 @@ app.post("/api/admin/users/:id/badge", async (req, res) => {
   }
 });
 
+// ----------------------------------------------------
+// Admin: Reaction Packs (founders, codes, grants)
+// ----------------------------------------------------
+async function loadFounderRows() {
+  const { data: founders, error } = await supabaseAdmin
+    .from("founders").select("user_id, founding_number, source, created_at").order("founding_number", { ascending: true });
+  if (error) throw new Error(`founders: ${error.message}`);
+  const ids = (founders || []).map((f: any) => f.user_id);
+  if (ids.length === 0) return [];
+  const [profilesRes, codesRes] = await Promise.all([
+    supabaseAdmin.from("user_profiles").select("id, username, email").in("id", ids),
+    supabaseAdmin.from("redeem_codes").select("user_id, code_last4, issued_at, emailed_at, redeemed_at, redeemed_pack_id, revoked_at")
+      .eq("batch", "founder").in("user_id", ids).order("issued_at", { ascending: false }),
+  ]);
+  if (profilesRes.error) throw new Error(`profiles: ${profilesRes.error.message}`);
+  if (codesRes.error) throw new Error(`codes: ${codesRes.error.message}`);
+  const profiles = new Map<string, any>((profilesRes.data || []).map((p: any) => [p.id, p]));
+  const authEmails = new Map<string, string>();
+  for (const id of ids) {
+    if (profiles.get(id)?.email) continue;
+    const { data } = await supabaseAdmin.auth.admin.getUserById(id);
+    if (data?.user?.email) authEmails.set(id, data.user.email);
+  }
+  return (founders || []).map((f: any) => {
+    const codes = (codesRes.data || []).filter((c: any) => c.user_id === f.user_id);
+    const redeemed = codes.find((c: any) => c.redeemed_at);
+    const live = codes.find((c: any) => !c.revoked_at && !c.redeemed_at);
+    return {
+      userId: f.user_id,
+      foundingNumber: f.founding_number,
+      source: f.source,
+      username: profiles.get(f.user_id)?.username || null,
+      email: profiles.get(f.user_id)?.email || authEmails.get(f.user_id) || null,
+      codeLast4: (redeemed || live)?.code_last4 || null,
+      emailedAt: (redeemed || live)?.emailed_at || null,
+      redeemedPackId: redeemed?.redeemed_pack_id || null,
+      redeemedAt: redeemed?.redeemed_at || null,
+    };
+  });
+}
+
+app.get("/api/admin/packs/overview", async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: "Database unavailable" });
+  try {
+    const founders = await loadFounderRows();
+    const [interestRes, ownedRes, contestRes] = await Promise.all([
+      supabaseAdmin.from("pack_interest").select("pack_id"),
+      supabaseAdmin.from("user_packs").select("pack_id, source"),
+      supabaseAdmin.from("redeem_codes").select("label, pack_id, redeemed_at, revoked_at").eq("batch", "contest"),
+    ]);
+    for (const r of [interestRes, ownedRes, contestRes]) if (r.error) throw new Error(r.error.message);
+    const interest: Record<string, number> = Object.fromEntries(PACK_IDS.map(id => [id, 0]));
+    for (const r of interestRes.data || []) if (r.pack_id in interest) interest[r.pack_id]++;
+    const owners: Record<string, number> = Object.fromEntries(PACK_IDS.map(id => [id, 0]));
+    for (const r of ownedRes.data || []) if (r.pack_id in owners) owners[r.pack_id]++;
+    const batches = new Map<string, { label: string; total: number; redeemed: number; packId: string | null }>();
+    for (const c of contestRes.data || []) {
+      const key = c.label || "(no label)";
+      const b = batches.get(key) || { label: key, total: 0, redeemed: 0, packId: c.pack_id || null };
+      if (!c.revoked_at) b.total++;
+      if (c.redeemed_at) b.redeemed++;
+      batches.set(key, b);
+    }
+    return res.json({
+      limit: FOUNDER_LIMIT,
+      stats: {
+        foundersAssigned: founders.length,
+        codesEmailed: founders.filter(f => f.emailedAt).length,
+        redeemed: founders.filter(f => f.redeemedPackId).length,
+      },
+      interest,
+      owners,
+      founders,
+      contestBatches: Array.from(batches.values()),
+      emailConfigured: Boolean(process.env.RESEND_API_KEY || (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)),
+    });
+  } catch (err: any) {
+    console.error("[admin packs] overview failed:", err?.message || err);
+    return res.status(500).json({ error: err?.message || "Could not load packs overview" });
+  }
+});
+
+// Generates + emails codes for every founder who hasn't been emailed one and
+// hasn't redeemed. Sequential, so SMTP isn't flooded.
+app.post("/api/admin/packs/send-founder-codes", async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: "Database unavailable" });
+  try {
+    const founders = await loadFounderRows();
+    const targets = founders.filter(f => !f.emailedAt && !f.redeemedPackId);
+    const results: any[] = [];
+    for (const f of targets) {
+      if (!f.email) {
+        results.push({ foundingNumber: f.foundingNumber, username: f.username, sent: false, error: "No email on file" });
+        continue;
+      }
+      try {
+        const r = await issueAndEmailFounderCode(f.userId, f.email, f.foundingNumber);
+        results.push({ foundingNumber: f.foundingNumber, username: f.username, sent: r.sent, error: r.error });
+      } catch (err: any) {
+        console.error(`[admin packs] founder #${f.foundingNumber} failed:`, err?.message || err);
+        results.push({ foundingNumber: f.foundingNumber, username: f.username, sent: false, error: err?.message || "Failed" });
+      }
+    }
+    return res.json({ attempted: targets.length, sent: results.filter(r => r.sent).length, results });
+  } catch (err: any) {
+    console.error("[admin packs] send-founder-codes failed:", err?.message || err);
+    return res.status(500).json({ error: err?.message || "Could not send founder codes" });
+  }
+});
+
+app.post("/api/admin/packs/founders/:userId/resend", async (req, res) => {
+  const { userId } = req.params;
+  if (!isValidUuid(userId)) return res.status(400).json({ error: "Invalid user ID" });
+  if (!supabaseAdmin) return res.status(503).json({ error: "Database unavailable" });
+  try {
+    const f = (await loadFounderRows()).find(r => r.userId === userId);
+    if (!f) return res.status(404).json({ error: "That user isn't a founder." });
+    if (f.redeemedPackId) return res.status(409).json({ error: "They already redeemed their founder pack." });
+    if (!f.email) return res.status(400).json({ error: "No email on file for this founder." });
+    const r = await issueAndEmailFounderCode(f.userId, f.email, f.foundingNumber);
+    return res.json({ sent: r.sent, error: r.error });
+  } catch (err: any) {
+    console.error("[admin packs] resend failed:", err?.message || err);
+    return res.status(500).json({ error: err?.message || "Could not resend" });
+  }
+});
+
+async function findUserIdByUsername(raw: unknown): Promise<{ id: string; username: string } | null> {
+  const username = String(raw || "").trim().replace(/^@/, "");
+  if (!username || username.length > 40) return null;
+  const { data, error } = await supabaseAdmin.from("user_profiles").select("id, username").ilike("username", username).limit(1);
+  if (error) throw new Error(error.message);
+  return data?.[0] ? { id: String(data[0].id), username: String(data[0].username) } : null;
+}
+
+app.post("/api/admin/packs/grant", async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: "Database unavailable" });
+  const { username, packId } = req.body || {};
+  if (!isPackId(packId)) return res.status(400).json({ error: "Pick a pack." });
+  try {
+    const u = await findUserIdByUsername(username);
+    if (!u) return res.status(404).json({ error: "No user with that username." });
+    const { error } = await supabaseAdmin.from("user_packs")
+      .upsert({ user_id: u.id, pack_id: packId, source: "admin" }, { onConflict: "user_id,pack_id", ignoreDuplicates: true });
+    if (error) throw new Error(error.message);
+    console.log(`[admin packs] granted ${packId} to @${u.username}`);
+    return res.json({ ok: true, username: u.username, packId });
+  } catch (err: any) {
+    console.error("[admin packs] grant failed:", err?.message || err);
+    return res.status(500).json({ error: err?.message || "Could not grant pack" });
+  }
+});
+
+app.post("/api/admin/packs/revoke", async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: "Database unavailable" });
+  const { username, packId } = req.body || {};
+  if (!isPackId(packId)) return res.status(400).json({ error: "Pick a pack." });
+  try {
+    const u = await findUserIdByUsername(username);
+    if (!u) return res.status(404).json({ error: "No user with that username." });
+    const { data, error } = await supabaseAdmin.from("user_packs").delete().eq("user_id", u.id).eq("pack_id", packId).select("pack_id");
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) return res.status(404).json({ error: `@${u.username} doesn't own that pack.` });
+    console.log(`[admin packs] revoked ${packId} from @${u.username}`);
+    return res.json({ ok: true, username: u.username, packId });
+  } catch (err: any) {
+    console.error("[admin packs] revoke failed:", err?.message || err);
+    return res.status(500).json({ error: err?.message || "Could not revoke pack" });
+  }
+});
+
+// Contest batch: unbound codes (bound to whoever redeems first). Plain codes are
+// returned once here and never stored.
+app.post("/api/admin/packs/contest-codes", async (req, res) => {
+  if (!supabaseAdmin) return res.status(503).json({ error: "Database unavailable" });
+  const count = Number(req.body?.count);
+  const packId = req.body?.packId ?? null;
+  const label = typeof req.body?.label === "string" ? req.body.label.trim().slice(0, 60) : "";
+  if (!Number.isInteger(count) || count < 1 || count > 100) return res.status(400).json({ error: "Count must be 1 to 100." });
+  if (packId !== null && !isPackId(packId)) return res.status(400).json({ error: "Unknown pack." });
+  if (!label) return res.status(400).json({ error: "Give the batch a name, e.g. Halloween witch contest." });
+  const codes = Array.from({ length: count }, () => generateRedeemCode("REAX"));
+  const { error } = await supabaseAdmin.from("redeem_codes").insert(
+    codes.map(code => ({ code_hash: hashRedeemCode(code), code_last4: code.slice(-4), batch: "contest", label, pack_id: packId }))
+  );
+  if (error) {
+    console.error("[admin packs] contest codes insert failed:", error.message);
+    return res.status(500).json({ error: error.message });
+  }
+  return res.json({ codes, label, packId });
+});
+
 // 11d. GET Badge audit history for user (Admin Auth)
 app.get("/api/admin/users/:id/badge-audit", async (req, res) => {
   const { id } = req.params;
@@ -5168,10 +5666,18 @@ ${contactMsg.message}
 --------------------------------------------------
 To respond directly to the sender, email: ${contactMsg.email}`;
 
+  return sendOutboundEmail({ to: targetEmail, replyTo: contactMsg.email, subject, text: textContent });
+}
+
+// Outbound email: Resend (RESEND_API_KEY) if set, else SMTP (SMTP_HOST/PORT/USER/PASS,
+// e.g. the same SMTP account Supabase uses for support@getreax.com).
+// From: EMAIL_FROM, default "Reax <support@getreax.com>".
+async function sendOutboundEmail(msg: { to: string; subject: string; text: string; html?: string; replyTo?: string }): Promise<{ sent: boolean; provider?: string; error?: string }> {
+  const fromEmail = process.env.EMAIL_FROM || "Reax <support@getreax.com>";
+
   // 1. Resend API (HTTP REST)
   if (process.env.RESEND_API_KEY) {
     try {
-      const fromEmail = process.env.EMAIL_FROM || "Reax Support <onboarding@resend.dev>";
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
@@ -5180,34 +5686,29 @@ To respond directly to the sender, email: ${contactMsg.email}`;
         },
         body: JSON.stringify({
           from: fromEmail,
-          to: [targetEmail],
-          reply_to: contactMsg.email,
-          subject,
-          text: textContent
+          to: [msg.to],
+          ...(msg.replyTo ? { reply_to: msg.replyTo } : {}),
+          subject: msg.subject,
+          text: msg.text,
+          ...(msg.html ? { html: msg.html } : {})
         })
       });
       const data: any = await res.json().catch(() => ({}));
       if (res.ok) {
-        console.log(`[Email] Dispatched via Resend to ${targetEmail} (ID: ${data.id})`);
+        console.log(`[Email] Dispatched via Resend to ${msg.to} (ID: ${data.id})`);
         return { sent: true, provider: "resend" };
-      } else {
-        console.warn("[Email] Resend API error:", data);
-        return { sent: false, provider: "resend", error: data.message || "Resend error" };
       }
+      console.warn("[Email] Resend API error:", data);
+      return { sent: false, provider: "resend", error: data.message || "Resend error" };
     } catch (err: any) {
       console.warn("[Email] Resend request failed:", err?.message);
       return { sent: false, provider: "resend", error: err?.message };
     }
   }
 
-  // 2. SMTP (via nodemailer if installed)
+  // 2. SMTP via nodemailer
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
-      const nodemailerModule = await (Function('return import("nodemailer")')() as Promise<any>).catch(() => null);
-      if (!nodemailerModule) {
-        return { sent: false, provider: "smtp", error: "SMTP configured but nodemailer is not available in environment." };
-      }
-      const nodemailer = nodemailerModule.default || nodemailerModule;
       const port = Number(process.env.SMTP_PORT || 587);
       const transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,
@@ -5219,13 +5720,14 @@ To respond directly to the sender, email: ${contactMsg.email}`;
         }
       });
       const info = await transporter.sendMail({
-        from: process.env.EMAIL_FROM || `"Reax Support" <${process.env.SMTP_USER}>`,
-        to: targetEmail,
-        replyTo: contactMsg.email,
-        subject,
-        text: textContent
+        from: fromEmail,
+        to: msg.to,
+        ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
+        subject: msg.subject,
+        text: msg.text,
+        ...(msg.html ? { html: msg.html } : {})
       });
-      console.log(`[Email] Dispatched via SMTP to ${targetEmail} (Msg ID: ${info.messageId})`);
+      console.log(`[Email] Dispatched via SMTP to ${msg.to} (Msg ID: ${info.messageId})`);
       return { sent: true, provider: "smtp" };
     } catch (err: any) {
       console.warn("[Email] SMTP dispatch failed:", err?.message);
@@ -5233,7 +5735,6 @@ To respond directly to the sender, email: ${contactMsg.email}`;
     }
   }
 
-  // No external relay configured
   return {
     sent: false,
     provider: "none",

@@ -22,6 +22,9 @@ const TONE_LABEL: Record<string, string> = {
   chill: "Chill",
 };
 
+const pad = (n: number) => String(n).padStart(3, "0");
+const packName = (id: string | null | undefined) => REACTION_PACKS.find((p) => p.id === id)?.name || "new";
+
 // Quiet Packs page: what's in each pack, what you can use today (free samples),
 // and a "Notify me" per pack. Not a store: no prices, no pushing.
 export default function PacksPage({ focusPackId = null, username = null, onClose }: PacksPageProps) {
@@ -32,6 +35,11 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
   const [pendingPack, setPendingPack] = useState<string | null>(null);
   const [notifyError, setNotifyError] = useState<string | null>(null);
   const packRefs = useRef<Record<string, HTMLElement | null>>({});
+  const [founder, setFounder] = useState<{ foundingNumber: number | null; hasCode: boolean; redeemedPackId: string | null } | null>(null);
+  const [codeInput, setCodeInput] = useState("");
+  const [codePack, setCodePack] = useState("");
+  const [redeemBusy, setRedeemBusy] = useState(false);
+  const [redeemMsg, setRedeemMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     if (!ownership.signedIn) return;
@@ -78,6 +86,48 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
     }
   };
 
+  const loadFounder = async () => {
+    try {
+      const token = await getAuthToken();
+      const res = await fetch("/api/me/founder", { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setFounder(await res.json());
+    } catch (err) {
+      console.error("Could not load founder status:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (ownership.signedIn) loadFounder();
+  }, [ownership.signedIn]);
+
+  const submitRedeem = async (url: string, body: Record<string, unknown>) => {
+    setRedeemMsg(null);
+    setRedeemBusy(true);
+    try {
+      const token = await getAuthToken();
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not redeem that. Try again.");
+      setRedeemMsg({ ok: true, text: `Unlocked: the ${packName(data.packId)} Pack is yours forever.` });
+      setCodeInput("");
+      setCodePack("");
+      await Promise.all([ownership.reload(), loadFounder()]);
+      if (data.packId && packRefs.current[data.packId]) packRefs.current[data.packId]!.scrollIntoView({ block: "start", behavior: "smooth" });
+    } catch (err: any) {
+      setRedeemMsg({ ok: false, text: err?.message || "Could not redeem that. Try again." });
+    } finally {
+      setRedeemBusy(false);
+    }
+  };
+
+  const handleRedeem = () => submitRedeem("/api/me/redeem", { code: codeInput, packId: codePack || null });
+  const handleClaim = (packId: string) => submitRedeem("/api/me/founder/claim", { packId });
+
   const owns = (pack: ReactionPack) => ownership.isOfficial || ownership.ownedPackIds.includes(pack.id);
 
   return createPortal(
@@ -95,24 +145,88 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
           </button>
         </div>
 
-        {/* Founder codes (step 2) */}
+        {/* Founder codes */}
+        {founder?.foundingNumber && !ownership.isOfficial && (
+          <div className="rounded-2xl border border-amber-500/40 bg-amber-950/20 p-4 space-y-2">
+            {founder.redeemedPackId ? (
+              <p className="text-sm font-bold text-amber-200">
+                Founding #{pad(founder.foundingNumber)} · You picked the {packName(founder.redeemedPackId)} Pack. It's yours forever.
+              </p>
+            ) : founder.hasCode ? (
+              <>
+                <p className="text-sm font-bold text-amber-200">You're Founding #{pad(founder.foundingNumber)}. Pick your free pack.</p>
+                <p className="text-[11px] text-amber-100/70">One pack, free forever. No need to find the email, just tap one.</p>
+                <div className="flex flex-wrap gap-2">
+                  {REACTION_PACKS.filter((p) => !ownership.ownedPackIds.includes(p.id)).map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      disabled={redeemBusy}
+                      onClick={() => handleClaim(p.id)}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-50 cursor-pointer"
+                    >
+                      Claim {p.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-sm font-bold text-amber-200">
+                You're Founding #{pad(founder.foundingNumber)}. Your founder code is on its way by email.
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 space-y-2">
           <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
             <Ticket className="w-4 h-4 text-amber-400" />
-            <span>Redeem a founder code</span>
+            <span>Redeem a code</span>
           </div>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              disabled
-              placeholder="FOUNDER-XXXX-XXXX"
-              className="flex-1 min-w-0 px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-slate-500 placeholder:text-slate-600 cursor-not-allowed"
-            />
-            <button type="button" disabled className="px-3 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-500 cursor-not-allowed">
-              Redeem
-            </button>
-          </div>
-          <p className="text-[10px] font-mono text-slate-500">Founder codes arriving soon.</p>
+          {ownership.signedIn ? (
+            <form
+              className="flex flex-col sm:flex-row gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleRedeem();
+              }}
+            >
+              <input
+                type="text"
+                value={codeInput}
+                onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+                placeholder="FOUNDER-XXXX-XXXX"
+                autoCapitalize="characters"
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={24}
+                className="flex-1 min-w-0 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder:text-slate-600 focus:outline-none focus:border-amber-500"
+              />
+              <select
+                value={codePack}
+                onChange={(e) => setCodePack(e.target.value)}
+                aria-label="Pack to unlock"
+                className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white"
+              >
+                <option value="">Pick a pack…</option>
+                {REACTION_PACKS.filter((p) => !ownership.ownedPackIds.includes(p.id)).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                disabled={redeemBusy || !codeInput.trim()}
+                className="px-3 py-2 rounded-xl text-xs font-bold bg-amber-500 text-black hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-500 cursor-pointer"
+              >
+                {redeemBusy ? "Redeeming…" : "Redeem"}
+              </button>
+            </form>
+          ) : (
+            <p className="text-[10px] font-mono text-slate-500">Sign in to redeem a code.</p>
+          )}
+          {redeemMsg && (
+            <p className={`text-[11px] font-mono ${redeemMsg.ok ? "text-emerald-300" : "text-rose-300"}`}>{redeemMsg.text}</p>
+          )}
         </div>
 
         {ownership.isOfficial && (

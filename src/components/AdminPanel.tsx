@@ -10,6 +10,7 @@ import { Clip } from "../types";
 import { getAuthToken } from "../utils/supabaseClient";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import Avatar from "./Avatar";
+import { REACTION_PACKS } from "../packs/manifest";
 
 interface AdminPanelProps {
   key?: string | number | null;
@@ -19,7 +20,7 @@ interface AdminPanelProps {
   onSelectThread: (id: string) => void;
 }
 
-type AdminTab = "reports" | "content" | "dashboard" | "users" | "badges" | "settings";
+type AdminTab = "reports" | "content" | "dashboard" | "users" | "badges" | "packs" | "settings";
 
 type AdminStats = {
   overview?: {
@@ -568,6 +569,7 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
       badge: confirmedUsersCount > 0 ? confirmedUsersCount : usersList.length 
     }] : []),
     { id: "badges", label: "Business badges", desc: "Give or remove Verified" },
+    { id: "packs", label: "🎁 Packs", desc: "Founders, codes, grants" },
     { id: "settings", label: "⚙️ Settings", desc: "Database diagnostics" },
   ];
 
@@ -680,6 +682,7 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
               {activeTab === "dashboard" && "📊 Dashboard Analytics"}
               {activeTab === "users" && "👥 Community User Directory"}
               {activeTab === "badges" && "🏷️ Business Badges"}
+              {activeTab === "packs" && "🎁 Reaction Packs"}
               {activeTab === "settings" && "⚙️ System Configuration"}
             </h1>
           </div>
@@ -1530,6 +1533,8 @@ GRANT EXECUTE ON FUNCTION public.get_auth_users() TO authenticated, anon, servic
                 />
               )}
 
+              {activeTab === "packs" && <PacksTab adminFetch={adminFetch} />}
+
               {/* TAB 5: SETTINGS (REAL DATABASE CONNECTIVITY DIAGNOSTICS ONLY) */}
               {activeTab === "settings" && (
                 <div className="max-w-2xl bg-slate-950 border border-slate-900 rounded-3xl p-6 space-y-4">
@@ -2278,6 +2283,269 @@ function BadgesTab({ adminFetch, showToast, onRefreshClips, onSyncAuth, isSyncin
               </div>
             ))}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------
+// Reaction Packs admin tab: Founding 100, codes, grants
+// ----------------------------------------------------
+interface PacksFounderRow {
+  userId: string;
+  foundingNumber: number;
+  source: string;
+  username: string | null;
+  email: string | null;
+  codeLast4: string | null;
+  emailedAt: string | null;
+  redeemedPackId: string | null;
+  redeemedAt: string | null;
+}
+interface PacksOverview {
+  limit: number;
+  stats: { foundersAssigned: number; codesEmailed: number; redeemed: number };
+  interest: Record<string, number>;
+  owners: Record<string, number>;
+  founders: PacksFounderRow[];
+  contestBatches: Array<{ label: string; total: number; redeemed: number; packId: string | null }>;
+  emailConfigured: boolean;
+}
+
+const adminPackName = (id: string | null | undefined) => REACTION_PACKS.find((p) => p.id === id)?.name || id || "Any one";
+
+function PacksTab({ adminFetch }: { adminFetch: (url: string, options?: any) => Promise<Response> }) {
+  const [data, setData] = useState<PacksOverview | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [sendResults, setSendResults] = useState<Array<{ foundingNumber: number; username: string | null; sent: boolean; error: string | null }> | null>(null);
+  const [grantUser, setGrantUser] = useState("");
+  const [grantPack, setGrantPack] = useState(REACTION_PACKS[0]?.id || "");
+  const [batchLabel, setBatchLabel] = useState("");
+  const [batchCount, setBatchCount] = useState(1);
+  const [batchPack, setBatchPack] = useState("");
+  const [batchCodes, setBatchCodes] = useState<string[] | null>(null);
+
+  const load = async () => {
+    setLoadError(null);
+    try {
+      const res = await adminFetch("/api/admin/packs/overview");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setData(json);
+    } catch (err: any) {
+      setLoadError(err?.message || "Could not load packs data");
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const post = async (key: string, url: string, body?: any) => {
+    setBusy(key);
+    setMessage(null);
+    try {
+      const res = await adminFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      return json;
+    } catch (err: any) {
+      setMessage({ ok: false, text: err?.message || "Request failed" });
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pending = (data?.founders || []).filter((f) => !f.emailedAt && !f.redeemedPackId);
+
+  const handleSendAll = async () => {
+    if (pending.length === 0) return;
+    if (!window.confirm(`Email founder codes to ${pending.length} founder${pending.length === 1 ? "" : "s"} from support@getreax.com? Each gets a new code.`)) return;
+    const json = await post("sendAll", "/api/admin/packs/send-founder-codes");
+    if (json) {
+      setSendResults(json.results || []);
+      setMessage({ ok: json.sent === json.attempted, text: `Sent ${json.sent} of ${json.attempted}.` });
+      load();
+    }
+  };
+
+  const handleResend = async (f: PacksFounderRow) => {
+    if (!window.confirm(`Send Founding #${f.foundingNumber} (@${f.username || "?"}) a new code? Their old code stops working.`)) return;
+    const json = await post(`resend-${f.userId}`, `/api/admin/packs/founders/${f.userId}/resend`);
+    if (json) {
+      setMessage({ ok: json.sent, text: json.sent ? `New code emailed to @${f.username}.` : `Code created but not emailed: ${json.error}` });
+      load();
+    }
+  };
+
+  const handleGrant = async (action: "grant" | "revoke") => {
+    if (!grantUser.trim()) return;
+    if (action === "revoke" && !window.confirm(`Remove the ${adminPackName(grantPack)} Pack from @${grantUser.replace(/^@/, "")}?`)) return;
+    const json = await post(action, `/api/admin/packs/${action}`, { username: grantUser, packId: grantPack });
+    if (json) {
+      setMessage({ ok: true, text: `${action === "grant" ? "Granted" : "Removed"} the ${adminPackName(json.packId)} Pack ${action === "grant" ? "to" : "from"} @${json.username}.` });
+      load();
+    }
+  };
+
+  const handleBatch = async () => {
+    const json = await post("batch", "/api/admin/packs/contest-codes", { label: batchLabel, count: batchCount, packId: batchPack || null });
+    if (json) {
+      setBatchCodes(json.codes || []);
+      load();
+    }
+  };
+
+  const card = "bg-slate-950 border border-slate-900 rounded-2xl p-4 space-y-3";
+  const input = "px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-red-500";
+  const btn = "px-3 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
+
+  if (loadError) {
+    return (
+      <div className={card}>
+        <p className="text-xs text-rose-300 font-mono">Could not load packs data: {loadError}</p>
+        <p className="text-[11px] text-slate-400">If this says a table or function is missing, run the step 2 SQL in Supabase.</p>
+        <button onClick={load} className={`${btn} bg-slate-900 border-slate-800 text-slate-200`}>Try again</button>
+      </div>
+    );
+  }
+  if (!data) return <p className="text-xs text-slate-500 font-mono">Loading packs…</p>;
+
+  return (
+    <div className="max-w-4xl space-y-4">
+      {message && (
+        <p className={`text-xs font-mono rounded-xl px-3 py-2 border ${message.ok ? "text-emerald-300 bg-emerald-950/30 border-emerald-800/50" : "text-rose-300 bg-rose-950/30 border-rose-800/50"}`}>{message.text}</p>
+      )}
+      {!data.emailConfigured && (
+        <p className="text-xs font-mono rounded-xl px-3 py-2 border text-amber-300 bg-amber-950/30 border-amber-800/50">
+          Email isn't set up on the server (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS in Vercel). Codes are still created and founders can claim in the app, but nothing is emailed.
+        </p>
+      )}
+
+      <div className="grid grid-cols-3 gap-3">
+        {[
+          ["Founders", `${data.stats.foundersAssigned}/${data.limit}`],
+          ["Codes emailed", data.stats.codesEmailed],
+          ["Redeemed", data.stats.redeemed],
+        ].map(([label, value]) => (
+          <div key={String(label)} className={card}>
+            <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider block">{label}</span>
+            <span className="text-2xl font-black text-white">{value}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className={card}>
+        <h3 className="text-xs font-black text-slate-200 uppercase tracking-widest">Per pack</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          {REACTION_PACKS.map((p) => (
+            <div key={p.id} className="rounded-xl bg-slate-900 border border-slate-800 p-2">
+              <span className="text-xs font-bold text-white block">{p.name}</span>
+              <span className="text-[10px] font-mono text-slate-400 block">Notify me: {data.interest[p.id] || 0}</span>
+              <span className="text-[10px] font-mono text-slate-400 block">Owners: {data.owners[p.id] || 0}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className={card}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-xs font-black text-slate-200 uppercase tracking-widest">Founders</h3>
+          <button onClick={handleSendAll} disabled={busy !== null || pending.length === 0} className={`${btn} bg-red-600 border-red-500 text-white`}>
+            {busy === "sendAll" ? "Sending…" : `Send founder codes to current users (${pending.length})`}
+          </button>
+        </div>
+        {sendResults && sendResults.length > 0 && (
+          <ul className="text-[11px] font-mono space-y-0.5">
+            {sendResults.map((r) => (
+              <li key={r.foundingNumber} className={r.sent ? "text-emerald-300" : "text-rose-300"}>
+                #{r.foundingNumber} @{r.username || "?"}: {r.sent ? "sent" : `not sent (${r.error})`}
+              </li>
+            ))}
+          </ul>
+        )}
+        {data.founders.length === 0 ? (
+          <p className="text-xs text-slate-500">No founders yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px] font-mono">
+              <thead>
+                <tr className="text-slate-500 text-left">
+                  <th className="py-1 pr-2">#</th><th className="pr-2">User</th><th className="pr-2">Email</th><th className="pr-2">Code</th><th className="pr-2">Emailed</th><th className="pr-2">Pack</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.founders.map((f) => (
+                  <tr key={f.userId} className="border-t border-slate-900 text-slate-300">
+                    <td className="py-1.5 pr-2 font-bold text-amber-300">{String(f.foundingNumber).padStart(3, "0")}</td>
+                    <td className="pr-2">@{f.username || "?"}</td>
+                    <td className="pr-2 truncate max-w-[160px]">{f.email || "none"}</td>
+                    <td className="pr-2">{f.codeLast4 ? `…${f.codeLast4}` : "none"}</td>
+                    <td className="pr-2">{f.emailedAt ? new Date(f.emailedAt).toLocaleDateString() : "no"}</td>
+                    <td className="pr-2">{f.redeemedPackId ? adminPackName(f.redeemedPackId) : "not yet"}</td>
+                    <td>
+                      {!f.redeemedPackId && (
+                        <button onClick={() => handleResend(f)} disabled={busy !== null} className={`${btn} py-1 bg-slate-900 border-slate-800 text-slate-200`}>
+                          {busy === `resend-${f.userId}` ? "…" : f.emailedAt ? "Resend" : "Send"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className={card}>
+        <h3 className="text-xs font-black text-slate-200 uppercase tracking-widest">Grant or remove a pack</h3>
+        <div className="flex flex-wrap gap-2">
+          <input value={grantUser} onChange={(e) => setGrantUser(e.target.value)} placeholder="@username" className={`${input} flex-1 min-w-[140px]`} />
+          <select value={grantPack} onChange={(e) => setGrantPack(e.target.value)} className={input}>
+            {REACTION_PACKS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <button onClick={() => handleGrant("grant")} disabled={busy !== null || !grantUser.trim()} className={`${btn} bg-emerald-700 border-emerald-600 text-white`}>Grant</button>
+          <button onClick={() => handleGrant("revoke")} disabled={busy !== null || !grantUser.trim()} className={`${btn} bg-slate-900 border-slate-800 text-rose-300`}>Remove</button>
+        </div>
+      </div>
+
+      <div className={card}>
+        <h3 className="text-xs font-black text-slate-200 uppercase tracking-widest">Contest codes</h3>
+        <p className="text-[11px] text-slate-400">Single-use codes for giveaways. Each works once, on whichever account redeems it first, and one per account per contest. You'll see the codes only once, so copy them now.</p>
+        <div className="flex flex-wrap gap-2">
+          <input value={batchLabel} onChange={(e) => setBatchLabel(e.target.value)} placeholder="Contest name, e.g. Halloween witch" className={`${input} flex-1 min-w-[180px]`} />
+          <input type="number" min={1} max={100} value={batchCount} onChange={(e) => setBatchCount(Math.max(1, Math.min(100, Number(e.target.value) || 1)))} className={`${input} w-20`} />
+          <select value={batchPack} onChange={(e) => setBatchPack(e.target.value)} className={input}>
+            <option value="">Winner picks any pack</option>
+            {REACTION_PACKS.map((p) => <option key={p.id} value={p.id}>{p.name} only</option>)}
+          </select>
+          <button onClick={handleBatch} disabled={busy !== null || !batchLabel.trim()} className={`${btn} bg-red-600 border-red-500 text-white`}>
+            {busy === "batch" ? "Making…" : "Make codes"}
+          </button>
+        </div>
+        {batchCodes && (
+          <div className="space-y-2">
+            <textarea readOnly value={batchCodes.join("\n")} rows={Math.min(10, batchCodes.length)} className={`${input} w-full font-mono`} />
+            <button onClick={() => navigator.clipboard.writeText(batchCodes.join("\n")).then(() => setMessage({ ok: true, text: "Codes copied." }), (err) => setMessage({ ok: false, text: `Copy failed: ${err?.message || err}` }))} className={`${btn} bg-slate-900 border-slate-800 text-slate-200`}>
+              Copy codes
+            </button>
+          </div>
+        )}
+        {data.contestBatches.length > 0 && (
+          <ul className="text-[11px] font-mono text-slate-400 space-y-0.5">
+            {data.contestBatches.map((b) => (
+              <li key={b.label}>{b.label}: {b.redeemed}/{b.total} redeemed · {adminPackName(b.packId)}</li>
+            ))}
+          </ul>
         )}
       </div>
     </div>

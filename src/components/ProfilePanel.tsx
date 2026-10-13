@@ -11,7 +11,8 @@ import {
   signOutSupabase, 
   updateUserPassword, 
   syncUserProfile,
-  fetchMyProfile
+  fetchMyProfile,
+  getAuthToken
 } from "../utils/supabaseClient";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import OfficialBadge from "./OfficialBadge";
@@ -63,6 +64,7 @@ export default function ProfilePanel({
   const [editedUsername, setEditedUsername] = useState(currentUsername);
   const [isOfficial, setIsOfficial] = useState(false);
   const [badgeType, setBadgeType] = useState<"official" | "verified_business" | null>(null);
+  const [foundingNumber, setFoundingNumber] = useState<number | null>(null);
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [isSavingUsername, setIsSavingUsername] = useState(false);
   const savedUsernameRef = useRef<string | null>(null);
@@ -89,6 +91,15 @@ export default function ProfilePanel({
     setIsEditingUsername(false);
 
     let isCurrent = true;
+
+    // Founding 100 number (cosmetic)
+    getAuthToken()
+      .then((token) => fetch("/api/me/founder", { headers: { Authorization: `Bearer ${token}` } }))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (isCurrent) setFoundingNumber(typeof data?.foundingNumber === "number" ? data.foundingNumber : null);
+      })
+      .catch((err) => console.error("Could not load founder status:", err));
 
     // Fetch user profile & email details only when the panel opens
     fetchMyProfile()
@@ -431,6 +442,9 @@ export default function ProfilePanel({
                     ) : null}
                     <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
                   </div>
+                )}
+                {!isEditingUsername && foundingNumber !== null && (
+                  <span className="block text-[10px] font-mono font-bold text-amber-300/90 mt-0.5">Founding #{String(foundingNumber).padStart(3, "0")}</span>
                 )}
                 <div className="mt-1.5 flex items-center">
                   <input

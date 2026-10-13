@@ -8,12 +8,14 @@ export interface PackOwnership {
   loaded: boolean;
 }
 
+export type PackOwnershipState = PackOwnership & { reload: () => Promise<void> };
+
 const EMPTY: PackOwnership = { ownedPackIds: [], isOfficial: false, signedIn: false, loaded: false };
 
 // Owned packs for the current user from GET /api/me/packs. Free sample items are
 // usable without owning anything, so an empty list still allows samples.
 // `refreshKey` (e.g. the username) refetches after sign-in/out.
-export function usePackOwnership(refreshKey?: string | null): PackOwnership {
+export function usePackOwnership(refreshKey?: string | null): PackOwnershipState {
   const [state, setState] = useState<PackOwnership>(EMPTY);
 
   const load = useCallback(async () => {
@@ -41,5 +43,5 @@ export function usePackOwnership(refreshKey?: string | null): PackOwnership {
     load();
   }, [load, refreshKey]);
 
-  return state;
+  return { ...state, reload: load };
 }

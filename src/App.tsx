@@ -418,6 +418,14 @@ export default function App() {
       setPacksPage({ packId: typeof packId === "string" ? packId : null });
     };
     window.addEventListener(OPEN_PACKS_EVENT, handleOpenPacks);
+    // Founder emails link to /?packs=1 so the Packs page opens directly.
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("packs")) {
+      setPacksPage({ packId: null });
+      params.delete("packs");
+      const qs = params.toString();
+      window.history.replaceState(window.history.state, "", `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`);
+    }
     return () => window.removeEventListener(OPEN_PACKS_EVENT, handleOpenPacks);
   }, []);
 

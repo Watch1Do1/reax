@@ -5,6 +5,7 @@ import "express";
 import "@supabase/supabase-js";
 import "@google/genai";
 import "dotenv";
+import "nodemailer";
 
 const require = createRequire(import.meta.url);
 
