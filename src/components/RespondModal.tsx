@@ -849,7 +849,12 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     e.stopPropagation();
     dragDepthRef.current = 0;
     setIsDragOver(false);
-    if (step !== "upload_capture") return;
+    if (step !== "upload_capture") {
+      window.dispatchEvent(
+        new CustomEvent("reax_toast", { detail: { message: "Go back to the first step to add a different file." } })
+      );
+      return;
+    }
     readDroppedFile(e.dataTransfer).then((file) => {
       if (file) processUploadFile(file);
       else setError(UNREADABLE_DROP_MESSAGE);
@@ -1349,14 +1354,14 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 overflow-hidden"
       style={{ overscrollBehavior: "none" }}
+      onDragEnter={handleModalDragEnter}
+      onDragOver={handleModalDragOver}
+      onDragLeave={handleModalDragLeave}
+      onDrop={handleModalDrop}
     >
       <div
         className="relative w-full max-w-lg bg-slate-950/95 border border-slate-800/40 rounded-3xl overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.7)] flex flex-col max-h-[92vh]"
         style={{ overscrollBehavior: "contain" }}
-        onDragEnter={handleModalDragEnter}
-        onDragOver={handleModalDragOver}
-        onDragLeave={handleModalDragLeave}
-        onDrop={handleModalDrop}
       >
         {isDragOver && (
           <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-3xl border-2 border-dashed border-indigo-400 bg-indigo-500/15 backdrop-blur-sm">

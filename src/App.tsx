@@ -1035,6 +1035,9 @@ export default function App() {
     };
     const onDragOver = (e: DragEvent) => {
       if (!dragHasFiles(e)) return;
+      // A modal drop zone (e.g. RespondModal) already handled this event and chose its own
+      // dropEffect; overriding it to "none" here would make the browser cancel the drop.
+      if (e.defaultPrevented) return;
       // Always prevent default so the browser never navigates to a dropped file
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = anyModalOpen() ? "none" : "copy";
