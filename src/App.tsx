@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { dragHasFiles, isSupportedPostFile } from "./utils/fileDrop";
 import { 
   Film, Sparkles, RefreshCw, Plus, Heart, MessageCircle, HelpCircle, 
   Volume2, Settings, MessageSquare, Flame, CheckCircle, Info, Star,
@@ -1005,14 +1006,73 @@ export default function App() {
   };
 
   // Open Respond modal to create a fresh Root Clip
-  const handleCreateRootClip = async () => {
+  const handleCreateRootClip = async (): Promise<boolean> => {
     const quotaExceeded = await checkGuestQuotaBeforeComposer();
-    if (quotaExceeded) return;
+    if (quotaExceeded) return false;
 
     setReplyParent(null);
     setRespondTone(null);
     setIsRespondModalOpen(true);
+    return true;
   };
+
+  // Desktop drag-and-drop anywhere on the page -> open the new-post window with the file loaded
+  const [droppedPostFile, setDroppedPostFile] = useState<File | null>(null);
+  const [isPageDragOver, setIsPageDragOver] = useState(false);
+  const pageDragDepthRef = useRef(0);
+  const isRespondModalOpenRef = useRef(isRespondModalOpen);
+  isRespondModalOpenRef.current = isRespondModalOpen;
+  const handleCreateRootClipRef = useRef(handleCreateRootClip);
+  handleCreateRootClipRef.current = handleCreateRootClip;
+  useEffect(() => {
+    // Any open modal/panel locks body scroll (useBodyScrollLock sets position: fixed)
+    const anyModalOpen = () => isRespondModalOpenRef.current || document.body.style.position === "fixed";
+    const onDragEnter = (e: DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      pageDragDepthRef.current += 1;
+      if (!anyModalOpen()) setIsPageDragOver(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      // Always prevent default so the browser never navigates to a dropped file
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = anyModalOpen() ? "none" : "copy";
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      pageDragDepthRef.current = Math.max(0, pageDragDepthRef.current - 1);
+      if (pageDragDepthRef.current === 0) setIsPageDragOver(false);
+    };
+    const onDrop = async (e: DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      pageDragDepthRef.current = 0;
+      setIsPageDragOver(false);
+      if (anyModalOpen()) return;
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      if (!isSupportedPostFile(file)) {
+        window.dispatchEvent(
+          new CustomEvent("reax_toast", { detail: { message: "Please drop an image, GIF, or video file." } })
+        );
+        return;
+      }
+      setDroppedPostFile(file);
+      const opened = await handleCreateRootClipRef.current();
+      if (!opened) setDroppedPostFile(null);
+    };
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
 
   // Post a saved reaction from the Vault directly to the feed or as a reply
   const handlePostSavedReaction = async (reax: SavedReaction, parentId: string | null = null) => {
@@ -1626,6 +1686,16 @@ export default function App() {
         </div>
       </footer>
 
+      {/* Full-page drag-and-drop overlay (desktop) */}
+      {isPageDragOver && (
+        <div className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="mx-6 px-10 py-12 rounded-3xl border-2 border-dashed border-indigo-400 bg-slate-950/90 text-center">
+            <p className="text-xl font-bold text-white">Drop to post</p>
+            <p className="mt-1 text-xs font-mono text-slate-400">Photo, GIF, or video</p>
+          </div>
+        </div>
+      )}
+
       {/* Modals & Overlays */}
       <AnimatePresence>
         
@@ -1638,13 +1708,16 @@ export default function App() {
             initialTone={respondTone}
             username={username}
             remixData={remixData}
+            initialFile={droppedPostFile}
             onClose={() => {
               setIsRespondModalOpen(false);
               setRemixData(null);
+              setDroppedPostFile(null);
             }}
             onSuccess={() => {
               setIsRespondModalOpen(false);
               setRemixData(null);
+              setDroppedPostFile(null);
               setRefreshTrigger((prev) => prev + 1);
             }}
           />

@@ -18,6 +18,7 @@ import OfficialBadge from "./OfficialBadge";
 import BusinessBadge from "./BusinessBadge";
 import Avatar from "./Avatar";
 import { uploadAvatar } from "../utils/avatarUpload";
+import { dragHasFiles, isSupportedAvatarFile } from "../utils/fileDrop";
 import { isReservedUsername, RESERVED_USERNAME_MESSAGE, OFFICIAL_RENAME_MESSAGE } from "../utils/reservedUsernames";
 
 export interface ProfilePanelProps {
@@ -142,7 +143,48 @@ export default function ProfilePanel({
   const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    await uploadAvatarFile(file);
+  };
 
+  // Desktop drag-and-drop onto the avatar
+  const [isAvatarDragOver, setIsAvatarDragOver] = useState(false);
+  const avatarDragDepthRef = useRef(0);
+  const avatarDropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      avatarDragDepthRef.current += 1;
+      setIsAvatarDragOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      avatarDragDepthRef.current = Math.max(0, avatarDragDepthRef.current - 1);
+      if (avatarDragDepthRef.current === 0) setIsAvatarDragOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      avatarDragDepthRef.current = 0;
+      setIsAvatarDragOver(false);
+      const file = e.dataTransfer.files?.[0];
+      if (!file || isUploadingAvatar) return;
+      if (!isSupportedAvatarFile(file)) {
+        window.dispatchEvent(
+          new CustomEvent("reax_toast", { detail: { message: "Please drop a JPG, PNG, WebP, or HEIC image." } })
+        );
+        return;
+      }
+      uploadAvatarFile(file);
+    },
+  };
+
+  const uploadAvatarFile = async (file: File) => {
     setIsUploadingAvatar(true);
     try {
       const newUrl = await uploadAvatar(file);
@@ -321,7 +363,18 @@ export default function ProfilePanel({
             </div>
 
             <div className="flex items-center gap-3.5 pt-1">
-              <Avatar url={avatarUrl} name={currentUsername} size={56} />
+              <div
+                {...avatarDropHandlers}
+                title="Drop an image to change your photo"
+                className={`relative shrink-0 rounded-full ${isAvatarDragOver ? "ring-2 ring-indigo-400 ring-offset-2 ring-offset-slate-950" : ""}`}
+              >
+                <Avatar url={avatarUrl} name={currentUsername} size={56} />
+                {isAvatarDragOver && (
+                  <div className="pointer-events-none absolute inset-0 rounded-full bg-indigo-500/40 flex items-center justify-center text-[10px] font-mono font-bold text-white">
+                    Drop
+                  </div>
+                )}
+              </div>
               <div className="min-w-0 flex-1">
                 {isEditingUsername ? (
                   <form onSubmit={handleSaveUsername} className="space-y-2">

@@ -17,6 +17,7 @@ import { useBackToClose } from "../hooks/useBackToClose";
 import ClipTimelineEditor from "./ClipTimelineEditor";
 import ImageCropper from "./ImageCropper";
 import { isVoiceItEligible } from "../utils/voiceIt";
+import { dragHasFiles } from "../utils/fileDrop";
 
 interface RespondModalProps {
   key?: string;
@@ -27,6 +28,7 @@ interface RespondModalProps {
   onSuccess: () => void;
   username: string;
   remixData?: SavedReaction | null;
+  initialFile?: File | null;
 }
 
 export interface TrimInfo {
@@ -38,7 +40,7 @@ export interface TrimInfo {
   stripAudio?: boolean;
 }
 
-export default function RespondModal({ parentId, parentClip, initialTone = null, onClose, onSuccess, username, remixData = null }: RespondModalProps) {
+export default function RespondModal({ parentId, parentClip, initialTone = null, onClose, onSuccess, username, remixData = null, initialFile = null }: RespondModalProps) {
   useBodyScrollLock(true);
   useBackToClose(true, onClose);
 
@@ -819,7 +821,49 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
+    await processUploadFile(file);
+  };
 
+  // Desktop drag-and-drop: dropped files go through the exact same path as the file input
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragDepthRef = useRef(0);
+  const handleModalDragEnter = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    if (step === "upload_capture") setIsDragOver(true);
+  };
+  const handleModalDragOver = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = step === "upload_capture" ? "copy" : "none";
+  };
+  const handleModalDragLeave = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragOver(false);
+  };
+  const handleModalDrop = (e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsDragOver(false);
+    if (step !== "upload_capture") return;
+    const file = e.dataTransfer.files?.[0];
+    if (file) processUploadFile(file);
+  };
+
+  // File handed in from a page-level drop: load it once on open
+  const initialFileHandledRef = useRef(false);
+  useEffect(() => {
+    if (!initialFile || initialFileHandledRef.current) return;
+    initialFileHandledRef.current = true;
+    processUploadFile(initialFile);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFile]);
+
+  async function processUploadFile(file: File) {
     setError(null);
     setOriginalImage(null);
     const isHeic = isHeicFile(file);
@@ -1011,7 +1055,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       onMediaSelected(mediaObj);
     };
     reader.readAsDataURL(file);
-  };
+  }
 
   const handleCustomToneChange = (newTone: Clip["tone"]) => {
     setTone(newTone);
@@ -1307,7 +1351,16 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
       <div
         className="relative w-full max-w-lg bg-slate-950/95 border border-slate-800/40 rounded-3xl overflow-hidden shadow-[0_24px_64px_rgba(0,0,0,0.7)] flex flex-col max-h-[92vh]"
         style={{ overscrollBehavior: "contain" }}
+        onDragEnter={handleModalDragEnter}
+        onDragOver={handleModalDragOver}
+        onDragLeave={handleModalDragLeave}
+        onDrop={handleModalDrop}
       >
+        {isDragOver && (
+          <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center rounded-3xl border-2 border-dashed border-indigo-400 bg-indigo-500/15 backdrop-blur-sm">
+            <span className="px-4 py-2 rounded-full bg-slate-950/90 text-indigo-200 text-sm font-mono font-semibold">Drop to add</span>
+          </div>
+        )}
         
         {/* Header with zero-friction automatic context */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800/80 bg-slate-950/20 shrink-0">
