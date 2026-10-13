@@ -59,6 +59,14 @@ export default function OnboardingModal({
   const [confirmEmail, setConfirmEmail] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
   const [isResending, setIsResending] = useState(false);
+  const [resetSentEmail, setResetSentEmail] = useState("");
+  const [resetCooldown, setResetCooldown] = useState(0);
+
+  React.useEffect(() => {
+    if (resetCooldown <= 0) return;
+    const t = setTimeout(() => setResetCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resetCooldown]);
 
   React.useEffect(() => {
     if (resendCooldown <= 0) return;
@@ -97,6 +105,31 @@ export default function OnboardingModal({
     }
   };
 
+  const handleResendReset = async () => {
+    if (resetCooldown > 0 || isResending || !resetSentEmail) return;
+    setIsResending(true);
+    try {
+      const res = await resetPasswordForEmail(resetSentEmail);
+      if (res.success) {
+        toast(`Password reset email sent to ${resetSentEmail}`);
+        setResetCooldown(60);
+      } else {
+        toast(res.error || "Couldn't resend the email. Please try again.");
+      }
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const backToSignInFromReset = () => {
+    setIsForgotPassword(false);
+    setResetEmailSent(false);
+    setResetSentEmail("");
+    setResetCooldown(0);
+    setError(null);
+    setSuccessMsg(null);
+  };
+
   const validateUsername = (name: string): string | null => {
     if (name.length < 3) return "Username must be at least 3 characters";
     if (name.length > 18) return "Username must be 18 characters or fewer";
@@ -124,8 +157,9 @@ export default function OnboardingModal({
         setIsSubmitting(false);
         return;
       }
+      setResetSentEmail(cleanEmail);
       setResetEmailSent(true);
-      setSuccessMsg("Password reset link sent! Check your email.");
+      setResetCooldown(60);
     } catch (err: any) {
       setError(err?.message || "Failed to send reset email. Please try again.");
     } finally {
@@ -493,7 +527,48 @@ export default function OnboardingModal({
           ) : (
             <>
               {/* Forgot Password View */}
-              {tab === "signin" && isForgotPassword ? (
+              {tab === "signin" && isForgotPassword && resetEmailSent ? (
+                <div className="space-y-4 py-4 text-center">
+                  <div className="w-20 h-20 rounded-3xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center mx-auto text-indigo-400 shadow-lg">
+                    <Mail className="w-10 h-10" />
+                  </div>
+                  <div className="space-y-2">
+                    <h3 className="text-xl font-bold text-white font-sans">Check your email</h3>
+                    <p className="text-sm text-slate-200 font-sans leading-relaxed">
+                      We sent a password reset link to{" "}
+                      <span className="font-bold text-white break-all">{resetSentEmail || "your email"}</span>
+                    </p>
+                    <p className="text-xs text-slate-400 font-mono">From: support@getreax.com</p>
+                    <p className="text-xs text-slate-400 font-mono leading-relaxed max-w-xs mx-auto">
+                      Check spam/promotions if you don't see it in a minute.
+                    </p>
+                    <p className="text-xs text-slate-400 font-mono leading-relaxed max-w-xs mx-auto">
+                      Tap the link in the email to choose a new password.
+                    </p>
+                  </div>
+                  <div className="pt-2 flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResendReset}
+                      disabled={resetCooldown > 0 || isResending || !resetSentEmail}
+                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-mono font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isResending
+                        ? "Sending..."
+                        : resetCooldown > 0
+                        ? `Resend email (${resetCooldown}s)`
+                        : "Resend email"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={backToSignInFromReset}
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-xs rounded-xl transition-colors cursor-pointer"
+                    >
+                      ← Back to Sign In
+                    </button>
+                  </div>
+                </div>
+              ) : tab === "signin" && isForgotPassword ? (
                 <form onSubmit={handleForgotPassword} className="space-y-3.5">
                   <div className="space-y-1">
                     <h3 className="text-sm font-bold text-white font-sans">Reset Password</h3>
@@ -543,11 +618,7 @@ export default function OnboardingModal({
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsForgotPassword(false);
-                      setError(null);
-                      setSuccessMsg(null);
-                    }}
+                    onClick={backToSignInFromReset}
                     className="w-full py-2 text-center text-xs font-mono text-slate-400 hover:text-white transition-colors cursor-pointer"
                   >
                     ← Back to Sign In

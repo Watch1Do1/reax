@@ -194,6 +194,19 @@ export default function App() {
   useEffect(() => {
     let isMounted = true;
 
+    // Also open the reset modal on Supabase's own PASSWORD_RECOVERY signal, which covers
+    // recovery link formats the URL check may not recognise. Setting true twice is a no-op.
+    let authSub: { unsubscribe: () => void } | null = null;
+    getSupabaseClient()
+      .then((client) => {
+        if (!client || !isMounted) return;
+        const { data } = client.auth.onAuthStateChange((event) => {
+          if (event === "PASSWORD_RECOVERY") setIsResetPasswordModalOpen(true);
+        });
+        authSub = data.subscription;
+      })
+      .catch((err) => console.warn("Could not subscribe to auth state changes:", err));
+
     async function initAuth() {
       // 1. Process URL tokens if user arrived via email confirmation or recovery link
       try {
@@ -255,6 +268,7 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      authSub?.unsubscribe();
     };
   }, []);
 

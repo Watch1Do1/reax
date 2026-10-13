@@ -432,7 +432,7 @@ export async function signInWithEmail({
 
 /**
  * Sends a password reset email using Supabase resetPasswordForEmail.
- * Redirects back to the current origin so the user can set a new password.
+ * Redirects back to the canonical getreax.com origin so the user can set a new password.
  */
 export async function resetPasswordForEmail(email: string): Promise<{ success: boolean; error?: string }> {
   const cleanEmail = email.trim();
@@ -442,11 +442,10 @@ export async function resetPasswordForEmail(email: string): Promise<{ success: b
   try {
     const supabase = await getSupabaseClient();
     if (!supabase) {
-      return { success: true };
+      return { success: false, error: "Couldn't reach the Reax server. Please check your connection and try again." };
     }
-    const origin = typeof window !== "undefined" && window.location.origin ? window.location.origin : "";
     const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-      redirectTo: origin || undefined
+      redirectTo: getEmailRedirectOrigin()
     });
     if (error) {
       return { success: false, error: formatAuthError(error) };
@@ -467,7 +466,7 @@ export async function updateUserPassword(newPassword: string): Promise<{ success
   try {
     const supabase = await getSupabaseClient();
     if (!supabase) {
-      return { success: true };
+      return { success: false, error: "Couldn't reach the Reax server. Please check your connection and try again." };
     }
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) {
