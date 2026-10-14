@@ -23,6 +23,7 @@ import { PACK_IDS } from "../packs/manifest";
 import { sanitizeClipStyle } from "../packs/style";
 import { PackStyleLayer, packCaptionPresentation, packMediaEffectClass } from "../packs/render";
 import { usePackOwnership } from "../packs/usePackOwnership";
+import FitMedia from "./FitMedia";
 
 interface RespondModalProps {
   key?: string;
@@ -1868,47 +1869,51 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                 exit={{ opacity: 0 }}
                 className="space-y-4"
               >
-                {/* Visual loop display */}
-                <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800/80 flex items-center justify-center shadow-inner reax-protected-media" onContextMenu={blockMediaEvent}>
-                  <div className={`w-full h-full overflow-hidden flex items-center justify-center ${
-                    packMediaFx ? packMediaFx :
-                    visualEffect === "zoom" ? "animate-zoom" :
-                    visualEffect === "pan" ? "animate-pan" :
-                    visualEffect === "bounce" ? "animate-bounce-subtle" :
-                    visualEffect === "pulse" ? "animate-pulse-subtle" :
-                    visualEffect === "shake" ? "animate-shake-chaotic" :
-                    visualEffect === "glitch" ? "animate-glitch" : "animate-zoom"
-                  }`}>
-                    {selectedMedia?.isVideo ? (
-                      <div className="relative w-full h-full">
-                        <video 
-                          {...protectedMediaProps}
-                          controlsList="nodownload noremoteplayback"
-                          disablePictureInPicture
-                          src={selectedMedia.data} 
-                          className="w-full h-full object-cover reax-protected-media select-none"
-                          autoPlay 
-                          loop={!trimInfo} 
-                          muted={previewMuted}
-                          playsInline
-                          onLoadedMetadata={(e) => {
-                            if (trimInfo) {
-                              e.currentTarget.currentTime = trimInfo.start;
-                              e.currentTarget.play().catch(() => {});
-                            }
-                          }}
-                          onTimeUpdate={(e) => {
-                            if (trimInfo) {
-                              const vid = e.currentTarget;
-                              const end = trimInfo.start + trimInfo.windowDuration;
-                              if (vid.currentTime >= end - 0.05 || vid.currentTime < trimInfo.start) {
-                                vid.currentTime = trimInfo.start;
-                                if (vid.paused) vid.play().catch(() => {});
-                              }
-                            }
-                          }}
-                        />
-                        {trimInfo && (
+                {/* Visual loop display — FitMedia (same fit/aspect as feed posts) so sticker coords match */}
+                {selectedMedia?.data ? (
+                  <FitMedia
+                    src={selectedMedia.data}
+                    isVideo={!!selectedMedia.isVideo}
+                    animClass={
+                      packMediaFx ? packMediaFx :
+                      visualEffect === "zoom" ? "animate-zoom" :
+                      visualEffect === "pan" ? "animate-pan" :
+                      visualEffect === "bounce" ? "animate-bounce-subtle" :
+                      visualEffect === "pulse" ? "animate-pulse-subtle" :
+                      visualEffect === "shake" ? "animate-shake-chaotic" :
+                      visualEffect === "glitch" ? "animate-glitch" :
+                      "animate-zoom"
+                    }
+                    className="rounded-2xl border border-slate-800/80 shadow-inner"
+                    onContextMenu={blockMediaEvent}
+                    videoProps={{
+                      autoPlay: true,
+                      loop: !trimInfo,
+                      muted: previewMuted,
+                      playsInline: true,
+                      onLoadedMetadata: (e) => {
+                        if (trimInfo) {
+                          e.currentTarget.currentTime = trimInfo.start;
+                          e.currentTarget.play().catch(() => {});
+                        }
+                      },
+                      onTimeUpdate: (e) => {
+                        if (trimInfo) {
+                          const vid = e.currentTarget;
+                          const end = trimInfo.start + trimInfo.windowDuration;
+                          if (vid.currentTime >= end - 0.05 || vid.currentTime < trimInfo.start) {
+                            vid.currentTime = trimInfo.start;
+                            if (vid.paused) vid.play().catch(() => {});
+                          }
+                        }
+                      },
+                    }}
+                    imgProps={{
+                      alt: "Looping visual clip preview",
+                    }}
+                    outerChildren={
+                      <>
+                        {selectedMedia.isVideo && trimInfo && (
                           <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/80 backdrop-blur-md border border-amber-500/40 text-[10px] font-mono text-amber-300 shadow">
                             <Scissors className="w-3 h-3 text-amber-400" />
                             <span>{trimInfo.start.toFixed(1)}s – {(trimInfo.start + trimInfo.windowDuration).toFixed(1)}s ({trimInfo.windowDuration.toFixed(1)}s)</span>
@@ -1922,7 +1927,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                             </button>
                           </div>
                         )}
-                        {trimInfo && (
+                        {selectedMedia.isVideo && trimInfo && (
                           <button
                             type="button"
                             onClick={() => {
@@ -1941,133 +1946,128 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                             <span>Audio: {stripAudio ? "Muted" : "On"}</span>
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => setPreviewMuted(!previewMuted)}
-                          className="absolute bottom-3 right-3 p-1.5 bg-black/60 hover:bg-black/80 backdrop-blur text-white rounded-lg transition-all active:scale-95 z-20 cursor-pointer border border-slate-800"
-                          title={previewMuted ? "Unmute video sound" : "Mute video sound"}
-                        >
-                          {previewMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                    ) : selectedMedia?.data ? (
-                      <img 
-                        {...protectedMediaProps}
-                        src={selectedMedia.data} 
-                        className="w-full h-full object-cover reax-protected-media select-none" 
-                        alt="Looping visual clip preview"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center text-center p-6 space-y-3 w-full h-full bg-gradient-to-b from-slate-900 to-black">
-                        <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
-                          <Mic className="w-7 h-7 animate-pulse" />
-                        </div>
-                        <div className="space-y-0.5">
-                          <span className="text-xs font-mono text-amber-300 font-bold uppercase tracking-wider block">
-                            Voice Reaction (6s)
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            Audio note recorded
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Reaction Pack frame, stickers (draggable) and overlay effects */}
-                  <PackStyleLayer
-                    style={packStyle}
-                    fit="cover"
-                    editable
-                    selectedSticker={selectedPackSticker}
-                    onSelectSticker={setSelectedPackSticker}
-                    onMoveSticker={(index, x, y) =>
-                      setPackDraft((d) => ({ ...d, stickers: (d.stickers || []).map((st, i) => (i === index ? { ...st, x, y } : st)) }))
+                        {selectedMedia.isVideo && (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewMuted(!previewMuted)}
+                            className="absolute bottom-3 right-3 p-1.5 bg-black/60 hover:bg-black/80 backdrop-blur text-white rounded-lg transition-all active:scale-95 z-20 cursor-pointer border border-slate-800"
+                            title={previewMuted ? "Unmute video sound" : "Mute video sound"}
+                          >
+                            {previewMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                          </button>
+                        )}
+                        <span className="absolute top-3 left-3 px-2 py-0.5 text-[9px] font-mono font-bold tracking-widest bg-black/60 backdrop-blur-md rounded-full text-indigo-300 capitalize border border-slate-700/50 z-20">
+                          ⚡ {tone} mode
+                        </span>
+                        {canCrop && (
+                          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5">
+                            {originalImage && (
+                              <button
+                                type="button"
+                                onClick={handleUndoCrop}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-semibold text-slate-300 hover:text-white transition-all shadow-md active:scale-95 cursor-pointer"
+                                title="Undo crop and restore original photo"
+                              >
+                                <Undo2 className="w-3 h-3 text-slate-400" />
+                                <span>Undo crop</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={handleOpenCrop}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-bold text-white hover:text-indigo-300 transition-all shadow-md active:scale-95 cursor-pointer"
+                              title="Crop photo"
+                            >
+                              <Crop className="w-3 h-3 text-indigo-400" />
+                              <span>Crop</span>
+                            </button>
+                          </div>
+                        )}
+                      </>
                     }
-                  />
+                  >
+                    {/* Reaction Pack frame, stickers (draggable) and overlay effects — coords relative to media stage */}
+                    <PackStyleLayer
+                      style={packStyle}
+                      editable
+                      selectedSticker={selectedPackSticker}
+                      onSelectSticker={setSelectedPackSticker}
+                      onMoveSticker={(index, x, y) =>
+                        setPackDraft((d) => ({ ...d, stickers: (d.stickers || []).map((st, i) => (i === index ? { ...st, x, y } : st)) }))
+                      }
+                    />
 
-                  {/* Cinema Wide Screen black bars overlay */}
-                  {textStyle === "cinema" && textPosition !== "none" && (
-                    <>
-                      <div className="absolute top-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
-                      <div className="absolute bottom-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
-                    </>
-                  )}
+                    {/* Cinema Wide Screen black bars overlay */}
+                    {textStyle === "cinema" && textPosition !== "none" && (
+                      <>
+                        <div className="absolute top-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
+                        <div className="absolute bottom-0 inset-x-0 h-3 bg-black z-10 pointer-events-none" />
+                      </>
+                    )}
 
-                  {/* Optional Big overlay text with active styles */}
-                  {(() => {
-                    const stylePresetClasses: Record<string, string> = {
-                      classic: "font-sans font-black text-sm sm:text-base md:text-lg uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
-                      bold: "font-sans font-extrabold text-base sm:text-lg md:text-xl uppercase tracking-tighter drop-shadow-md",
-                      comic: "font-serif italic font-black text-sm sm:text-base md:text-lg lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
-                      glitch: "font-mono font-black text-xs sm:text-sm md:text-base uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
-                      cinema: "font-serif font-light text-xs sm:text-sm md:text-base uppercase tracking-[0.25em] text-neutral-100",
-                    };
+                    {/* Optional Big overlay text with active styles */}
+                    {(() => {
+                      const stylePresetClasses: Record<string, string> = {
+                        classic: "font-sans font-black text-sm sm:text-base md:text-lg uppercase tracking-wider drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] text-stroke-[1px_black]",
+                        bold: "font-sans font-extrabold text-base sm:text-lg md:text-xl uppercase tracking-tighter drop-shadow-md",
+                        comic: "font-serif italic font-black text-sm sm:text-base md:text-lg lowercase tracking-wide drop-shadow-[0_3px_0_rgba(0,0,0,1)]",
+                        glitch: "font-mono font-black text-xs sm:text-sm md:text-base uppercase tracking-widest skew-x-3 -rotate-1 skew-y-1 drop-shadow-[2px_2px_0_rgba(239,68,68,0.8)] [text-shadow:-2px_-2px_0_rgba(6,182,212,0.8)] animate-pulse",
+                        cinema: "font-serif font-light text-xs sm:text-sm md:text-base uppercase tracking-[0.25em] text-neutral-100",
+                      };
 
-                    const textColorClasses: Record<string, string> = {
-                      white: "text-white",
-                      yellow: "text-yellow-400",
-                      red: "text-rose-500",
-                      cyan: "text-cyan-400",
-                      navy: "text-blue-900",
-                      "navy-blue": "text-blue-900",
-                    };
+                      const textColorClasses: Record<string, string> = {
+                        white: "text-white",
+                        yellow: "text-yellow-400",
+                        red: "text-rose-500",
+                        cyan: "text-cyan-400",
+                        navy: "text-blue-900",
+                        "navy-blue": "text-blue-900",
+                      };
 
-                    const positionClasses: Record<string, string> = {
-                      "top-left": "absolute top-8 left-3 flex justify-start items-start text-left max-w-[80%] z-20 px-3 pointer-events-none",
-                      "top": "absolute top-8 inset-x-0 flex justify-center items-start text-center px-3 z-20 pointer-events-none",
-                      "top-right": "absolute top-8 right-3 flex justify-end items-start text-right max-w-[80%] z-20 px-3 pointer-events-none",
-                      "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
-                      "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
-                      "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
-                      "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
-                      "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
-                      "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
-                      "none": "hidden",
-                    };
+                      const positionClasses: Record<string, string> = {
+                        "top-left": "absolute top-8 left-3 flex justify-start items-start text-left max-w-[80%] z-20 px-3 pointer-events-none",
+                        "top": "absolute top-8 inset-x-0 flex justify-center items-start text-center px-3 z-20 pointer-events-none",
+                        "top-right": "absolute top-8 right-3 flex justify-end items-start text-right max-w-[80%] z-20 px-3 pointer-events-none",
+                        "left": "absolute inset-y-0 left-3 flex justify-start items-center text-left max-w-[80%] z-10 pointer-events-none",
+                        "center": "absolute inset-0 flex items-center justify-center text-center px-4 z-10 pointer-events-none",
+                        "right": "absolute inset-y-0 right-3 flex justify-end items-center text-right max-w-[80%] z-10 pointer-events-none",
+                        "bottom-left": "absolute bottom-3 left-3 flex justify-start items-end text-left max-w-[80%] z-10 pointer-events-none",
+                        "bottom": "absolute bottom-3 inset-x-0 flex justify-center items-end text-center px-4 z-10 pointer-events-none",
+                        "bottom-right": "absolute bottom-3 right-3 flex justify-end items-end text-right max-w-[80%] z-10 pointer-events-none",
+                        "none": "hidden",
+                      };
 
-                    return overlayText && textPosition !== "none" ? (
-                      <div className={positionClasses[textPosition] || positionClasses.bottom}>
-                        <h2 className={`${stylePresetClasses[textStyle] || stylePresetClasses.classic} ${textColorClasses[textColor] || textColorClasses.white} ${
-                          textPosition.includes("left") ? "text-left" : textPosition.includes("right") ? "text-right" : "text-center"
-                        } line-clamp-2 break-words leading-tight max-w-full ${packCaption?.className || ""}`} style={packCaption?.style}>
-                          {overlayText}
-                        </h2>
+                      return overlayText && textPosition !== "none" ? (
+                        <div className={positionClasses[textPosition] || positionClasses.bottom}>
+                          <h2 className={`${stylePresetClasses[textStyle] || stylePresetClasses.classic} ${textColorClasses[textColor] || textColorClasses.white} ${
+                            textPosition.includes("left") ? "text-left" : textPosition.includes("right") ? "text-right" : "text-center"
+                          } line-clamp-2 break-words leading-tight max-w-full ${packCaption?.className || ""}`} style={packCaption?.style}>
+                            {overlayText}
+                          </h2>
+                        </div>
+                      ) : null;
+                    })()}
+                  </FitMedia>
+                ) : (
+                  <div className="relative aspect-video rounded-2xl bg-black overflow-hidden border border-slate-800/80 flex items-center justify-center shadow-inner reax-protected-media" onContextMenu={blockMediaEvent}>
+                    <div className="flex flex-col items-center justify-center text-center p-6 space-y-3 w-full h-full bg-gradient-to-b from-slate-900 to-black">
+                      <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+                        <Mic className="w-7 h-7 animate-pulse" />
                       </div>
-                    ) : null;
-                  })()}
-
-                  {/* Active tone flag */}
-                  <span className="absolute top-3 left-3 px-2 py-0.5 text-[9px] font-mono font-bold tracking-widest bg-black/60 backdrop-blur-md rounded-full text-indigo-300 capitalize border border-slate-700/50">
-                    ⚡ {tone} mode
-                  </span>
-
-                  {/* Crop / Undo Crop button for still images */}
-                  {canCrop && (
-                    <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5">
-                      {originalImage && (
-                        <button
-                          type="button"
-                          onClick={handleUndoCrop}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-semibold text-slate-300 hover:text-white transition-all shadow-md active:scale-95 cursor-pointer"
-                          title="Undo crop and restore original photo"
-                        >
-                          <Undo2 className="w-3 h-3 text-slate-400" />
-                          <span>Undo crop</span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handleOpenCrop}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-black/75 hover:bg-black/90 backdrop-blur-md border border-slate-700/80 text-[10px] font-bold text-white hover:text-indigo-300 transition-all shadow-md active:scale-95 cursor-pointer"
-                        title="Crop photo"
-                      >
-                        <Crop className="w-3 h-3 text-indigo-400" />
-                        <span>Crop</span>
-                      </button>
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-mono text-amber-300 font-bold uppercase tracking-wider block">
+                          Voice Reaction (6s)
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          Audio note recorded
+                        </span>
+                      </div>
                     </div>
-                  )}
-                </div>
+                    <span className="absolute top-3 left-3 px-2 py-0.5 text-[9px] font-mono font-bold tracking-widest bg-black/60 backdrop-blur-md rounded-full text-indigo-300 capitalize border border-slate-700/50 z-20">
+                      ⚡ {tone} mode
+                    </span>
+                  </div>
+                )}
 
                 {/* ✍️ Prominent Manual Caption Editor (No AI required by default!) */}
                 <div className="bg-slate-950/40 p-4 border border-slate-800/60 rounded-2xl space-y-4 text-left">

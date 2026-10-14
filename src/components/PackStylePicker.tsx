@@ -159,8 +159,8 @@ export default function PackStylePicker({ tone, ownedPackIds, draft, onChange, s
         </div>
       </div>
 
-      {/* Frame + effects */}
-      <div className="grid grid-cols-3 gap-1">
+      {/* Frame + effects (None clears pack effect; selected when unset) */}
+      <div className="grid grid-cols-4 gap-1">
         {(() => {
           const locked = !usable(pack.frame.id);
           return (
@@ -173,6 +173,15 @@ export default function PackStylePicker({ tone, ownedPackIds, draft, onChange, s
             </button>
           );
         })()}
+        <button
+          type="button"
+          onClick={() => onChange({ ...draft, effect: undefined })}
+          className={`${chip(!draft.effect, false)} flex-col p-1.5`}
+          title="No visual effect"
+        >
+          <span className="text-[9px] font-black uppercase">None</span>
+          <span className="text-[7.5px] font-mono text-slate-500">effect</span>
+        </button>
         {pack.effects.map((fx) => {
           const locked = !usable(fx.id);
           return (
