@@ -4,7 +4,7 @@ import { Clip, SavedReaction } from "../types";
 import { renderWithHashtags } from "../utils/hashtags";
 import { speakText, playFilteredAudio, stopAllFilteredAudio } from "../utils/audio";
 import { generateUniqueId, loadAndSanitizeReactions } from "../utils/keyUtils";
-import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo } from "../utils/watermarkExporter";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo, loadWatermarkPosition, type WatermarkPosition } from "../utils/watermarkExporter";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
 import { getAuthToken } from "../utils/supabaseClient";
 import ShareModal from "./ShareModal";
@@ -94,13 +94,13 @@ export default function ClipCard({
     clip.mediaUrl.includes("uploads/clip-"));
 
   // High-res Watermark & Video Exporter Handlers
-  const handleDownloadVideo = async () => {          // "Create" step
+  const handleDownloadVideo = async (watermarkPos: WatermarkPosition = loadWatermarkPosition()) => {          // "Create" step
     if (isGeneratingVideo) return;
     setIsGeneratingVideo(true);
     setVideoProgress(0);
     try {
       const exportClip = !isVideo && legacyParentImage ? { ...clip, mediaUrl: legacyParentImage } : clip;
-      const { file } = await exportWatermarkedVideo(exportClip, isVideo ? videoRef.current : null, (pct) => setVideoProgress(pct));
+      const { file } = await exportWatermarkedVideo(exportClip, isVideo ? videoRef.current : null, (pct) => setVideoProgress(pct), watermarkPos);
       setExportedVideo(file);
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Video ready! Tap Save Video." } }));
     } catch (err: any) {
@@ -118,11 +118,11 @@ export default function ClipCard({
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Couldn't save the video. Please try again." } }));
     });
   };
-  const handleDownloadWatermark = async () => {
+  const handleDownloadWatermark = async (watermarkPos: WatermarkPosition = loadWatermarkPosition()) => {
     if (isSharing) return;
     setIsSharing(true);
     try {
-      await downloadWatermarkedImage(clip, isVideo ? videoRef.current : imgRef.current);
+      await downloadWatermarkedImage(clip, isVideo ? videoRef.current : imgRef.current, watermarkPos);
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Watermarked picture saved!" } }));
     } catch (err) {
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Failed to save picture" } }));
@@ -131,11 +131,11 @@ export default function ClipCard({
     }
   };
 
-  const handleCopyPicture = async () => {
+  const handleCopyPicture = async (watermarkPos: WatermarkPosition = loadWatermarkPosition()) => {
     if (isCopyingPicture) return;
     setIsCopyingPicture(true);
     try {
-      const res = await copyWatermarkedImageToClipboard(clip, isVideo ? videoRef.current : imgRef.current);
+      const res = await copyWatermarkedImageToClipboard(clip, isVideo ? videoRef.current : imgRef.current, watermarkPos);
       if (res.success) {
         setCopiedPicture(true);
         window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "📋 Copied to clipboard!" } }));
@@ -979,7 +979,7 @@ export default function ClipCard({
           {/* Quick Copy Picture Button */}
           <button 
             type="button"
-            onClick={handleCopyPicture}
+            onClick={() => handleCopyPicture()}
             disabled={isCopyingPicture}
             className="flex items-center gap-1 text-slate-400 hover:text-cyan-300 transition-colors cursor-pointer"
             title="Copy watermarked picture to clipboard"

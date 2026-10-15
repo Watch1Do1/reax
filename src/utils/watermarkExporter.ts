@@ -78,9 +78,37 @@ async function loadCORSImage(src: string, existingImg?: HTMLImageElement | null)
  * - Auto-scales font so 100% of caption words fit without EVER cutting off or using ellipses (...).
  * - Burns a bold, high-contrast, beautiful 'getREAX.com' watermark pill badge that is never lost or washed out.
  */
+export type WatermarkPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right" | "strip";
+export const WATERMARK_POSITIONS: WatermarkPosition[] = ["top-left", "top-right", "bottom-left", "bottom-right", "strip"];
+export const DEFAULT_WATERMARK_POSITION: WatermarkPosition = "bottom-right";
+const WATERMARK_POS_KEY = "reax_watermark_pos";
+
+export function isWatermarkPosition(v: unknown): v is WatermarkPosition {
+  return typeof v === "string" && (WATERMARK_POSITIONS as string[]).includes(v);
+}
+
+/** The user's saved watermark spot (localStorage "reax_watermark_pos"), default bottom-right. */
+export function loadWatermarkPosition(): WatermarkPosition {
+  if (typeof window === "undefined" || !window.localStorage) return DEFAULT_WATERMARK_POSITION;
+  const v = window.localStorage.getItem(WATERMARK_POS_KEY);
+  return isWatermarkPosition(v) ? v : DEFAULT_WATERMARK_POSITION;
+}
+
+export function saveWatermarkPosition(pos: WatermarkPosition): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  window.localStorage.setItem(WATERMARK_POS_KEY, pos);
+}
+
+/** Height of the dark bar added below the image when the watermark spot is "strip". */
+export function getWatermarkStripHeight(width: number): number {
+  const wmFontSize = Math.max(14, Math.round(width * 0.024));
+  return Math.round(wmFontSize * 1.9) + Math.round(wmFontSize * 1.4);
+}
+
 export async function generateWatermarkedCanvas(
   clip: Clip,
-  mediaEl?: HTMLImageElement | HTMLVideoElement | null
+  mediaEl?: HTMLImageElement | HTMLVideoElement | null,
+  watermarkPosition: WatermarkPosition = DEFAULT_WATERMARK_POSITION
 ): Promise<HTMLCanvasElement> {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
@@ -94,7 +122,7 @@ export async function generateWatermarkedCanvas(
     naturalW = mediaEl.videoWidth;
     naturalH = mediaEl.videoHeight;
     canvas.width = naturalW;
-    canvas.height = naturalH;
+    canvas.height = naturalH + (watermarkPosition === "strip" ? getWatermarkStripHeight(naturalW) : 0);
     ctx.drawImage(mediaEl, 0, 0, naturalW, naturalH);
   } else {
     const imgObj = await loadCORSImage(clip.mediaUrl, mediaEl instanceof HTMLImageElement ? mediaEl : null);
@@ -112,11 +140,13 @@ export async function generateWatermarkedCanvas(
     }
 
     canvas.width = exportW;
-    canvas.height = exportH;
+    canvas.height = exportH + (watermarkPosition === "strip" ? getWatermarkStripHeight(exportW) : 0);
     ctx.drawImage(imgObj, 0, 0, exportW, exportH);
   }
 
-  renderWatermarkAndCaptions(ctx, canvas.width, canvas.height, clip);
+  // Captions/letterboxing cover only the image area; a "strip" bar sits below it.
+  const imageH = watermarkPosition === "strip" ? canvas.height - getWatermarkStripHeight(canvas.width) : canvas.height;
+  renderWatermarkAndCaptions(ctx, canvas.width, imageH, clip, watermarkPosition);
   return canvas;
 }
 
@@ -128,7 +158,8 @@ export function renderWatermarkAndCaptions(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  clip: Clip
+  clip: Clip,
+  watermarkPosition: WatermarkPosition = DEFAULT_WATERMARK_POSITION
 ): void {
   // Parse effect and style parameters: "effect|preset|color|position"
   const [, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "bottom"] = (clip.effect || "zoom").split("|");
@@ -275,9 +306,6 @@ export function renderWatermarkAndCaptions(
   }
 
   // 2. Burn Distinctive, High-Contrast "getREAX.com" Watermark Badge
-  const hasCaption = Boolean(clip.overlayText && clip.overlayText.trim() && textStylePosition !== "none");
-  const pos = hasCaption ? textStylePosition : "bottom";
-
   const wmFontSize = Math.max(14, Math.round(width * 0.024));
   ctx.save();
   ctx.font = `bold ${wmFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
@@ -294,22 +322,19 @@ export function renderWatermarkAndCaptions(
   const marginX = Math.round(width * 0.035);
   const marginY = Math.round(height * 0.035);
 
-  let pillX = width - marginX - pillWidth;
-  let pillY = marginY;
-
-  // Determine safe opposite position for the watermark badge
-  if (pos.startsWith("top") || pos === "top-right" || pos === "top-left") {
-    // Caption is at top -> place watermark at bottom-right
-    pillX = width - marginX - pillWidth;
-    pillY = height - marginY - pillHeight;
-  } else if (pos.includes("right") && !pos.startsWith("bottom")) {
-    // Caption is right -> place watermark at top-left
-    pillX = marginX;
-    pillY = marginY;
+  // Badge goes where the user chose. "strip" = dark bar below the image (canvas must
+  // already be getWatermarkStripHeight(width) taller than `height`).
+  let pillX: number;
+  let pillY: number;
+  if (watermarkPosition === "strip") {
+    const stripH = getWatermarkStripHeight(width);
+    ctx.fillStyle = "#0a0f1a";
+    ctx.fillRect(0, height, width, stripH);
+    pillX = Math.round((width - pillWidth) / 2);
+    pillY = Math.round(height + (stripH - pillHeight) / 2);
   } else {
-    // Caption is bottom or center -> place watermark at top-right
-    pillX = width - marginX - pillWidth;
-    pillY = marginY;
+    pillX = watermarkPosition.endsWith("left") ? marginX : width - marginX - pillWidth;
+    pillY = watermarkPosition.startsWith("top") ? marginY : height - marginY - pillHeight;
   }
 
   // Render Pill Background with soft shadow
@@ -365,12 +390,13 @@ export function triggerFileDownload(blob: Blob, filename: string) {
  */
 export function copyWatermarkedImageToClipboard(
   clip: Clip,
-  mediaEl?: HTMLImageElement | HTMLVideoElement | null
+  mediaEl?: HTMLImageElement | HTMLVideoElement | null,
+  watermarkPosition: WatermarkPosition = DEFAULT_WATERMARK_POSITION
 ): Promise<{ success: boolean; fallbackDownloaded?: boolean; error?: string }> {
   const fileName = `reax-${clip.id.slice(0, 8)}.png`;
 
   // Start rendering now, but DO NOT await before clipboard.write().
-  const pngBlobPromise: Promise<Blob> = generateWatermarkedCanvas(clip, mediaEl).then(
+  const pngBlobPromise: Promise<Blob> = generateWatermarkedCanvas(clip, mediaEl, watermarkPosition).then(
     (canvas) =>
       new Promise<Blob>((resolve, reject) =>
         canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Failed to render image canvas"))), "image/png")
@@ -408,9 +434,10 @@ export function copyWatermarkedImageToClipboard(
  */
 export async function downloadWatermarkedImage(
   clip: Clip,
-  mediaEl?: HTMLImageElement | HTMLVideoElement | null
+  mediaEl?: HTMLImageElement | HTMLVideoElement | null,
+  watermarkPosition: WatermarkPosition = DEFAULT_WATERMARK_POSITION
 ): Promise<void> {
-  const canvas = await generateWatermarkedCanvas(clip, mediaEl);
+  const canvas = await generateWatermarkedCanvas(clip, mediaEl, watermarkPosition);
 
   return new Promise((resolve) => {
     canvas.toBlob(async (blob) => {
@@ -466,7 +493,12 @@ export async function getVideoDimensions(clip: Clip, videoEl?: HTMLVideoElement 
 }
 
 /** Transparent PNG containing only the caption + getREAX.com pill, exactly as rendered for pictures. */
-export function renderOverlayPngDataUrl(clip: Clip, width: number, height: number): string {
+export function renderOverlayPngDataUrl(
+  clip: Clip,
+  width: number,
+  height: number,
+  watermarkPosition: Exclude<WatermarkPosition, "strip"> = "bottom-right"
+): string {
   const scale = Math.min(1, 1920 / Math.max(width, height));
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(2, Math.round(width * scale));
@@ -474,7 +506,7 @@ export function renderOverlayPngDataUrl(clip: Clip, width: number, height: numbe
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Could not initialize 2D canvas context");
   ctx.clearRect(0, 0, canvas.width, canvas.height);   // keep it transparent
-  renderWatermarkAndCaptions(ctx, canvas.width, canvas.height, clip);
+  renderWatermarkAndCaptions(ctx, canvas.width, canvas.height, clip, watermarkPosition);
   return canvas.toDataURL("image/png");
 }
 
@@ -497,7 +529,8 @@ export function canExportAsVideo(clip: Clip | null | undefined, imageUrl?: strin
 export async function exportWatermarkedVideo(
   clip: Clip,
   videoEl?: HTMLVideoElement | null,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  watermarkPosition: WatermarkPosition = DEFAULT_WATERMARK_POSITION
 ): Promise<{ file: File; downloadUrl: string; fileName: string }> {
   onProgress?.(5);
   const still = !isVideoClip(clip);
@@ -509,7 +542,10 @@ export async function exportWatermarkedVideo(
   } else {
     ({ width, height } = await getVideoDimensions(clip, videoEl));
   }
-  const overlayPng = renderOverlayPngDataUrl(clip, width, height);
+  // The server overlays this PNG at the video's own size, so it can't add a bar below the
+  // frame; "strip" falls back to the default bottom-right corner for videos.
+  const videoPos: Exclude<WatermarkPosition, "strip"> = watermarkPosition === "strip" ? "bottom-right" : watermarkPosition;
+  const overlayPng = renderOverlayPngDataUrl(clip, width, height, videoPos);
   onProgress?.(15);
 
   let pct = 15;

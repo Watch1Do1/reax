@@ -16,7 +16,7 @@ import ShareModal from "./ShareModal";
 import MediaLightbox from "./MediaLightbox";
 import { PackStyleLayer, PackTag, packCaptionPresentation, packMediaEffectClass } from "../packs/render";
 import { isVoiceItEligible, openVoiceIt } from "../utils/voiceIt";
-import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo } from "../utils/watermarkExporter";
+import { copyWatermarkedImageToClipboard, downloadWatermarkedImage, exportWatermarkedVideo, deliverVideoFile, canExportAsVideo, loadWatermarkPosition, type WatermarkPosition } from "../utils/watermarkExporter";
 
 interface ThreadViewProps {
   key?: string;
@@ -362,13 +362,13 @@ export default function ThreadView({
     return parent && isVoiceItEligible(parent) ? parent.mediaUrl : null;
   }, [shareClip, clips]);
 
-  const handleDownloadVideo = async () => {
+  const handleDownloadVideo = async (watermarkPos: WatermarkPosition = loadWatermarkPosition()) => {
     if (!shareClip || isGeneratingVideo) return;
     setIsGeneratingVideo(true);
     setVideoProgress(0);
     try {
       const exportClip = shareLegacyImage ? { ...shareClip, mediaUrl: shareLegacyImage } : shareClip;
-      const { file } = await exportWatermarkedVideo(exportClip, null, (pct) => setVideoProgress(pct));
+      const { file } = await exportWatermarkedVideo(exportClip, null, (pct) => setVideoProgress(pct), watermarkPos);
       setExportedVideo(file);
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "🎬 Video ready! Tap Save Video." } }));
     } catch (err: any) {
@@ -386,11 +386,11 @@ export default function ThreadView({
     });
   };
 
-  const handleDownloadWatermark = async () => {
+  const handleDownloadWatermark = async (watermarkPos: WatermarkPosition = loadWatermarkPosition()) => {
     if (!shareClip || isSharing) return;
     setIsSharing(true);
     try {
-      await downloadWatermarkedImage(shareClip, null);
+      await downloadWatermarkedImage(shareClip, null, watermarkPos);
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "💾 Watermarked picture saved!" } }));
     } catch (err) {
       window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "Failed to save picture" } }));
@@ -399,11 +399,11 @@ export default function ThreadView({
     }
   };
 
-  const handleCopyPicture = async () => {
+  const handleCopyPicture = async (watermarkPos: WatermarkPosition = loadWatermarkPosition()) => {
     if (!shareClip || isCopyingPicture) return;
     setIsCopyingPicture(true);
     try {
-      const res = await copyWatermarkedImageToClipboard(shareClip, null);
+      const res = await copyWatermarkedImageToClipboard(shareClip, null, watermarkPos);
       if (res.success) {
         window.dispatchEvent(new CustomEvent("reax_toast", { detail: { message: "📋 Copied to clipboard!" } }));
       } else if (res.fallbackDownloaded) {

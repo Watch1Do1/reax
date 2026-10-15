@@ -2,16 +2,25 @@ import React, { useState } from "react";
 import { X, MessageSquare, Mail, Copy, Check, Download, Share2, ExternalLink, Image as ImageIcon, Film } from "lucide-react";
 import { Clip } from "../types";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
+import { WATERMARK_POSITIONS, loadWatermarkPosition, saveWatermarkPosition, type WatermarkPosition } from "../utils/watermarkExporter";
+
+const WATERMARK_POS_LABELS: Record<WatermarkPosition, string> = {
+  "top-left": "↖ Top L",
+  "top-right": "↗ Top R",
+  "bottom-left": "↙ Bot L",
+  "bottom-right": "↘ Bot R",
+  strip: "▭ Strip",
+};
 
 interface ShareModalProps {
   isOpen: boolean;
   onClose: () => void;
   clip: Clip;
-  onDownloadWatermark: () => void;
+  onDownloadWatermark: (watermarkPos: WatermarkPosition) => void;
   isGeneratingWatermark?: boolean;
-  onCopyPicture?: () => void;
+  onCopyPicture?: (watermarkPos: WatermarkPosition) => void;
   isCopyingPicture?: boolean;
-  onDownloadVideo?: () => void;
+  onDownloadVideo?: (watermarkPos: WatermarkPosition) => void;
   /** Show "Create Video" (videos, and pictures with a voice note). Defaults to clip.mediaType === "video". */
   canCreateVideo?: boolean;
   isGeneratingVideo?: boolean;
@@ -38,6 +47,11 @@ export default function ShareModal({
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [watermarkPos, setWatermarkPos] = useState<WatermarkPosition>(() => loadWatermarkPosition());
+  const chooseWatermarkPos = (pos: WatermarkPosition) => {
+    setWatermarkPos(pos);
+    saveWatermarkPosition(pos);
+  };
 
   if (!isOpen) return null;
 
@@ -187,13 +201,37 @@ export default function ShareModal({
           </div>
         )}
 
+        {/* Watermark spot picker (applies to saved/copied pictures and created videos) */}
+        <div className="mb-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">Watermark spot</div>
+          <div className="grid grid-cols-5 gap-1.5" role="radiogroup" aria-label="Watermark spot">
+            {WATERMARK_POSITIONS.map((pos) => (
+              <button
+                key={pos}
+                type="button"
+                role="radio"
+                aria-checked={watermarkPos === pos}
+                onClick={() => chooseWatermarkPos(pos)}
+                title={pos === "strip" ? "Dark bar below the picture (videos use bottom-right)" : pos.replace("-", " ")}
+                className={`px-1 py-1.5 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${
+                  watermarkPos === pos
+                    ? "bg-indigo-500/30 border-indigo-400 text-white"
+                    : "bg-slate-800/60 border-slate-700/60 text-slate-300 hover:border-slate-500"
+                }`}
+              >
+                {WATERMARK_POS_LABELS[pos]}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Primary Action Buttons */}
         <div className="space-y-2.5">
           {/* 0. Share with Sound (voice pictures only) - same action as the watermarked video button */}
           {isVoicePicture && (
             <button
               type="button"
-              onClick={isVideoReady && onSaveVideo ? onSaveVideo : onDownloadVideo}
+              onClick={isVideoReady && onSaveVideo ? onSaveVideo : () => onDownloadVideo?.(watermarkPos)}
               disabled={isGeneratingVideo}
               className="flex items-center justify-between w-full px-4 py-3 bg-gradient-to-r from-pink-600/30 via-purple-600/30 to-indigo-600/30 hover:from-pink-600/45 hover:via-purple-600/45 hover:to-indigo-600/45 border border-pink-500/50 hover:border-pink-400 rounded-xl transition-all cursor-pointer group shadow-xl"
             >
@@ -219,7 +257,7 @@ export default function ShareModal({
           {(canCreateVideo ?? clip.mediaType === "video") && onDownloadVideo && (
             <button
               type="button"
-              onClick={isVideoReady && onSaveVideo ? onSaveVideo : onDownloadVideo}
+              onClick={isVideoReady && onSaveVideo ? onSaveVideo : () => onDownloadVideo?.(watermarkPos)}
               disabled={isGeneratingVideo}
               className="flex items-center justify-between w-full px-4 py-3 bg-gradient-to-r from-indigo-600/30 via-purple-600/30 to-pink-600/30 hover:from-indigo-600/45 hover:via-purple-600/45 hover:to-pink-600/45 border border-indigo-500/50 hover:border-indigo-400 rounded-xl transition-all cursor-pointer group shadow-xl"
             >
@@ -256,7 +294,7 @@ export default function ShareModal({
           {onCopyPicture && (
             <button
               type="button"
-              onClick={onCopyPicture}
+              onClick={() => onCopyPicture(watermarkPos)}
               disabled={isCopyingPicture}
               className="flex items-center justify-between w-full px-4 py-3 bg-gradient-to-r from-cyan-500/15 via-indigo-500/15 to-purple-500/15 hover:from-cyan-500/25 hover:via-indigo-500/25 hover:to-purple-500/25 border border-cyan-500/40 hover:border-cyan-400/70 rounded-xl transition-all cursor-pointer group shadow-lg"
             >
@@ -285,7 +323,7 @@ export default function ShareModal({
           {/* 2. Download Watermarked Card */}
           <button
             type="button"
-            onClick={onDownloadWatermark}
+            onClick={() => onDownloadWatermark(watermarkPos)}
             disabled={isGeneratingWatermark}
             className="flex items-center justify-between w-full px-4 py-3 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-slate-600 rounded-xl transition-all cursor-pointer group disabled:opacity-50"
           >
