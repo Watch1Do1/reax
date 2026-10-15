@@ -244,6 +244,7 @@ export default function FastReaxPanel({
             {/* Loop Preview Canvas using parentClip.mediaUrl */}
             <div className="relative aspect-video rounded-2xl overflow-hidden bg-black border border-slate-800 shadow-md reax-protected-media" onContextMenu={blockMediaEvent}>
               <div className={`w-full h-full ${
+                visualEffect === "none" ? "" :
                 visualEffect === "zoom" ? "animate-zoom" :
                 visualEffect === "pan" ? "animate-pan" :
                 visualEffect === "bounce" ? "animate-bounce-subtle" :

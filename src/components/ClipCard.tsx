@@ -686,6 +686,7 @@ export default function ClipCard({
         const packCaption = packCaptionPresentation(clip.style);
         const animClass =
           packMediaFx ? packMediaFx :
+          kineticEffectName === "none" ? "" :
           kineticEffectName === "zoom" ? "animate-zoom" :
           kineticEffectName === "pan" ? "animate-pan" :
           kineticEffectName === "bounce" ? "animate-bounce-subtle" :

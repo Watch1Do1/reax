@@ -1876,6 +1876,7 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                     isVideo={!!selectedMedia.isVideo}
                     animClass={
                       packMediaFx ? packMediaFx :
+                      visualEffect === "none" ? "" :
                       visualEffect === "zoom" ? "animate-zoom" :
                       visualEffect === "pan" ? "animate-pan" :
                       visualEffect === "bounce" ? "animate-bounce-subtle" :
@@ -2492,10 +2493,10 @@ export default function RespondModal({ parentId, parentClip, initialTone = null,
                         {showMoreEffects ? "Fewer" : "+ More"}
                       </button>
                     </div>
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1">
+                    <div className="grid grid-cols-4 sm:grid-cols-7 gap-1">
                       {(showMoreEffects || ["pulse", "bounce", "pan"].includes(visualEffect)
-                        ? ["zoom", "shake", "glitch", "pulse", "bounce", "pan"]
-                        : ["zoom", "shake", "glitch"]
+                        ? ["none", "zoom", "shake", "glitch", "pulse", "bounce", "pan"]
+                        : ["none", "zoom", "shake", "glitch"]
                       ).map((eff) => (
                         <button
                           key={eff}
