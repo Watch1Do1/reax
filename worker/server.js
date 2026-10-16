@@ -349,9 +349,21 @@ function runFfmpeg(args, timeoutMs = 100000) {
   });
 }
 
+// Pack color effects, applied to the base media only (before the overlay PNG, so stickers,
+// frame and watermark keep their color). Same matrix as CSS saturate(): Muted = 0.35, Deadpan = 0.
+const COLOR_EFFECT_SATURATION = { muted: 0.35, deadpan: 0 };
+function colorEffectFilter(colorEffect) {
+  if (!Object.prototype.hasOwnProperty.call(COLOR_EFFECT_SATURATION, colorEffect)) return "";
+  const s = COLOR_EFFECT_SATURATION[colorEffect];
+  const L = [0.2126, 0.7152, 0.0722];
+  const row = (i) => L.map((l, j) => (l + ((i === j ? 1 : 0) - l) * s).toFixed(4));
+  const [r, g, b] = [row(0), row(1), row(2)];
+  return `,format=rgb24,colorchannelmixer=rr=${r[0]}:rg=${r[1]}:rb=${r[2]}:gr=${g[0]}:gg=${g[1]}:gb=${g[2]}:br=${b[0]}:bg=${b[1]}:bb=${b[2]}`;
+}
+
 // Builds the export command. Input 0 = clip video, input 1 = transparent overlay PNG,
 // input 2 = voice note (optional) OR anullsrc silence (when there is no audio at all).
-function buildExportArgs({ inputPath, overlayPath, voicePath, outputPath, width, height, durationSec, hasAudio, hasVoice, useFpsMode = true }) {
+function buildExportArgs({ colorEffect, inputPath, overlayPath, voicePath, outputPath, width, height, durationSec, hasAudio, hasVoice, useFpsMode = true }) {
   const scale = Math.min(1, 1920 / Math.max(width, height));          // cap long side at 1920
   const W = Math.max(2, Math.round((width * scale) / 2) * 2);          // even dimensions
   const H = Math.max(2, Math.round((height * scale) / 2) * 2);
@@ -365,7 +377,7 @@ function buildExportArgs({ inputPath, overlayPath, voicePath, outputPath, width,
 
   const fmt = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo";
   const filters = [
-    `[0:v]fps=30,scale=${W}:${H},setsar=1[base]`,
+    `[0:v]fps=30,scale=${W}:${H},setsar=1${colorEffectFilter(colorEffect)}[base]`,
     `[1:v]scale=${W}:${H},format=rgba[ov]`,
     `[base][ov]overlay=0:0:format=auto,format=yuv420p[v]`,
   ];
@@ -396,7 +408,7 @@ function buildExportArgs({ inputPath, overlayPath, voicePath, outputPath, width,
 
 // Still image (JPG/PNG/WebP/GIF) + voice note -> MP4. Input 0 = image (looped), 1 = overlay PNG, 2 = voice.
 // Same watermark overlay chain and encoder settings as buildExportArgs.
-function buildStillExportArgs({ inputPath, overlayPath, voicePath, outputPath, width, height, isGif, maxSec, useFpsMode = true }) {
+function buildStillExportArgs({ colorEffect, inputPath, overlayPath, voicePath, outputPath, width, height, isGif, maxSec, useFpsMode = true }) {
   const scale = Math.min(1, 1920 / Math.max(width, height));
   const W = Math.max(2, Math.round((width * scale) / 2) * 2);
   const H = Math.max(2, Math.round((height * scale) / 2) * 2);
@@ -407,7 +419,7 @@ function buildStillExportArgs({ inputPath, overlayPath, voicePath, outputPath, w
   args.push("-i", overlayPath, "-i", voicePath);
   const fmt = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo";
   const filters = [
-    `[0:v]fps=30,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=yuv420p[base]`,
+    `[0:v]fps=30,scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1${colorEffectFilter(colorEffect)},format=yuv420p[base]`,
     `[1:v]scale=${W}:${H},format=rgba[ov]`,
     `[base][ov]overlay=0:0:format=auto,format=yuv420p[v]`,
     `[2:a]${fmt},apad=pad_dur=0.5[a]`                                   // voice length + 0.5s tail
@@ -443,6 +455,8 @@ app.post("/export", async (req, res) => {
   if (!incomingSecret || incomingSecret !== WORKER_SECRET) return res.status(401).json({ error: "Unauthorized worker request" });
 
   const { clipId, mediaUrl, voiceAudioUrl, overlayPng, userId, mode } = req.body || {};
+  // Optional pack color effect; anything outside the allowlist means "no effect".
+  const colorEffect = req.body?.colorEffect === "muted" || req.body?.colorEffect === "deadpan" ? req.body.colorEffect : null;
   const isStill = mode === "still";
   if (!clipId || !mediaUrl || !userId || typeof overlayPng !== "string" || !overlayPng.startsWith("data:image/png;base64,")) {
     return res.status(400).json({ error: "Missing required parameters (clipId, mediaUrl, userId, overlayPng)" });
@@ -472,7 +486,7 @@ app.post("/export", async (req, res) => {
       const isGif = await new Promise((resolve) => execFile("ffprobe", ["-v", "error", "-show_entries", "stream=codec_name", "-of", "csv=p=0", inputPath], { timeout: 15000 }, (err, out) => resolve(!err && /gif/i.test(String(out)))));
       // Voice length is often unknown for browser recordings, so -shortest ends it; -t is only a safety cap.
       const maxSec = voice.duration > 0 ? voice.duration + 0.5 : 30.5;
-      await runWithFpsFallback(buildStillExportArgs, { inputPath, overlayPath, voicePath, outputPath, width: img.width, height: img.height, isGif, maxSec });
+      await runWithFpsFallback(buildStillExportArgs, { colorEffect, inputPath, overlayPath, voicePath, outputPath, width: img.width, height: img.height, isGif, maxSec });
     } else {
     const probe = await probeMedia(inputPath);
     if (!probe.hasVideo || !probe.width || !probe.height || !probe.duration) {
@@ -492,7 +506,7 @@ app.post("/export", async (req, res) => {
     }
 
     // No audio (stripAudio) is normal: buildExportArgs adds an anullsrc silent track.
-    const baseOpts = { inputPath, overlayPath, voicePath, outputPath, width: probe.width, height: probe.height, durationSec: probe.duration, hasAudio: probe.hasAudio, hasVoice };
+    const baseOpts = { colorEffect, inputPath, overlayPath, voicePath, outputPath, width: probe.width, height: probe.height, durationSec: probe.duration, hasAudio: probe.hasAudio, hasVoice };
     try {
       await runFfmpeg(buildExportArgs({ ...baseOpts, useFpsMode: true }));
     } catch (e) {

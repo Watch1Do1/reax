@@ -4292,6 +4292,12 @@ app.post("/api/clips/:id/export", async (req, res) => {
     return res.status(400).json({ error: "Invalid overlay image." });
   }
 
+  // Pack color effect comes from the clip's stored (already sanitized) style, never from the client.
+  const storedEffect = clip.style?.effect;
+  const colorEffect: "muted" | "deadpan" | null =
+    storedEffect === "sarcasm-fx-muted" ? "muted" :
+    storedEffect === "sarcasm-fx-deadpan-freeze" ? "deadpan" : null;
+
   const workerBaseUrl = process.env.CLOUD_RUN_WORKER_URL || process.env.FFMPEG_WORKER_URL;
   if (!workerBaseUrl) return res.status(503).json({ error: "Video export is not configured." });
 
@@ -4305,6 +4311,7 @@ app.post("/api/clips/:id/export", async (req, res) => {
         mode: stillImageUrl ? "still" : "video",
         voiceAudioUrl: clip.voiceAudioUrl || null,
         overlayPng,
+        colorEffect,                             // derived from stored style; older workers ignore it
         userId: user.id                          // session user, never client-provided
       }),
       signal: AbortSignal.timeout(55000)         // Vercel maxDuration is 60s (vercel.json)
