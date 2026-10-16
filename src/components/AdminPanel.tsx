@@ -2302,10 +2302,14 @@ interface PacksFounderRow {
   emailedAt: string | null;
   redeemedPackId: string | null;
   redeemedAt: string | null;
+  expiresAt: string | null;
+  unsubscribed: boolean;
 }
 interface PacksOverview {
   limit: number;
-  stats: { foundersAssigned: number; codesEmailed: number; redeemed: number };
+  full: boolean;
+  codeTtlDays: number;
+  stats: { foundersAssigned: number; codesEmailed: number; redeemed: number; unsubscribed: number };
   interest: Record<string, number>;
   owners: Record<string, number>;
   founders: PacksFounderRow[];
@@ -2364,7 +2368,7 @@ function PacksTab({ adminFetch }: { adminFetch: (url: string, options?: any) => 
     }
   };
 
-  const pending = (data?.founders || []).filter((f) => !f.emailedAt && !f.redeemedPackId);
+  const pending = (data?.founders || []).filter((f) => !f.emailedAt && !f.redeemedPackId && !f.unsubscribed);
 
   const handleSendAll = async () => {
     if (pending.length === 0) return;
@@ -2430,6 +2434,12 @@ function PacksTab({ adminFetch }: { adminFetch: (url: string, options?: any) => 
         </p>
       )}
 
+      <p className="text-xs font-mono rounded-xl px-3 py-2 border text-amber-300 bg-amber-950/30 border-amber-800/50">
+        {data.full
+          ? `Founding ${data.limit} is full. New signups don't get a number or a code email.`
+          : `${data.stats.foundersAssigned} of ${data.limit} claimed. Founder codes expire ${data.codeTtlDays} days after they're sent. Unsubscribed: ${data.stats.unsubscribed}.`}
+      </p>
+
       <div className="grid grid-cols-3 gap-3">
         {[
           ["Founders", `${data.stats.foundersAssigned}/${data.limit}`],
@@ -2479,7 +2489,7 @@ function PacksTab({ adminFetch }: { adminFetch: (url: string, options?: any) => 
             <table className="w-full text-[11px] font-mono">
               <thead>
                 <tr className="text-slate-500 text-left">
-                  <th className="py-1 pr-2">#</th><th className="pr-2">User</th><th className="pr-2">Email</th><th className="pr-2">Code</th><th className="pr-2">Emailed</th><th className="pr-2">Pack</th><th></th>
+                  <th className="py-1 pr-2">#</th><th className="pr-2">User</th><th className="pr-2">Email</th><th className="pr-2">Code</th><th className="pr-2">Emailed</th><th className="pr-2">Expires</th><th className="pr-2">Pack</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -2489,10 +2499,11 @@ function PacksTab({ adminFetch }: { adminFetch: (url: string, options?: any) => 
                     <td className="pr-2">@{f.username || "?"}</td>
                     <td className="pr-2 truncate max-w-[160px]">{f.email || "none"}</td>
                     <td className="pr-2">{f.codeLast4 ? `…${f.codeLast4}` : "none"}</td>
-                    <td className="pr-2">{f.emailedAt ? new Date(f.emailedAt).toLocaleDateString() : "no"}</td>
+                    <td className="pr-2">{f.unsubscribed ? "unsubscribed" : f.emailedAt ? new Date(f.emailedAt).toLocaleDateString() : "no"}</td>
+                    <td className="pr-2">{f.redeemedPackId ? "" : f.expiresAt ? new Date(f.expiresAt).toLocaleDateString() : ""}</td>
                     <td className="pr-2">{f.redeemedPackId ? adminPackName(f.redeemedPackId) : "not yet"}</td>
                     <td>
-                      {!f.redeemedPackId && (
+                      {!f.redeemedPackId && !f.unsubscribed && (
                         <button onClick={() => handleResend(f)} disabled={busy !== null} className={`${btn} py-1 bg-slate-900 border-slate-800 text-slate-200`}>
                           {busy === `resend-${f.userId}` ? "…" : f.emailedAt ? "Resend" : "Send"}
                         </button>

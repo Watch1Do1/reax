@@ -27,6 +27,10 @@ const packName = (id: string | null | undefined) => REACTION_PACKS.find((p) => p
 
 // Quiet Packs page: what's in each pack, what you can use today (free samples),
 // and a "Notify me" per pack. Not a store: no prices, no pushing.
+function formatDeadline(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
 export default function PacksPage({ focusPackId = null, username = null, onClose }: PacksPageProps) {
   useBodyScrollLock(true);
   useBackToClose(true, onClose);
@@ -35,7 +39,16 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
   const [pendingPack, setPendingPack] = useState<string | null>(null);
   const [notifyError, setNotifyError] = useState<string | null>(null);
   const packRefs = useRef<Record<string, HTMLElement | null>>({});
-  const [founder, setFounder] = useState<{ foundingNumber: number | null; hasCode: boolean; redeemedPackId: string | null } | null>(null);
+  const [founder, setFounder] = useState<{
+    foundingNumber: number | null;
+    hasCode: boolean;
+    codeExpiresAt: string | null;
+    codeExpired: boolean;
+    redeemedPackId: string | null;
+    claimed: number | null;
+    limit: number;
+    full: boolean;
+  } | null>(null);
   const [codeInput, setCodeInput] = useState("");
   const [codePack, setCodePack] = useState("");
   const [redeemBusy, setRedeemBusy] = useState(false);
@@ -88,8 +101,8 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
 
   const loadFounder = async () => {
     try {
-      const token = await getAuthToken();
-      const res = await fetch("/api/me/founder", { headers: { Authorization: `Bearer ${token}` } });
+      const token = ownership.signedIn ? await getAuthToken() : null;
+      const res = await fetch("/api/me/founder", token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setFounder(await res.json());
     } catch (err) {
@@ -98,7 +111,7 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
   };
 
   useEffect(() => {
-    if (ownership.signedIn) loadFounder();
+    loadFounder();
   }, [ownership.signedIn]);
 
   const submitRedeem = async (url: string, body: Record<string, unknown>) => {
@@ -155,7 +168,10 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
             ) : founder.hasCode ? (
               <>
                 <p className="text-sm font-bold text-amber-200">You're Founding #{pad(founder.foundingNumber)}. Pick your free pack.</p>
-                <p className="text-[11px] text-amber-100/70">One pack, free forever. No need to find the email, just tap one.</p>
+                <p className="text-[11px] text-amber-100/70">
+                  One pack, free forever. No need to find the email, just tap one.
+                  {founder.codeExpiresAt && <> Claim it by <b>{formatDeadline(founder.codeExpiresAt)}</b>.</>}
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {REACTION_PACKS.filter((p) => !ownership.ownedPackIds.includes(p.id)).map((p) => (
                     <button
@@ -170,12 +186,25 @@ export default function PacksPage({ focusPackId = null, username = null, onClose
                   ))}
                 </div>
               </>
+            ) : founder.codeExpired ? (
+              <p className="text-sm font-bold text-amber-200">
+                You're Founding #{pad(founder.foundingNumber)}. Your founder code expired{founder.codeExpiresAt ? ` on ${formatDeadline(founder.codeExpiresAt)}` : ""}. Email support@getreax.com if you missed it.
+              </p>
             ) : (
               <p className="text-sm font-bold text-amber-200">
                 You're Founding #{pad(founder.foundingNumber)}. Your founder code is on its way by email.
               </p>
             )}
           </div>
+        )}
+
+        {/* Founding 100 progress */}
+        {founder && typeof founder.claimed === "number" && (
+          <p className="text-[11px] font-mono text-amber-300/80">
+            {founder.full
+              ? `Founding ${founder.limit} is full. Thanks to everyone who joined early.`
+              : `Founding ${founder.limit}: ${founder.claimed} of ${founder.limit} claimed.`}
+          </p>
         )}
 
         <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 space-y-2">

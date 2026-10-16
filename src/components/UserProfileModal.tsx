@@ -46,6 +46,25 @@ export default function UserProfileModal({
   const [likedLoaded, setLikedLoaded] = useState(false);
   const [likedError, setLikedError] = useState<string | null>(null);
 
+  // Public Founding 100 number for this profile (no private data).
+  const [foundingNumber, setFoundingNumber] = useState<number | null>(null);
+  useEffect(() => {
+    setFoundingNumber(null);
+    if (!isOpen || !username) return;
+    const clean = username.trim().replace(/^@/, "");
+    if (!clean || clean.startsWith("~")) return;
+    let cancelled = false;
+    fetch(`/api/users/badge?username=${encodeURIComponent(clean)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled) setFoundingNumber(typeof data?.foundingNumber === "number" ? data.foundingNumber : null);
+      })
+      .catch((err) => console.error("Could not load founder badge:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [username, isOpen]);
+
   // Reset per profile open so another account's view never shows stale likes.
   useEffect(() => {
     setFilterTab(initialTab === "liked" && !isOwnProfile ? "all" : initialTab);
@@ -227,6 +246,11 @@ export default function UserProfileModal({
                   ) : badgeType === "verified_business" ? (
                     <BusinessBadge size="md" />
                   ) : null}
+                  {foundingNumber !== null && (
+                    <span className="text-[10px] px-2 py-0.5 bg-amber-500/15 border border-amber-500/40 rounded-full text-amber-300 font-mono font-bold" title="One of the first 100 people on Reax">
+                      Founder #{foundingNumber}
+                    </span>
+                  )}
                   {isGuest ? (
                     <span className="text-[10px] px-2 py-0.5 bg-slate-800 border border-slate-700 rounded-full text-slate-400 font-mono font-bold">
                       GUEST

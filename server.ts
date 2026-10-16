@@ -2503,6 +2503,48 @@ const FOUNDER_LIMIT = 100;
 const CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"; // no 0/O, 1/I/L
 const SITE_URL = "https://www.getreax.com";
 const PACKS_URL = `${SITE_URL}/?packs=1`;
+// Founder codes expire this many days after they're issued. Change here only.
+const FOUNDER_CODE_TTL_DAYS = 60;
+
+// One-click email unsubscribe. Links carry HMAC-SHA256(userId) so they can't be
+// forged for other accounts. Key: EMAIL_UNSUB_SECRET, or (if unset) a key derived
+// from the server-only service role key.
+function unsubscribeKey(): string | null {
+  const explicit = cleanEnvVar(process.env.EMAIL_UNSUB_SECRET);
+  if (explicit) return explicit;
+  if (!SUPABASE_SERVICE_ROLE_KEY) return null;
+  return crypto.createHash("sha256").update(`reax-email-unsubscribe:${SUPABASE_SERVICE_ROLE_KEY}`, "utf8").digest("hex");
+}
+function unsubscribeToken(userId: string): string | null {
+  const key = unsubscribeKey();
+  if (!key) return null;
+  return crypto.createHmac("sha256", key).update(userId, "utf8").digest("base64url");
+}
+function verifyUnsubscribeToken(userId: string, token: string): boolean {
+  const expected = unsubscribeToken(userId);
+  if (!expected) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(token);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function unsubscribeUrl(userId: string): string | null {
+  const t = unsubscribeToken(userId);
+  return t ? `${SITE_URL}/api/unsubscribe?u=${encodeURIComponent(userId)}&t=${encodeURIComponent(t)}` : null;
+}
+async function isUnsubscribed(userId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin.from("email_prefs").select("unsubscribed_at").eq("user_id", userId).maybeSingle();
+  if (error) throw new Error(`email_prefs lookup: ${error.message}`);
+  return Boolean(data?.unsubscribed_at);
+}
+async function loadUnsubscribedIds(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const { data, error } = await supabaseAdmin.from("email_prefs").select("user_id").in("user_id", userIds).not("unsubscribed_at", "is", null);
+  if (error) throw new Error(`email_prefs lookup: ${error.message}`);
+  return new Set((data || []).map((r: any) => String(r.user_id)));
+}
+function formatDeadline(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "America/Denver" });
+}
 
 function randomCodeGroup(len: number): string {
   let out = "";
@@ -2523,7 +2565,7 @@ function hashRedeemCode(code: string): string {
   return crypto.createHash("sha256").update(code, "utf8").digest("hex");
 }
 
-type IssuedCode = { id: string; code: string };
+type IssuedCode = { id: string; code: string; expiresAt: string };
 
 // Issues a new founder code for a user. Any live, unredeemed founder code is
 // revoked first (the plain text of an old code can't be recovered to re-send).
@@ -2537,16 +2579,18 @@ async function issueFounderCode(userId: string): Promise<IssuedCode> {
     .is("redeemed_at", null);
   if (revokeErr) throw new Error(`revoke old founder code: ${revokeErr.message}`);
   const code = generateRedeemCode("FOUNDER");
+  const expiresAt = new Date(Date.now() + FOUNDER_CODE_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabaseAdmin
     .from("redeem_codes")
-    .insert({ code_hash: hashRedeemCode(code), code_last4: code.slice(-4), user_id: userId, batch: "founder" })
+    .insert({ code_hash: hashRedeemCode(code), code_last4: code.slice(-4), user_id: userId, batch: "founder", expires_at: expiresAt })
     .select("id")
     .single();
   if (error) throw Object.assign(new Error(`insert founder code: ${error.message}`), { pgCode: error.code });
-  return { id: String(data.id), code };
+  return { id: String(data.id), code, expiresAt };
 }
 
-function founderEmailContent(foundingNumber: number, code: string, spotsLeft: number) {
+function founderEmailContent(foundingNumber: number, code: string, spotsLeft: number, expiresAt: string, unsubUrl: string | null) {
+  const deadline = formatDeadline(expiresAt);
   const num = String(foundingNumber).padStart(3, "0");
   const subject = "A little thank-you for being one of the first on Reax";
   const spotsLine = spotsLeft > 0
@@ -2562,13 +2606,15 @@ As one of the first 100 people on Reax, you get to pick one pack free, forever. 
 
 ${code}
 
-To use it, sign in on getREAX.com, open the menu, tap Reaction Packs, and enter your code (or just tap "Claim your founder pack"). The code only works on your account:
+To use it, sign in on getREAX.com, open the menu, tap Reaction Packs, and enter your code (or just tap "Claim your founder pack"). The code only works on your account, and it's good until ${deadline}:
 ${PACKS_URL}
 
 ${spotsLine}
 
 Thanks again,
-Joseph`;
+Joseph${unsubUrl ? `
+
+Don't want emails like this? Unsubscribe: ${unsubUrl}` : ""}`;
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const html = `<div style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#111;max-width:560px">
 <p>Hey,</p>
@@ -2576,10 +2622,11 @@ Joseph`;
 <p>I've been working on something called Reaction Packs: style kits with fonts, colors, little stickers, and screen effects (glitch, slow zoom, that kind of thing) so your reactions look like <i>you</i>. There's one for each mood: Chaos, Funny, Drama, Sarcasm, and Chill.</p>
 <p>As one of the first 100 people on Reax, you get to pick one pack free, forever. Your code is:</p>
 <p style="font-family:Menlo,Consolas,monospace;font-size:20px;font-weight:bold;letter-spacing:1px;background:#f3f4f6;padding:10px 14px;border-radius:8px;display:inline-block">${esc(code)}</p>
-<p>To use it, sign in on getREAX.com, open the menu, tap <b>Reaction Packs</b>, and enter your code (or just tap "Claim your founder pack"). The code only works on your account.</p>
+<p>To use it, sign in on getREAX.com, open the menu, tap <b>Reaction Packs</b>, and enter your code (or just tap "Claim your founder pack"). The code only works on your account, and it's good until <b>${esc(deadline)}</b>.</p>
 <p><a href="${PACKS_URL}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:bold">Pick your pack</a></p>
 <p>${esc(spotsLine)}</p>
 <p>Thanks again,<br>Joseph</p>
+${unsubUrl ? `<p style="font-size:12px;color:#6b7280;margin-top:24px">Don't want emails like this? <a href="${esc(unsubUrl)}" style="color:#6b7280">Unsubscribe</a>.</p>` : ""}
 </div>`;
   return { subject, text, html };
 }
@@ -2591,11 +2638,21 @@ async function countFounders(): Promise<number> {
 }
 
 // Creates a fresh founder code and emails it. Marks emailed_at only on a real send.
+// Unsubscribed users still get a code (claimable in-app) but no email.
 async function issueAndEmailFounderCode(userId: string, email: string, foundingNumber: number) {
+  const unsubscribed = await isUnsubscribed(userId);
   const issued = await issueFounderCode(userId);
+  if (unsubscribed) {
+    console.log(`[founders] #${foundingNumber} (user ${userId}) is unsubscribed; code issued, not emailed.`);
+    return { sent: false, error: "Unsubscribed from email", codeId: issued.id };
+  }
   const spotsLeft = Math.max(0, FOUNDER_LIMIT - (await countFounders()));
-  const { subject, text, html } = founderEmailContent(foundingNumber, issued.code, spotsLeft);
-  const result = await sendOutboundEmail({ to: email, subject, text, html });
+  const unsubUrl = unsubscribeUrl(userId);
+  const { subject, text, html } = founderEmailContent(foundingNumber, issued.code, spotsLeft, issued.expiresAt, unsubUrl);
+  const headers: Record<string, string> = unsubUrl
+    ? { "List-Unsubscribe": `<${unsubUrl}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
+    : {};
+  const result = await sendOutboundEmail({ to: email, subject, text, html, headers });
   if (result.sent) {
     const { error } = await supabaseAdmin.from("redeem_codes").update({ emailed_at: new Date().toISOString() }).eq("id", issued.id);
     if (error) console.error(`[founders] code emailed to user ${userId} but emailed_at update failed:`, error.message);
@@ -2657,19 +2714,62 @@ async function ensureFounderForUser(user: AuthResult["user"], profile: UserProfi
 async function getFounderStatus(userId: string) {
   const [{ data: f, error: fErr }, { data: codes, error: cErr }] = await Promise.all([
     supabaseAdmin.from("founders").select("founding_number").eq("user_id", userId).maybeSingle(),
-    supabaseAdmin.from("redeem_codes").select("id, redeemed_at, redeemed_pack_id, revoked_at")
+    supabaseAdmin.from("redeem_codes").select("id, redeemed_at, redeemed_pack_id, revoked_at, expires_at")
       .eq("user_id", userId).eq("batch", "founder").order("issued_at", { ascending: false }),
   ]);
   if (fErr) throw new Error(fErr.message);
   if (cErr) throw new Error(cErr.message);
   const redeemed = (codes || []).find((c: any) => c.redeemed_at);
   const live = (codes || []).find((c: any) => !c.revoked_at && !c.redeemed_at);
+  const expiresAt: string | null = live?.expires_at ?? null;
+  const expired = Boolean(expiresAt && new Date(expiresAt).getTime() <= Date.now());
   return {
     foundingNumber: f?.founding_number ?? null,
-    hasCode: Boolean(live),
+    hasCode: Boolean(live) && !expired,
+    codeExpiresAt: expiresAt,
+    codeExpired: expired,
     redeemedPackId: redeemed?.redeemed_pack_id ?? null,
   };
 }
+
+// One-click unsubscribe. GET shows a confirm page (link scanners must not
+// unsubscribe people); POST does it (the page button, and mail apps using
+// List-Unsubscribe-Post per RFC 8058).
+function unsubscribePage(title: string, body: string, form?: { u: string; t: string }) {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const formHtml = form
+    ? `<form method="POST" action="/api/unsubscribe?u=${encodeURIComponent(form.u)}&amp;t=${encodeURIComponent(form.t)}"><button type="submit" style="background:#4f46e5;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-weight:bold;font-size:15px;cursor:pointer">Unsubscribe</button></form>`
+    : `<p><a href="${SITE_URL}" style="color:#4f46e5">Back to getREAX.com</a></p>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title></head>
+<body style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#0b0c10;color:#e5e7eb;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:16px">
+<div style="max-width:420px;background:#111827;border:1px solid #1f2937;border-radius:16px;padding:24px"><h1 style="font-size:20px;margin:0 0 8px">${esc(title)}</h1><p style="font-size:14px;line-height:1.5;color:#9ca3af">${esc(body)}</p>${formHtml}</div></body></html>`;
+}
+function readUnsubParams(req: any): { u: string; t: string } | null {
+  const u = String(req.query.u || "");
+  const t = String(req.query.t || "");
+  if (!isValidUuid(u) || !t || t.length > 128) return null;
+  return verifyUnsubscribeToken(u, t) ? { u, t } : null;
+}
+app.get("/api/unsubscribe", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const params = readUnsubParams(req);
+  if (!params) return res.status(400).type("html").send(unsubscribePage("Link not valid", "This unsubscribe link is broken or incomplete. Email support@getreax.com and we'll take you off the list."));
+  return res.type("html").send(unsubscribePage("Unsubscribe from Reax emails?", "You'll stop getting emails like founder codes and announcements. Account emails such as password resets still come through.", params));
+});
+app.post("/api/unsubscribe", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const params = readUnsubParams(req);
+  if (!params) return res.status(400).type("html").send(unsubscribePage("Link not valid", "This unsubscribe link is broken or incomplete. Email support@getreax.com and we'll take you off the list."));
+  if (!supabaseAdmin) return res.status(503).type("html").send(unsubscribePage("Try again soon", "We couldn't update your email settings right now. Please try again in a few minutes."));
+  const now = new Date().toISOString();
+  const { error } = await supabaseAdmin.from("email_prefs").upsert({ user_id: params.u, unsubscribed_at: now, updated_at: now }, { onConflict: "user_id" });
+  if (error) {
+    console.error("[unsubscribe] email_prefs upsert failed:", error.message);
+    return res.status(500).type("html").send(unsubscribePage("Try again soon", "We couldn't update your email settings right now. Please try again in a few minutes."));
+  }
+  console.log(`[unsubscribe] user ${params.u} unsubscribed`);
+  return res.type("html").send(unsubscribePage("You're unsubscribed", "You won't get emails like this from Reax anymore."));
+});
 
 // Simple per-user redeem rate limit (per server instance): 10 tries / 15 min.
 const redeemAttempts = new Map<string, number[]>();
@@ -2686,6 +2786,7 @@ const REDEEM_ERRORS: Record<string, string> = {
   invalid: "That code doesn't match any Reax code. Check it and try again.",
   revoked: "That code is no longer active. If you were sent a newer one, use that instead.",
   used: "That code has already been used.",
+  expired: `That code has expired. Founder codes are good for ${FOUNDER_CODE_TTL_DAYS} days. Email support@getreax.com if you missed it.`,
   wrong_account: "That code belongs to a different account. Sign in with the account it was emailed to.",
   pack_required: "Pick a pack to unlock.",
   already_founder: "You've already claimed your founder pack. It's yours forever.",
@@ -2730,22 +2831,26 @@ async function runRedeem(res: any, userId: string, codeHash: string, packId: str
   return res.status(status === "invalid" ? 404 : 409).json({ error: REDEEM_ERRORS[status] || REDEEM_ERRORS.invalid, reason: status });
 }
 
-// GET /api/me/founder -> { foundingNumber, hasCode, redeemedPackId, spotsLeft }
+// GET /api/me/founder -> { foundingNumber, hasCode, codeExpiresAt, codeExpired, redeemedPackId, claimed, limit, spotsLeft, full }
+const EMPTY_FOUNDER_STATUS = { foundingNumber: null, hasCode: false, codeExpiresAt: null, codeExpired: false, redeemedPackId: null };
+async function founderProgramCounts() {
+  const claimed = await countFounders();
+  return { claimed, limit: FOUNDER_LIMIT, spotsLeft: Math.max(0, FOUNDER_LIMIT - claimed), full: claimed >= FOUNDER_LIMIT };
+}
 app.get("/api/me/founder", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
+  if (!supabaseAdmin) {
+    return res.json({ ...EMPTY_FOUNDER_STATUS, claimed: null, limit: FOUNDER_LIMIT, spotsLeft: null, full: false });
+  }
   const authRes = await authenticateUser(req);
-  if (authRes.ok === false || !supabaseAdmin) {
-    return res.json({ foundingNumber: null, hasCode: false, redeemedPackId: null, spotsLeft: null });
-  }
-  const { user, profile } = authRes.auth;
-  if (user.is_anonymous || !user.email) {
-    return res.json({ foundingNumber: null, hasCode: false, redeemedPackId: null, spotsLeft: null });
-  }
-  await ensureFounderForUser(user, profile);
   try {
+    if (authRes.ok === false || authRes.auth.user.is_anonymous || !authRes.auth.user.email) {
+      return res.json({ ...EMPTY_FOUNDER_STATUS, ...(await founderProgramCounts()) });
+    }
+    const { user, profile } = authRes.auth;
+    await ensureFounderForUser(user, profile);
     const status = await getFounderStatus(user.id);
-    const spotsLeft = Math.max(0, FOUNDER_LIMIT - (await countFounders()));
-    return res.json({ ...status, spotsLeft });
+    return res.json({ ...status, ...(await founderProgramCounts()) });
   } catch (err: any) {
     console.error("[founders] status lookup failed:", err?.message || err);
     return res.status(500).json({ error: "Could not load your founder status." });
@@ -3204,7 +3309,13 @@ app.get("/api/users/badge", async (req, res) => {
   if (!username || username.length > 40) return res.json({ badgeType: null });
   try {
     const p: any = await store!.getUserProfile({ username });
-    return res.json({ badgeType: p?.badgeType ?? (p?.isOfficial ? "official" : null) });
+    let foundingNumber: number | null = null;
+    if (p?.id && supabaseAdmin) {
+      const { data: f, error: fErr } = await supabaseAdmin.from("founders").select("founding_number").eq("user_id", p.id).maybeSingle();
+      if (fErr) console.error("[/api/users/badge] founder lookup failed:", fErr.message);
+      foundingNumber = typeof f?.founding_number === "number" ? f.founding_number : null;
+    }
+    return res.json({ badgeType: p?.badgeType ?? (p?.isOfficial ? "official" : null), foundingNumber });
   } catch (err) {
     console.error("Error in /api/users/badge:", err);
     return res.json({ badgeType: null });
@@ -5422,9 +5533,10 @@ async function loadFounderRows() {
   if (ids.length === 0) return [];
   const [profilesRes, codesRes] = await Promise.all([
     supabaseAdmin.from("user_profiles").select("id, username, email").in("id", ids),
-    supabaseAdmin.from("redeem_codes").select("user_id, code_last4, issued_at, emailed_at, redeemed_at, redeemed_pack_id, revoked_at")
+    supabaseAdmin.from("redeem_codes").select("user_id, code_last4, issued_at, emailed_at, redeemed_at, redeemed_pack_id, revoked_at, expires_at")
       .eq("batch", "founder").in("user_id", ids).order("issued_at", { ascending: false }),
   ]);
+  const unsubscribed = await loadUnsubscribedIds(ids);
   if (profilesRes.error) throw new Error(`profiles: ${profilesRes.error.message}`);
   if (codesRes.error) throw new Error(`codes: ${codesRes.error.message}`);
   const profiles = new Map<string, any>((profilesRes.data || []).map((p: any) => [p.id, p]));
@@ -5448,6 +5560,8 @@ async function loadFounderRows() {
       emailedAt: (redeemed || live)?.emailed_at || null,
       redeemedPackId: redeemed?.redeemed_pack_id || null,
       redeemedAt: redeemed?.redeemed_at || null,
+      expiresAt: live?.expires_at || null,
+      unsubscribed: unsubscribed.has(f.user_id),
     };
   });
 }
@@ -5476,10 +5590,13 @@ app.get("/api/admin/packs/overview", async (req, res) => {
     }
     return res.json({
       limit: FOUNDER_LIMIT,
+      full: founders.length >= FOUNDER_LIMIT,
+      codeTtlDays: FOUNDER_CODE_TTL_DAYS,
       stats: {
         foundersAssigned: founders.length,
         codesEmailed: founders.filter(f => f.emailedAt).length,
         redeemed: founders.filter(f => f.redeemedPackId).length,
+        unsubscribed: founders.filter(f => f.unsubscribed).length,
       },
       interest,
       owners,
@@ -5499,7 +5616,7 @@ app.post("/api/admin/packs/send-founder-codes", async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: "Database unavailable" });
   try {
     const founders = await loadFounderRows();
-    const targets = founders.filter(f => !f.emailedAt && !f.redeemedPackId);
+    const targets = founders.filter(f => !f.emailedAt && !f.redeemedPackId && !f.unsubscribed);
     const results: any[] = [];
     for (const f of targets) {
       if (!f.email) {
@@ -5529,6 +5646,7 @@ app.post("/api/admin/packs/founders/:userId/resend", async (req, res) => {
     const f = (await loadFounderRows()).find(r => r.userId === userId);
     if (!f) return res.status(404).json({ error: "That user isn't a founder." });
     if (f.redeemedPackId) return res.status(409).json({ error: "They already redeemed their founder pack." });
+    if (f.unsubscribed) return res.status(409).json({ error: "They unsubscribed from Reax emails, so nothing was sent." });
     if (!f.email) return res.status(400).json({ error: "No email on file for this founder." });
     const r = await issueAndEmailFounderCode(f.userId, f.email, f.foundingNumber);
     return res.json({ sent: r.sent, error: r.error });
@@ -5672,7 +5790,7 @@ To respond directly to the sender, email: ${contactMsg.email}`;
 // Outbound email: Resend (RESEND_API_KEY) if set, else SMTP (SMTP_HOST/PORT/USER/PASS,
 // e.g. the same SMTP account Supabase uses for support@getreax.com).
 // From: EMAIL_FROM, default "Reax <support@getreax.com>".
-async function sendOutboundEmail(msg: { to: string; subject: string; text: string; html?: string; replyTo?: string }): Promise<{ sent: boolean; provider?: string; error?: string }> {
+async function sendOutboundEmail(msg: { to: string; subject: string; text: string; html?: string; replyTo?: string; headers?: Record<string, string> }): Promise<{ sent: boolean; provider?: string; error?: string }> {
   const fromEmail = process.env.EMAIL_FROM || "Reax <support@getreax.com>";
 
   // 1. Resend API (HTTP REST)
@@ -5690,7 +5808,8 @@ async function sendOutboundEmail(msg: { to: string; subject: string; text: strin
           ...(msg.replyTo ? { reply_to: msg.replyTo } : {}),
           subject: msg.subject,
           text: msg.text,
-          ...(msg.html ? { html: msg.html } : {})
+          ...(msg.html ? { html: msg.html } : {}),
+          ...(msg.headers && Object.keys(msg.headers).length ? { headers: msg.headers } : {})
         })
       });
       const data: any = await res.json().catch(() => ({}));
@@ -5725,7 +5844,8 @@ async function sendOutboundEmail(msg: { to: string; subject: string; text: strin
         ...(msg.replyTo ? { replyTo: msg.replyTo } : {}),
         subject: msg.subject,
         text: msg.text,
-        ...(msg.html ? { html: msg.html } : {})
+        ...(msg.html ? { html: msg.html } : {}),
+        ...(msg.headers && Object.keys(msg.headers).length ? { headers: msg.headers } : {})
       });
       console.log(`[Email] Dispatched via SMTP to ${msg.to} (Msg ID: ${info.messageId})`);
       return { sent: true, provider: "smtp" };
