@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { X, MessageSquare, Mail, Copy, Check, Download, Share2, ExternalLink, Image as ImageIcon, Film } from "lucide-react";
 import { Clip } from "../types";
 import { protectedMediaProps, blockMediaEvent } from "../utils/mediaProtection";
@@ -52,6 +52,15 @@ export default function ShareModal({
     setWatermarkPos(pos);
     saveWatermarkPosition(pos);
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -133,7 +142,7 @@ export default function ShareModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
+        <div className="sticky -top-6 z-10 -mx-6 -mt-6 px-6 pt-6 bg-slate-900 flex items-center justify-between pb-4 border-b border-slate-800/80">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
               <Share2 className="w-4 h-4 text-indigo-400" />
@@ -146,10 +155,10 @@ export default function ShareModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            className="p-2 rounded-full bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer"
             aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-6 h-6" />
           </button>
         </div>
 
@@ -428,8 +437,15 @@ export default function ShareModal({
             </button>
           )}
         </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-4 w-full py-3 rounded-xl border border-slate-700 bg-slate-800/80 text-sm font-semibold text-slate-200 hover:bg-slate-700 transition-colors cursor-pointer"
+        >
+          Close
+        </button>
       </div>
     </div>
   );
 }
-
