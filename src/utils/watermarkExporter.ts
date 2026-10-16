@@ -1,5 +1,6 @@
 import { Clip } from "../types";
 import { getAuthToken } from "./supabaseClient";
+import { PackExportAssets, applyPackMediaFilter, drawPackLayers, packCaptionLook, preparePackExport } from "../packs/exportRender";
 
 /**
  * Safely draw a rounded rectangle on a 2D canvas context across all browser engines.
@@ -115,6 +116,8 @@ export async function generateWatermarkedCanvas(
   if (!ctx) throw new Error("Could not initialize 2D canvas context");
 
   const isVideo = clip.mediaType === "video";
+  // Pack stickers + caption font (null for clips without a pack style: renders exactly as before).
+  const pack = await preparePackExport(clip.style);
   let naturalW = 1280;
   let naturalH = 720;
 
@@ -124,6 +127,7 @@ export async function generateWatermarkedCanvas(
     canvas.width = naturalW;
     canvas.height = naturalH + (watermarkPosition === "strip" ? getWatermarkStripHeight(naturalW) : 0);
     ctx.drawImage(mediaEl, 0, 0, naturalW, naturalH);
+    applyPackMediaFilter(ctx, naturalW, naturalH, pack);
   } else {
     const imgObj = await loadCORSImage(clip.mediaUrl, mediaEl instanceof HTMLImageElement ? mediaEl : null);
     naturalW = imgObj.naturalWidth || 1280;
@@ -142,24 +146,29 @@ export async function generateWatermarkedCanvas(
     canvas.width = exportW;
     canvas.height = exportH + (watermarkPosition === "strip" ? getWatermarkStripHeight(exportW) : 0);
     ctx.drawImage(imgObj, 0, 0, exportW, exportH);
+    applyPackMediaFilter(ctx, exportW, exportH, pack);
   }
 
   // Captions/letterboxing cover only the image area; a "strip" bar sits below it.
   const imageH = watermarkPosition === "strip" ? canvas.height - getWatermarkStripHeight(canvas.width) : canvas.height;
-  renderWatermarkAndCaptions(ctx, canvas.width, imageH, clip, watermarkPosition);
+  renderWatermarkAndCaptions(ctx, canvas.width, imageH, clip, watermarkPosition, pack);
   return canvas;
 }
 
 /**
  * Renders the overlays, caption text, letterboxing, and the getREAX.com watermark badge.
  * Reused across both image and video frame rendering for 100% pixel-perfect consistency.
+ * With `pack` (from preparePackExport), the Reaction Pack layers are drawn in post order:
+ * overlay effect, frame, stickers, then the caption in the pack font, and the watermark last
+ * so it is never covered. `height` is the image area; stickers are fractions of it.
  */
 export function renderWatermarkAndCaptions(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
   clip: Clip,
-  watermarkPosition: WatermarkPosition = DEFAULT_WATERMARK_POSITION
+  watermarkPosition: WatermarkPosition = DEFAULT_WATERMARK_POSITION,
+  pack: PackExportAssets | null = null
 ): void {
   // Parse effect and style parameters: "effect|preset|color|position"
   const [, textStylePreset = "classic", textStyleColor = "white", textStylePosition = "bottom"] = (clip.effect || "zoom").split("|");
@@ -172,10 +181,14 @@ export function renderWatermarkAndCaptions(
     ctx.fillRect(0, height - barHeight, width, barHeight);
   }
 
+  drawPackLayers(ctx, width, height, pack);
+  const look = packCaptionLook(pack);
+
   // 1. Overlay Caption Text (Intelligent Auto-Fitting: NEVER CUTS OFF OR USES "...")
   if (clip.overlayText && clip.overlayText.trim() && textStylePosition !== "none") {
     const rawText = clip.overlayText.trim();
-    const text = textStylePreset === "comic" ? rawText.toLowerCase() : rawText.toUpperCase();
+    const lower = look?.textCase ? look.textCase === "lower" : textStylePreset === "comic";
+    const text = lower ? rawText.toLowerCase() : rawText.toUpperCase();
 
     const maxTextWidth = width * 0.88;
     const maxTextHeight = textStylePosition.startsWith("top") || textStylePosition.startsWith("bottom")
@@ -183,6 +196,13 @@ export function renderWatermarkAndCaptions(
       : height * 0.65;
 
     const getFontSpec = (sz: number) => {
+      if (look?.family) {
+        const weight =
+          textStylePreset === "comic" ? "italic 900" :
+          textStylePreset === "cinema" ? "400" :
+          textStylePreset === "bold" ? "800" : "900";
+        return `${weight} ${sz}px "${look.family}", ui-sans-serif, system-ui, sans-serif`;
+      }
       if (textStylePreset === "comic") return `italic 900 ${sz}px serif`;
       if (textStylePreset === "glitch") return `900 ${sz}px monospace`;
       if (textStylePreset === "cinema") return `400 ${sz}px serif`;
@@ -190,6 +210,9 @@ export function renderWatermarkAndCaptions(
       return `900 ${sz}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
     };
 
+    ctx.save();
+    // Drama "Oscar" caption is letter-spaced; measureText includes the spacing where supported.
+    if (look?.decoration === "oscar" && "letterSpacing" in ctx) ctx.letterSpacing = "0.2em";
     const words = text.split(/\s+/);
     let idealFontSize = Math.min(Math.round(height * 0.082), Math.round(width * 0.078));
     const minFontSize = Math.max(14, Math.round(height * 0.034));
@@ -287,19 +310,42 @@ export function renderWatermarkAndCaptions(
       navy: "#1e3a8a",
       "navy-blue": "#1e3a8a",
     };
-    const textFillColor = colorMap[textStyleColor] || "#ffffff";
+    const textFillColor = look?.colorHex || colorMap[textStyleColor] || "#ffffff";
     const strokeWidth = Math.max(3, Math.round(fontSize * 0.16));
 
-    ctx.save();
     ctx.lineWidth = strokeWidth;
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.92)";
+    ctx.strokeStyle = look?.decoration === "punchline" ? "#1B1B1B" : "rgba(0, 0, 0, 0.92)";
     ctx.fillStyle = textFillColor;
     ctx.lineJoin = "round";
     ctx.miterLimit = 2;
+    const boxed = look?.decoration === "oh-really" || look?.decoration === "good-vibes";
+    const split = Math.max(2, Math.round(fontSize * 0.08));
 
     lines.forEach((line, i) => {
       const lineY = startY + i * lineHeight;
+      if (boxed) {
+        // Sarcasm "oh really" paper tag / Chill "good vibes" frosted pill behind each line.
+        const lw = ctx.measureText(line).width;
+        const padX = fontSize * (look?.decoration === "good-vibes" ? 0.8 : 0.45);
+        const padY = fontSize * 0.15;
+        const left = ctx.textAlign === "left" ? baseX : ctx.textAlign === "right" ? baseX - lw : baseX - lw / 2;
+        const boxH = lineHeight - (lineHeight - fontSize) / 2 + padY;
+        drawRoundRect(ctx, left - padX, lineY - padY, lw + padX * 2, boxH, look?.decoration === "good-vibes" ? boxH / 2 : Math.max(2, fontSize * 0.12));
+        ctx.fillStyle = look?.decoration === "good-vibes" ? "rgba(255, 255, 255, 0.6)" : "#F3F4F6";
+        ctx.fill();
+        ctx.fillStyle = textFillColor;
+        ctx.fillText(line, baseX, lineY);
+        return;
+      }
       ctx.strokeText(line, baseX, lineY);
+      if (look?.decoration === "meltdown") {
+        // Red/cyan channel split, like the post's text-shadow.
+        ctx.fillStyle = "#FF1E3C";
+        ctx.fillText(line, baseX - split, lineY);
+        ctx.fillStyle = "#00F0FF";
+        ctx.fillText(line, baseX + split, lineY);
+        ctx.fillStyle = textFillColor;
+      }
       ctx.fillText(line, baseX, lineY);
     });
     ctx.restore();
@@ -492,13 +538,14 @@ export async function getVideoDimensions(clip: Clip, videoEl?: HTMLVideoElement 
   });
 }
 
-/** Transparent PNG containing only the caption + getREAX.com pill, exactly as rendered for pictures. */
-export function renderOverlayPngDataUrl(
+/** Transparent PNG with the static pack layers, caption + getREAX.com pill, exactly as rendered for pictures. */
+export async function renderOverlayPngDataUrl(
   clip: Clip,
   width: number,
   height: number,
   watermarkPosition: Exclude<WatermarkPosition, "strip"> = "bottom-right"
-): string {
+): Promise<string> {
+  const pack = await preparePackExport(clip.style);
   const scale = Math.min(1, 1920 / Math.max(width, height));
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(2, Math.round(width * scale));
@@ -506,7 +553,7 @@ export function renderOverlayPngDataUrl(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Could not initialize 2D canvas context");
   ctx.clearRect(0, 0, canvas.width, canvas.height);   // keep it transparent
-  renderWatermarkAndCaptions(ctx, canvas.width, canvas.height, clip, watermarkPosition);
+  renderWatermarkAndCaptions(ctx, canvas.width, canvas.height, clip, watermarkPosition, pack);
   return canvas.toDataURL("image/png");
 }
 
@@ -545,7 +592,7 @@ export async function exportWatermarkedVideo(
   // The server overlays this PNG at the video's own size, so it can't add a bar below the
   // frame; "strip" falls back to the default bottom-right corner for videos.
   const videoPos: Exclude<WatermarkPosition, "strip"> = watermarkPosition === "strip" ? "bottom-right" : watermarkPosition;
-  const overlayPng = renderOverlayPngDataUrl(clip, width, height, videoPos);
+  const overlayPng = await renderOverlayPngDataUrl(clip, width, height, videoPos);
   onProgress?.(15);
 
   let pct = 15;
